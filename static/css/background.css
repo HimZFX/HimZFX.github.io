@@ -1,0 +1,11 @@
+/* static/css/background.css */
+
+#bgCanvas {
+    position: fixed;      /* 固定在窗口 */
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;          /* 关键：置于文字之下，背景之上 */
+    pointer-events: none; /* 让鼠标穿透，不影响点击 */
+}

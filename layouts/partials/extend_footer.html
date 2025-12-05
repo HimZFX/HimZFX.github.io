@@ -1,0 +1,174 @@
+<script>
+(function() {
+    const canvas = document.getElementById('bgCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    let width, height;
+    let stars = [];
+    
+    // --- ⚙️ 物理参数 ---
+    const STAR_COUNT = 3;
+    const G = 0.5;
+    const SOFTENING = 1000;       
+    const TRAIL_LENGTH = 100;     // 拖尾长度可以稍微长一点，渐变更好看
+    const FRICTION = 0.99999;      
+    const CENTER_PULL = 0.000015;  
+
+    // --- 🎨 颜色方案 ---
+    const colors = {
+        dark: [
+            { color: '#00f2ff', glow: '#00f2ff' }, 
+            { color: '#ff0055', glow: '#ff0055' }, 
+            { color: '#ffe600', glow: '#ffe600' }  
+        ],
+        light: [
+            { color: '#003366', glow: 'transparent' }, 
+            { color: '#800000', glow: 'transparent' }, 
+            { color: '#2F4F4F', glow: 'transparent' }  
+        ]
+    };
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        if(stars.length === 0) initStars(); 
+    }
+
+    class Star {
+        constructor(index) {
+            this.index = index;
+            this.reset();
+        }
+
+        reset() {
+            this.x = width / 2 + (Math.random() - 0.5) * Math.min(width, height) * 0.5;
+            this.y = height / 2 + (Math.random() - 0.5) * Math.min(width, height) * 0.5;
+            this.vx = (Math.random() - 0.5) * 3;
+            this.vy = (Math.random() - 0.5) * 3;
+            this.mass = 80 + Math.random() * 40; 
+            this.radius = Math.sqrt(8 + Math.random());
+            this.history = [];
+        }
+
+        update() {
+            // N体引力计算
+            for (let other of stars) {
+                if (other === this) continue;
+                const dx = other.x - this.x;
+                const dy = other.y - this.y;
+                const distSq = dx * dx + dy * dy;
+                const dist = Math.sqrt(distSq);
+                const force = (G * this.mass * other.mass) / (distSq + SOFTENING);
+                const ax = (force * dx / dist) / this.mass;
+                const ay = (force * dy / dist) / this.mass;
+                this.vx += ax;
+                this.vy += ay;
+            }
+            this.vx += (width / 2 - this.x) * CENTER_PULL;
+            this.vy += (height / 2 - this.y) * CENTER_PULL;
+            this.vx *= FRICTION;
+            this.vy *= FRICTION;
+            this.x += this.vx;
+            this.y += this.vy;
+            
+            // 设定一个边距 (margin)，让星星飞出屏幕 200px 后再重置
+            // 这样能保证尾迹是自然消失，而不是在屏幕边缘突然截断
+            const margin = 200;
+            if (this.x < -margin || this.x > width + margin || 
+                this.y < -margin || this.y > height + margin) {
+                this.reset(); // 飞太远了？回来吧！
+                return;       // 重置后直接结束本次更新
+            }
+
+            this.history.push({x: this.x, y: this.y});
+            if (this.history.length > TRAIL_LENGTH) this.history.shift();
+        }
+
+        draw(isDark) {
+            const theme = isDark ? colors.dark : colors.light;
+            const style = theme[this.index % theme.length];
+
+            // A. 绘制渐变流星尾迹
+            // 不再是一笔画，而是循环画每一小段
+            for (let i = 0; i < this.history.length - 1; i++) {
+                const p1 = this.history[i];
+                const p2 = this.history[i+1];
+                
+                // ratio: 0.0 (尾巴尖) -> 1.0 (星星头)
+                const ratio = i / this.history.length;
+                
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                
+                if (isDark) {
+                    // 🌙 黑夜模式：白色发光拖尾
+                    // 透明度从 0 渐变到 0.4
+                    ctx.strokeStyle = `rgba(255, 255, 255, ${ratio * 0.4})`;
+                    // 宽度从 0 渐变到 3
+                    ctx.lineWidth = ratio * 3;
+                } else {
+                    // ☀️ 白天模式：深色墨迹
+                    // 透明度从 0 渐变到 0.2 (非常淡，在白底上逐渐消失变白)
+                    ctx.strokeStyle = `rgba(0, 0, 0, ${ratio * 0.2})`;
+                    // 宽度从 0 渐变到 2
+                    ctx.lineWidth = ratio * 2;
+                }
+                
+                ctx.lineCap = 'round'; // 让线段连接处圆滑
+                ctx.stroke();
+            }
+
+            // B. 绘制星体
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = style.color;
+            if (isDark) {
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = style.glow;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    function initStars() {
+        stars = [];
+        for (let i = 0; i < STAR_COUNT; i++) {
+            stars.push(new Star(i));
+        }
+    }
+
+    function animate() {
+        ctx.clearRect(0, 0, width, height);
+
+        // 光线传感器
+        let isDark = false;
+        try {
+            const bgColor = window.getComputedStyle(document.body).backgroundColor;
+            const rgb = bgColor.match(/\d+/g);
+            if (rgb) {
+                const brightness = (parseInt(rgb[0]) * 299 + parseInt(rgb[1]) * 587 + parseInt(rgb[2]) * 114) / 1000;
+                isDark = brightness < 128;
+            }
+        } catch (e) {
+            isDark = document.body.classList.contains('dark');
+        }
+
+        for (let star of stars) {
+            star.update();
+            star.draw(isDark);
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    initStars(); 
+    animate();
+})();
+</script>
