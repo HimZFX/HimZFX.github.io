@@ -1,0 +1,64 @@
+baseURL = "https://HimZFX.github.io/"
+title = "HimZFX's Lab"
+theme = "PaperMod"
+
+# 默认语言
+defaultContentLanguage = "zh"
+
+# 开启 Emoji 支持
+enableEmoji = true
+
+[params]
+    defaultTheme = "auto" # 自动跟随系统黑白模式
+    math = true           # 开启 LaTeX 数学公式支持
+    
+    # 首页显示的个人简介
+    [params.homeInfoParams]
+        Title = "Hi, I'm HimZFX 👋"
+        Content = "Student @ Peking University | Physics & Astrophysics | Quant Trading"
+
+    # 社交链接 (替换成你自己的)
+    [[params.socialIcons]]
+        name = "github"
+        url = "https://github.com/HimZFX"
+    [[params.socialIcons]]
+        name = "email"
+        url = "mailto:your-email@example.com"
+
+# --- 双语配置核心区 ---
+[languages]
+    [languages.zh]
+        languageName = "中文"
+        weight = 1
+        # 中文菜单
+        [languages.zh.menu]
+            [[languages.zh.menu.main]]
+                name = "关于"
+                url = "/about/"
+                weight = 1
+            [[languages.zh.menu.main]]
+                name = "科研"
+                url = "/research/"
+                weight = 2
+            [[languages.zh.menu.main]]
+                name = "博客"
+                url = "/posts/"
+                weight = 3
+
+    [languages.en]
+        languageName = "English"
+        weight = 2
+        # 英文菜单
+        [languages.en.menu]
+            [[languages.en.menu.main]]
+                name = "About"
+                url = "/about/"
+                weight = 1
+            [[languages.en.menu.main]]
+                name = "Research"
+                url = "/research/"
+                weight = 2
+            [[languages.en.menu.main]]
+                name = "Blog"
+                url = "/posts/"
+                weight = 3
