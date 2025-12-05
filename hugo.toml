@@ -9,13 +9,26 @@ defaultContentLanguage = "zh"
 enableEmoji = true
 
 [params]
-    defaultTheme = "auto" # 自动跟随系统黑白模式
-    math = true           # 开启 LaTeX 数学公式支持
-    
-    # 首页显示的个人简介
-    [params.homeInfoParams]
-        Title = "Hi, I'm HimZFX 👋"
-        Content = "Student @ Peking University | Physics & Astrophysics | Quant Trading"
+    defaultTheme = "auto"
+    math = true
+
+    # --- 新增这部分 (Profile 模式 - 居中头像) ---
+    [params.profileMode]
+        enabled = true
+        title = "HimZFX"
+        subtitle = "Peking University | Physics & Astrophysics | Quant Trading"
+        imageUrl = "avatar.jpg"      # 对应 static/avatar.jpg
+        imageWidth = 150             # 头像大小
+        imageHeight = 150
+        imageTitle = "HimZFX"
+
+        # 按钮样式 (可以放你的简历或邮箱)
+        [[params.profileMode.buttons]]
+            name = "My Research"
+            url = "/research/"
+        [[params.profileMode.buttons]]
+            name = "Email Me"
+            url = "himzfx@stu.pku.edu.cn"
 
     # 社交链接 (替换成你自己的)
     [[params.socialIcons]]
@@ -23,7 +36,7 @@ enableEmoji = true
         url = "https://github.com/HimZFX"
     [[params.socialIcons]]
         name = "email"
-        url = "mailto:your-email@example.com"
+        url = "himzfx@stu.pku.edu.cn"
 
 # --- 双语配置核心区 ---
 [languages]
