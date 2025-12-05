@@ -62,3 +62,14 @@ enableEmoji = true
                 name = "Blog"
                 url = "/posts/"
                 weight = 3
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true  # 允许在 Markdown 里直接写 HTML (比如 iframe 视频)
+    [markup.goldmark.extensions]
+      [markup.goldmark.extensions.passthrough]
+        enableInlines = true
+        [markup.goldmark.extensions.passthrough.delimiters]
+          block = [['$$', '$$'], ['\\[', '\\]']]
+          inline = [['$', '$'], ['\\(', '\\)']]

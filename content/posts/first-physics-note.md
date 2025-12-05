@@ -2,6 +2,7 @@
 title: "广义相对论中的度规张量"
 date: 2025-12-05
 draft: false  # <--- 重要！一定要把 true 改成 false，否则发布时看不见
+math: true
 ---
 
 这是我的第一篇测试文章。我们将讨论 Schwarzschild 度规。
