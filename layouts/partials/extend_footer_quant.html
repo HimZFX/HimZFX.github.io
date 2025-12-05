@@ -1,0 +1,124 @@
+<script>
+(function() {
+    const canvas = document.getElementById('bgCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    let width, height;
+    let particles = [];
+    
+    // --- ⚙️ 场参数 ---
+    const PARTICLE_COUNT = 400;   // 粒子数量
+    const GRID_SIZE = 20;         // 场的分辨率
+    const ZOOM = 0.005;           // 场的疏密程度
+    const CURVE_STRENGTH = 20;    // 弯曲程度
+    const SPEED_MULT = 1.5;       // 速度倍率
+
+    // --- 🎨 颜色方案 ---
+    const colors = {
+        // 黑夜：电光蓝 -> 绿 (Cyberpunk)
+        dark: { r: 0, g: 255, b: 200, alpha: 0.5 }, 
+        // 白天：铅笔灰 (Sketch)
+        light: { r: 50, g: 60, b: 70, alpha: 0.15 } 
+    };
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        initParticles();
+    }
+
+    class Particle {
+        constructor() {
+            this.reset();
+        }
+
+        reset() {
+            this.x = Math.random() * width;
+            this.y = Math.random() * height;
+            this.history = []; // 记录一小段轨迹
+        }
+
+        update() {
+            // 计算当前位置的场向量 (简单的三角场，不需要 Perlin Noise 库)
+            // angle = cos(x) + sin(y) 的变种，制造复杂的漩涡
+            const angle = (Math.cos(this.x * ZOOM) + Math.sin(this.y * ZOOM)) * CURVE_STRENGTH;
+            
+            this.vx = Math.cos(angle) * SPEED_MULT;
+            this.vy = Math.sin(angle) * SPEED_MULT;
+
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // 记录轨迹
+            this.history.push({x: this.x, y: this.y});
+            if (this.history.length > 10) this.history.shift();
+
+            // 边界检查：飞出去了就重生
+            if (this.x < 0 || this.x > width || this.y < 0 || this.y > height) {
+                this.reset();
+            }
+        }
+
+        draw(isDark) {
+            if (this.history.length < 2) return;
+            
+            ctx.beginPath();
+            ctx.moveTo(this.history[0].x, this.history[0].y);
+            for (let i = 1; i < this.history.length; i++) {
+                ctx.lineTo(this.history[i].x, this.history[i].y);
+            }
+            
+            if (isDark) {
+                ctx.strokeStyle = `rgba(${colors.dark.r}, ${colors.dark.g}, ${colors.dark.b}, ${Math.random()*0.5})`;
+                ctx.lineWidth = 1.5;
+            } else {
+                ctx.strokeStyle = `rgba(${colors.light.r}, ${colors.light.g}, ${colors.light.b}, ${colors.light.alpha})`;
+                ctx.lineWidth = 1; // 白天线细一点，像素描
+            }
+            ctx.stroke();
+        }
+    }
+
+    function initParticles() {
+        particles = [];
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            particles.push(new Particle());
+        }
+    }
+
+    function animate() {
+        // 1. 光线传感器
+        let isDark = false;
+        try {
+            const bgColor = window.getComputedStyle(document.body).backgroundColor;
+            const rgb = bgColor.match(/\d+/g);
+            if (rgb) {
+                const brightness = (parseInt(rgb[0])*299 + parseInt(rgb[1])*587 + parseInt(rgb[2])*114)/1000;
+                isDark = brightness < 128;
+            }
+        } catch(e) { isDark = document.body.classList.contains('dark'); }
+
+        // 2. 拖尾控制
+        // 我们不完全清空画布，而是覆盖一层带透明度的矩形，形成长尾迹
+        if (isDark) {
+            ctx.fillStyle = 'rgba(5, 5, 5, 0.1)'; // 黑夜消散得快一点
+        } else {
+            ctx.fillStyle = 'rgba(245, 245, 247, 0.2)'; // 白天消散得慢一点，留痕更多
+        }
+        ctx.fillRect(0, 0, width, height);
+
+        // 3. 绘制
+        for (let p of particles) {
+            p.update();
+            p.draw(isDark);
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    animate();
+})();
+</script>

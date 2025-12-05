@@ -1,0 +1,124 @@
+<script>
+(function() {
+    const canvas = document.getElementById('bgCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    let width, height;
+    
+    // --- ⚙️ 混沌参数 ---
+    // 经典洛伦兹参数
+    const sigma = 10;
+    const rho = 28;
+    const beta = 8/3;
+    const dt = 0.008;      // 时间步长 (越小越平滑)
+    const SCALE = 12;      // 缩放大小
+    const SPEED = 2;       // 绘制速度 (每帧画几个点)
+    
+    // 3D 旋转参数
+    let angle = 0; 
+    
+    // 轨迹点集
+    let points = [];
+    // 当前坐标
+    let x = 0.1, y = 0, z = 0;
+
+    // --- 🎨 颜色方案 ---
+    const colors = {
+        dark: { hueStart: 180, hueEnd: 320, alpha: 0.8 }, // 青 -> 洋红
+        light: { hueStart: 240, hueEnd: 340, alpha: 0.5 } // 深蓝 -> 深紫 (墨水感)
+    };
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        // 窗口大小改变不重置轨迹，会有有趣的错位艺术感
+    }
+
+    function animate() {
+        // 1. 拖尾效果 (关键！)
+        // 不同于三体清空画布，这里我们用半透明矩形覆盖，制造长曝光效果
+        // 检测模式
+        let isDark = false;
+        try {
+            const bgColor = window.getComputedStyle(document.body).backgroundColor;
+            const rgb = bgColor.match(/\d+/g);
+            if (rgb) {
+                const brightness = (parseInt(rgb[0])*299 + parseInt(rgb[1])*587 + parseInt(rgb[2])*114)/1000;
+                isDark = brightness < 128;
+            }
+        } catch(e) { isDark = document.body.classList.contains('dark'); }
+
+        // 覆盖层：黑夜用黑，白天用白，极低的不透明度 = 极长的拖尾
+        ctx.fillStyle = isDark ? 'rgba(5, 5, 5, 0.03)' : 'rgba(245, 245, 247, 0.05)';
+        ctx.fillRect(0, 0, width, height);
+
+        // 2. 物理计算 (Lorenz Equations)
+        for(let i=0; i<SPEED; i++) {
+            let dx = (sigma * (y - x)) * dt;
+            let dy = (x * (rho - z) - y) * dt;
+            let dz = (x * y - beta * z) * dt;
+            x += dx;
+            y += dy;
+            z += dz;
+            points.push({x, y, z});
+            if (points.length > 2000) points.shift(); // 限制点数优化性能
+        }
+
+        // 3. 绘制
+        ctx.beginPath();
+        let first = true;
+        
+        // 缓慢旋转视角
+        angle += 0.002;
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+
+        for (let p of points) {
+            // 简单的 3D 投影变换 (绕 Y 轴旋转)
+            // 原始 Lorenz 的 Z 轴朝上，对应屏幕的 Y 轴倒影
+            let px = p.x * cosA - p.z * sinA;
+            let pz = p.x * sinA + p.z * cosA; // 深度
+            let py = p.y;
+
+            // 投影到 2D 屏幕
+            let screenX = width / 2 + px * SCALE;
+            let screenY = height / 2 + (py * SCALE) + 20; // +20 是为了居中
+
+            if (first) {
+                ctx.moveTo(screenX, screenY);
+                first = false;
+            } else {
+                ctx.lineTo(screenX, screenY);
+            }
+        }
+
+        // 4. 上色
+        if (isDark) {
+            // 黑夜：霓虹渐变
+            const gradient = ctx.createLinearGradient(0, 0, width, height);
+            gradient.addColorStop(0, `hsl(${colors.dark.hueStart}, 100%, 50%)`);
+            gradient.addColorStop(1, `hsl(${colors.dark.hueEnd}, 100%, 50%)`);
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 1.5;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = `hsla(${colors.dark.hueStart}, 100%, 50%, 0.5)`;
+        } else {
+            // 白天：钢笔墨水 (深色)
+            const gradient = ctx.createLinearGradient(0, 0, width, height);
+            gradient.addColorStop(0, `hsla(${colors.light.hueStart}, 80%, 30%, 0.6)`); // 深蓝
+            gradient.addColorStop(1, `hsla(${colors.light.hueEnd}, 80%, 30%, 0.6)`);   // 深红
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 1.0; // 白天线条更细
+            ctx.shadowBlur = 0;
+        }
+
+        ctx.stroke();
+        requestAnimationFrame(animate);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    animate();
+})();
+</script>

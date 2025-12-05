@@ -6,14 +6,20 @@
 
     let width, height;
     let stars = [];
+    let angleOffset = 0; // 3D 旋转角度
     
-    // --- ⚙️ 物理参数 ---
+    // --- ⚙️ 用户定制物理参数 ---
     const STAR_COUNT = 3;
     const G = 0.5;
-    const SOFTENING = 1000;       
-    const TRAIL_LENGTH = 100;     // 拖尾长度可以稍微长一点，渐变更好看
-    const FRICTION = 0.99999;      
-    const CENTER_PULL = 0.000015;  
+    const SOFTENING = 10;       // 巨大的软化因子带来极其平滑的运动
+    const TRAIL_LENGTH = 600;     // 超长拖尾
+    const FRICTION = 1;     // 极低阻尼
+    const CENTER_PULL = 0.000005; // 极弱向心力
+
+    // --- 🎥 3D 相机参数 ---
+    const ROTATION_SPEED = 0.001; // 镜头旋转速度
+    const SCALE = 0.8;            // 缩放比例 (防止飞出屏幕太远)
+    const Z_DEPTH = 800;          // Z轴深度影响因子 (控制近大远小的程度)
 
     // --- 🎨 颜色方案 ---
     const colors = {
@@ -35,6 +41,29 @@
         if(stars.length === 0) initStars(); 
     }
 
+    // --- 核心工具：3D点投影到2D屏幕 ---
+    function project(x, y, z) {
+        // 绕 Y 轴旋转矩阵公式
+        const cosA = Math.cos(angleOffset);
+        const sinA = Math.sin(angleOffset);
+        // 旋转后的坐标
+        const rotX = x * cosA - z * sinA;
+        const rotZ = x * sinA + z * cosA;
+        const rotY = y;
+
+        // 计算深度缩放因子 (近大远小)
+        // z 越大(越远)，scale 越小
+        let depthScale = Z_DEPTH / (Z_DEPTH + rotZ);
+        // 限制一下缩放范围，防止太近变得无限大
+        depthScale = Math.max(0.1, Math.min(2.0, depthScale));
+
+        // 投影到屏幕中心
+        const screenX = width / 2 + rotX * SCALE * depthScale;
+        const screenY = height / 2 + rotY * SCALE * depthScale;
+
+        return { x: screenX, y: screenY, scale: depthScale, zIndex: rotZ };
+    }
+
     class Star {
         constructor(index) {
             this.index = index;
@@ -42,46 +71,72 @@
         }
 
         reset() {
-            this.x = width / 2 + (Math.random() - 0.5) * Math.min(width, height) * 0.5;
-            this.y = height / 2 + (Math.random() - 0.5) * Math.min(width, height) * 0.5;
-            this.vx = (Math.random() - 0.5) * 3;
-            this.vy = (Math.random() - 0.5) * 3;
-            this.mass = 80 + Math.random() * 40; 
-            this.radius = Math.sqrt(8 + Math.random());
+            // 在 3D 空间中初始化
+            const spread = Math.min(width, height) * 0.5;
+            this.x = (Math.random() - 0.5) * spread;
+            this.y = (Math.random() - 0.5) * spread;
+            this.z = (Math.random() - 0.5) * spread; // 新增 Z 轴
+
+            this.vx = (Math.random() - 0.5) * 1.5;
+            this.vy = (Math.random() - 0.5) * 1.5;
+            this.vz = (Math.random() - 0.5) * 1.5; // 新增 Z 速度
+
+            this.mass = 100 + Math.random() * 100; 
+            this.baseRadius = Math.sqrt(8 + this.mass/100);
+            // history 现在存储 3D 点
             this.history = [];
+            // 预先填充 history 避免初期闪烁
+            for(let i=0; i<TRAIL_LENGTH; i++) this.history.push({x:this.x, y:this.y, z:this.z});
         }
 
         update() {
-            // N体引力计算
+            // 1. 3D N体引力计算 (保持不变)
             for (let other of stars) {
                 if (other === this) continue;
                 const dx = other.x - this.x;
                 const dy = other.y - this.y;
-                const distSq = dx * dx + dy * dy;
+                const dz = other.z - this.z;
+                
+                const distSq = dx*dx + dy*dy + dz*dz;
                 const dist = Math.sqrt(distSq);
+                
                 const force = (G * this.mass * other.mass) / (distSq + SOFTENING);
-                const ax = (force * dx / dist) / this.mass;
-                const ay = (force * dy / dist) / this.mass;
-                this.vx += ax;
-                this.vy += ay;
-            }
-            this.vx += (width / 2 - this.x) * CENTER_PULL;
-            this.vy += (height / 2 - this.y) * CENTER_PULL;
-            this.vx *= FRICTION;
-            this.vy *= FRICTION;
-            this.x += this.vx;
-            this.y += this.vy;
-            
-            // 设定一个边距 (margin)，让星星飞出屏幕 200px 后再重置
-            // 这样能保证尾迹是自然消失，而不是在屏幕边缘突然截断
-            const margin = 200;
-            if (this.x < -margin || this.x > width + margin || 
-                this.y < -margin || this.y > height + margin) {
-                this.reset(); // 飞太远了？回来吧！
-                return;       // 重置后直接结束本次更新
+                
+                this.vx += (force * dx / dist) / this.mass;
+                this.vy += (force * dy / dist) / this.mass;
+                this.vz += (force * dz / dist) / this.mass;
             }
 
-            this.history.push({x: this.x, y: this.y});
+            // 2. 3D 向心力 & 摩擦 (保持不变)
+            this.vx += (0 - this.x) * CENTER_PULL;
+            this.vy += (0 - this.y) * CENTER_PULL;
+            this.vz += (0 - this.z) * CENTER_PULL;
+            
+            this.vx *= FRICTION;
+            this.vy *= FRICTION;
+            this.vz *= FRICTION;
+
+            // 3. 更新位置 (保持不变)
+            this.x += this.vx;
+            this.y += this.vy;
+            this.z += this.vz;
+
+            // --- 🚀 新增：3D 边界重置机制 ---
+            // 计算当前距离中心的距离平方 (x^2 + y^2 + z^2)
+            const distSqFromCenter = this.x * this.x + this.y * this.y + this.z * this.z;
+            
+            // 设定逃逸半径 (2500 像素大约是屏幕宽度的 1.5-2 倍，足够远)
+            const ESCAPE_RADIUS = 2000; 
+
+            // 如果距离超过了逃逸半径，重置！
+            if (distSqFromCenter > ESCAPE_RADIUS * ESCAPE_RADIUS) {
+                this.reset();
+                return; // 结束本次更新
+            }
+            // -------------------------------
+
+            // 4. 记录 3D 轨迹 (保持不变)
+            this.history.push({x: this.x, y: this.y, z: this.z});
             if (this.history.length > TRAIL_LENGTH) this.history.shift();
         }
 
@@ -89,49 +144,67 @@
             const theme = isDark ? colors.dark : colors.light;
             const style = theme[this.index % theme.length];
 
-            // A. 绘制渐变流星尾迹
-            // 不再是一笔画，而是循环画每一小段
-            for (let i = 0; i < this.history.length - 1; i++) {
-                const p1 = this.history[i];
-                const p2 = this.history[i+1];
+            // 投影当前位置，获取深度缩放
+            const proj = project(this.x, this.y, this.z);
+            // 根据深度调整半径 (近大远小)
+            const currentRadius = this.baseRadius * proj.scale;
+            // 根据深度调整基础透明度 (越远越淡)
+            const baseAlpha = Math.max(0.2, Math.min(1.0, proj.scale));
+
+            // A. 绘制超长 3D 拖尾
+            ctx.beginPath();
+            // 为了性能，超长拖尾不需要每帧都画，隔点采样
+            const sampleRate = 2; 
+            for (let i = 0; i < this.history.length - sampleRate; i += sampleRate) {
+                // 关键：轨迹上的每个点都要实时投影
+                const p3d1 = this.history[i];
+                const p3d2 = this.history[i+sampleRate];
                 
-                // ratio: 0.0 (尾巴尖) -> 1.0 (星星头)
-                const ratio = i / this.history.length;
+                const p1 = project(p3d1.x, p3d1.y, p3d1.z);
+                const p2 = project(p3d2.x, p3d2.y, p3d2.z);
+                
+                const ratio = i / this.history.length; // 0.0 (尾) -> 1.0 (头)
                 
                 ctx.beginPath();
                 ctx.moveTo(p1.x, p1.y);
                 ctx.lineTo(p2.x, p2.y);
                 
-                if (isDark) {
-                    // 🌙 黑夜模式：白色发光拖尾
-                    // 透明度从 0 渐变到 0.4
-                    ctx.strokeStyle = `rgba(255, 255, 255, ${ratio * 0.4})`;
-                    // 宽度从 0 渐变到 3
-                    ctx.lineWidth = ratio * 3;
-                } else {
-                    // ☀️ 白天模式：深色墨迹
-                    // 透明度从 0 渐变到 0.2 (非常淡，在白底上逐渐消失变白)
-                    ctx.strokeStyle = `rgba(0, 0, 0, ${ratio * 0.2})`;
-                    // 宽度从 0 渐变到 2
-                    ctx.lineWidth = ratio * 2;
-                }
+                // 透明度 = 基础深度透明度 * 尾迹渐变
+                const finalAlpha = baseAlpha * ratio;
                 
-                ctx.lineCap = 'round'; // 让线段连接处圆滑
+                if (isDark) {
+                    // 黑夜：远处拖尾更细更淡
+                    ctx.strokeStyle = `rgba(255, 255, 255, ${finalAlpha * 0.5})`;
+                    ctx.lineWidth = ratio * 3 * p1.scale; // 线宽也随深度缩放
+                } else {
+                    // 白天
+                    ctx.strokeStyle = `rgba(0, 0, 0, ${finalAlpha * 0.15})`;
+                    ctx.lineWidth = ratio * 2 * p1.scale;
+                }
+                ctx.lineCap = 'round';
                 ctx.stroke();
             }
 
-            // B. 绘制星体
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-            ctx.fillStyle = style.color;
-            if (isDark) {
-                ctx.shadowBlur = 20;
-                ctx.shadowColor = style.glow;
-            } else {
+            // B. 绘制星体本体 (如果在视野前方)
+            if (proj.scale > 0) {
+                ctx.beginPath();
+                ctx.arc(proj.x, proj.y, currentRadius, 0, Math.PI * 2);
+                ctx.fillStyle = style.color;
+                
+                // 应用深度透明度
+                ctx.globalAlpha = baseAlpha;
+                
+                if (isDark) {
+                    // 辉光也随距离缩放
+                    ctx.shadowBlur = 20 * proj.scale;
+                    ctx.shadowColor = style.glow;
+                } else {
+                    ctx.shadowBlur = 0;
+                }
+                ctx.fill();
                 ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1.0; // 重置全局透明度
             }
-            ctx.fill();
-            ctx.shadowBlur = 0;
         }
     }
 
@@ -143,9 +216,10 @@
     }
 
     function animate() {
+        // 1. 清空画布
         ctx.clearRect(0, 0, width, height);
 
-        // 光线传感器
+        // 2. 光线传感器
         let isDark = false;
         try {
             const bgColor = window.getComputedStyle(document.body).backgroundColor;
@@ -157,6 +231,13 @@
         } catch (e) {
             isDark = document.body.classList.contains('dark');
         }
+
+        // 3. 更新相机角度
+        angleOffset += ROTATION_SPEED;
+
+        // 4. 物理更新与绘制
+        // 为了正确的遮挡关系（虽然这里不重要，但好习惯），可以按 Z 轴排序后再画
+        // stars.sort((a, b) => project(b.x, b.y, b.z).zIndex - project(a.x, a.y, a.z).zIndex);
 
         for (let star of stars) {
             star.update();
