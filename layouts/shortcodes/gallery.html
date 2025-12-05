@@ -1,0 +1,7 @@
+<div class="gallery">
+    {{- range .Params }}
+    <div class="gallery-item">
+        <img src="{{ . }}" loading="lazy" alt="Gallery Image">
+    </div>
+    {{- end }}
+</div>

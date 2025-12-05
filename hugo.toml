@@ -11,16 +11,18 @@ enableEmoji = true
 [params]
     defaultTheme = "auto"
     math = true
+    env = "production"
+    comments = false
 
     # --- 新增这部分 (Profile 模式 - 居中头像) ---
     [params.profileMode]
         enabled = true
-        title = "HimZFX"
+        title = "Zhong Fangxiong"
         subtitle = "Peking University | Physics & Astrophysics | Quant Trading"
         imageUrl = "avatar.jpg"      # 对应 static/avatar.jpg
         imageWidth = 150             # 头像大小
         imageHeight = 150
-        imageTitle = "HimZFX"
+        imageTitle = "Zhong Fangxiong"
 
         # 按钮样式 (可以放你的简历或邮箱)
         [[params.profileMode.buttons]]
@@ -28,7 +30,7 @@ enableEmoji = true
             url = "/research/"
         [[params.profileMode.buttons]]
             name = "Email Me"
-            url = "himzfx@stu.pku.edu.cn"
+            url = "mailto:himzfx@stu.pku.edu.cn"
 
     # 社交链接 (替换成你自己的)
     [[params.socialIcons]]
@@ -36,7 +38,16 @@ enableEmoji = true
         url = "https://github.com/HimZFX"
     [[params.socialIcons]]
         name = "email"
-        url = "himzfx@stu.pku.edu.cn"
+        url = "mailto:himzfx@stu.pku.edu.cn"
+    
+    [params.assets]
+        favicon = "/favicon.png"
+        favicon16x16 = "/favicon.png"
+        favicon32x32 = "/favicon.png"
+        disableHLJS = false
+        # 这里的路径对应的是 assets/css/gallery.css
+        css = ["css/gallery.css"]
+    
 
 # --- 双语配置核心区 ---
 [languages]
@@ -57,6 +68,10 @@ enableEmoji = true
                 name = "博客"
                 url = "/posts/"
                 weight = 3
+            [[languages.zh.menu.main]]
+                name = "课程资料"
+                url = "/courses/"
+                weight = 10       # 数字越大，排得越靠右
 
     [languages.en]
         languageName = "English"
@@ -75,6 +90,10 @@ enableEmoji = true
                 name = "Blog"
                 url = "/posts/"
                 weight = 3
+            [[languages.en.menu.main]]
+                name = "Courses Material"
+                url = "https://HimZFX.github.io/courses/"
+                weight = 10       
 
 [markup]
   [markup.goldmark]
@@ -86,3 +105,6 @@ enableEmoji = true
         [markup.goldmark.extensions.passthrough.delimiters]
           block = [['$$', '$$'], ['\\[', '\\]']]
           inline = [['$', '$'], ['\\(', '\\)']]
+
+[outputFormats.HTML]
+    noIndex = true

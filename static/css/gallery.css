@@ -1,0 +1,28 @@
+/* 瀑布流画廊样式 */
+.gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px; /* 图片之间的间距 */
+    justify-content: center;
+    padding: 10px 0;
+}
+
+.gallery-item {
+    flex: 1 1 300px; /* 最小宽度300px，允许自动拉伸 */
+    max-width: 100%;
+    overflow: hidden;
+    border-radius: 8px; /* 圆角看起来更舒服 */
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease;
+}
+
+.gallery-item:hover {
+    transform: translateY(-5px); /* 鼠标悬停时微微上浮 */
+}
+
+.gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover; /* 保证图片填满格子不变形 */
+    display: block;
+}

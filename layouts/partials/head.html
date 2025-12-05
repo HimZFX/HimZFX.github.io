@@ -6,6 +6,7 @@
 {{- else }}
 <meta name="robots" content="noindex, nofollow">
 {{- end }}
+<link rel="stylesheet" href="/css/gallery.css">
 
 {{- /* Title */}}
 <title>{{ if .IsHome }}{{ else }}{{ if .Title }}{{ .Title }} | {{ end }}{{ end }}{{ site.Title }}</title>
@@ -217,3 +218,54 @@
       ],
       throwOnError : false
     });"></script>
+
+
+<script>
+    (function() {
+        // 1. 定义默认图标 (你的 JPG 头像)
+        var defaultIcon = "/favicon.jpg"; 
+        
+        // 2. 定义节日与对应的 Emoji
+        var emojiIcon = null; // 默认空
+        var date = new Date();
+        var month = date.getMonth() + 1;
+        var day = date.getDate();
+
+        // --- 节日判断逻辑 (想加什么节日就在这里加) ---
+        
+        // 🎄 圣诞节 (12.20 - 12.31)
+        if (month === 12 && day >= 20) {
+            emojiIcon = "🎄";
+        }
+        // 🏮 春节 (这里简单设定为 1月和2月上半月)
+        else if ((month === 1 && day >22) || (month === 2 && day <= 15)) {
+            emojiIcon = "🏮";
+        }
+        // 🎃 万圣节 (10.25 - 10.31) -> 举例：以后你可以自己加
+        else if (month === 10 && day >= 25) {
+            emojiIcon = "🎃";
+        }
+        // 🎂 你的生日 (比如 6月1日)
+        else if (month === 1 && day === 22) {
+            emojiIcon = "🎂";
+        }
+
+        // 3. 执行替换逻辑
+        var link = document.querySelector("link[rel~='icon']");
+        if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            document.head.appendChild(link);
+        }
+
+        if (emojiIcon) {
+            // 如果今天是节日，用 SVG 包装 Emoji
+            // 这是一个黑科技：直接把 SVG 代码写在 URL 里
+            var svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>${emojiIcon}</text></svg>`;
+            link.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+        } else {
+            // 如果不是节日，显示你的默认帅照
+            link.href = defaultIcon;
+        }
+    })();
+</script>
