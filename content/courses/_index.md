@@ -4,7 +4,6 @@ description: "这里存放我的本科课程笔记、大作业与复习资料，
 hidemeta: true  # 列表页隐藏日期等信息
 layout: "list"  # 使用列表布局
 draft: false
-comment: true
 ---
 
 ## 📚 资料使用说明

@@ -41,12 +41,10 @@ enableEmoji = true
         url = "mailto:himzfx@stu.pku.edu.cn"
     
     [params.assets]
-        favicon = "/favicon.png"
-        favicon16x16 = "/favicon.png"
-        favicon32x32 = "/favicon.png"
+        favicon = "/favicon.jpg"
+        favicon16x16 = "/favicon.jpg"
+        favicon32x32 = "/favicon.jpg"
         disableHLJS = false
-        # 这里的路径对应的是 assets/css/gallery.css
-        css = ["css/gallery.css"]
     
 
 # --- 双语配置核心区 ---
@@ -92,7 +90,7 @@ enableEmoji = true
                 weight = 3
             [[languages.en.menu.main]]
                 name = "Courses Material"
-                url = "https://HimZFX.github.io/courses/"
+                url = "/courses/"
                 weight = 10       
 
 [markup]

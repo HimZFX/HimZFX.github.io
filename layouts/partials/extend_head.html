@@ -1,3 +1,7 @@
+<!-- Gallery CSS -->
+<link rel="stylesheet" href="/css/gallery.css">
+
+<!-- KaTeX -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" crossorigin="anonymous"
@@ -10,3 +14,38 @@
       ],
       throwOnError : false
     });"></script>
+
+<!-- Holiday Favicon -->
+<script>
+    (function() {
+        var defaultIcon = "/favicon.jpg";
+        var emojiIcon = null;
+        var date = new Date();
+        var month = date.getMonth() + 1;
+        var day = date.getDate();
+
+        if (month === 12 && day >= 20) {
+            emojiIcon = "🎄";
+        } else if ((month === 1 && day > 22) || (month === 2 && day <= 15)) {
+            emojiIcon = "🏮";
+        } else if (month === 10 && day >= 25) {
+            emojiIcon = "🎃";
+        } else if (month === 1 && day === 22) {
+            emojiIcon = "🎂";
+        }
+
+        var link = document.querySelector("link[rel~='icon']");
+        if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            document.head.appendChild(link);
+        }
+
+        if (emojiIcon) {
+            var svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>${emojiIcon}</text></svg>`;
+            link.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+        } else {
+            link.href = defaultIcon;
+        }
+    })();
+</script>
