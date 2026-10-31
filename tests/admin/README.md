@@ -59,7 +59,8 @@ node tests/admin/e2e-journey.mjs
   - `exportTo(dir)` + `buildSite({ repoDir, outDir })`：把当前内容导出并用固定版本 Hugo 构建（主题自动软链接）。
   - `openAdmin(page, mock, { remember })`：在 Playwright 页面里自动登录后台，并拦截所有外部请求。
   - 错误场景开关：`setToken`、`setRateLimitRemaining`、`setActionsAccess`、`setRunConclusion`、
-    `setRunDelay`、`setApiDelay`、`setPermissions`、`failNext`（让下一次请求失败或断网）。
+    `setRunDelay`、`setApiDelay`、`setPermissions`、`setContentsWrite`（`false` = 和真实的只读细粒度令牌一样：
+    `GET /repos` 仍返回 `push: true`，但所有 git 写入返回 403）、`failNext`（让下一次请求失败或断网）。
 
 ### e2e 脚本推荐写法
 

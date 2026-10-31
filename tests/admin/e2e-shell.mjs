@@ -101,9 +101,9 @@ import { h } from '../ui.js';
 export default async function mount(container, params, ctx) {
   ctx.setTitle('测试视图');
   const out = h('pre', { dataset: { testid: 't-result' } });
-  const run = async (changes) => {
+  const run = async (changes, extra = {}) => {
     out.textContent = '';
-    try { out.textContent = JSON.stringify(await ctx.publish({ message: 'test: shell publish', changes, summary: ['shell-test.txt'] })); }
+    try { out.textContent = JSON.stringify(await ctx.publish({ message: 'test: shell publish', changes, summary: ['shell-test.txt'], ...extra })); }
     catch (e) { out.textContent = 'error:' + e.message; }
   };
   container.append(
@@ -111,6 +111,8 @@ export default async function mount(container, params, ctx) {
       h('h1', {}, 'fake view ' + (params.n || '')),
       h('button', { class: 'btn btn-primary', dataset: { testid: 't-publish' }, on: { click: () => run([{ path: 'static/documents/shell-test.txt', content: 'hello ' + Date.now(), baseSha: undefined }]) } }, 'publish'),
       h('button', { class: 'btn', dataset: { testid: 't-conflict' }, on: { click: () => run([{ path: 'static/documents/shell-test.txt', content: 'x', baseSha: '0000000000000000000000000000000000000000' }]) } }, 'conflict'),
+      h('button', { class: 'btn', dataset: { testid: 't-publish-view' }, on: { click: () => run([{ path: 'static/documents/shell-view.txt', content: 'view ' + Date.now() }], { viewUrl: ctx.siteUrl + 'posts/shell-view/', viewLabel: '查看文章' }) } }, 'publish+view'),
+      h('button', { class: 'btn', dataset: { testid: 't-publish-fixed' }, on: { click: () => run([{ path: 'static/documents/shell-idem.txt', content: 'always the same bytes', baseSha: null }]) } }, 'publish fixed'),
       h('button', { class: 'btn', dataset: { testid: 't-getuser' }, on: { click: () => ctx.client.getUser().then(() => { out.textContent = 'user-ok'; }) } }, 'getUser'),
       h('button', { class: 'btn', dataset: { testid: 't-nav' }, on: { click: () => ctx.navigate('#/pages') } }, 'nav'),
       out,
@@ -181,7 +183,8 @@ async function main() {
       assert.equal(await page.evaluate(() => location.hash), '#/login');
       assert.ok(await page.isVisible('[data-testid="login-token"]'));
       assert.ok(await page.isVisible('[data-testid="login-submit"]'));
-      assert.equal(await page.isChecked('[data-testid="login-remember"]'), true, 'remember should default to checked');
+      // 安全评审后改为默认不勾选：记住的令牌在 localStorage 里，整个 himzfx.github.io（含加载第三方脚本的博客页面）共用
+      assert.equal(await page.isChecked('[data-testid="login-remember"]'), false, 'remember should default to unchecked');
       assert.equal(await page.getAttribute('[data-testid="login-token"]', 'type'), 'password');
       const text = await page.textContent('body');
       assert.ok(text.includes('令牌只保存在这个浏览器里，只会发送给 GitHub'));
@@ -219,6 +222,10 @@ async function main() {
       const { context, page, st } = await newPage();
       await openLoggedOut(page, mock);
       await page.waitForSelector('[data-testid="login-token"]');
+      // 「记住」默认不勾选（记住的令牌在整个网站共用的 localStorage 里），说明文字解释了取舍
+      assert.equal(await page.isChecked('[data-testid="login-remember"]'), false, 'remember is off by default');
+      assert.match(await page.textContent('[data-testid="login-remember-note"]'), /第三方脚本/);
+      await page.check('[data-testid="login-remember"]');
       await page.fill('[data-testid="login-token"]', '  ' + mock.token + '  ');
       await page.click('[data-testid="login-submit"]');
       await page.waitForSelector('body[data-testid="app-ready"]', { state: 'attached', timeout: 30000 });
@@ -397,8 +404,10 @@ async function main() {
       assert.ok(['pending', 'running', 'success'].includes(state0), state0);
       await page.screenshot({ path: path.join(SHOTS, 'deploy-running.png') });
       await page.waitForSelector('[data-testid="deploy-indicator"][data-state="success"]', { timeout: 30000 });
-      assert.equal(await page.getAttribute('[data-testid="deploy-indicator"]', 'href'), mock.url + '/');
+      // ?v=<commit> so the browser does not show a cached (≤10 min) old page
+      assert.equal(await page.getAttribute('[data-testid="deploy-indicator"]', 'href'), mock.url + '/?v=' + result.commitSha.slice(0, 7));
       assert.match(await page.textContent('[data-testid="deploy-indicator"]'), /已上线/);
+      assert.match(await page.getAttribute('[data-testid="deploy-indicator"]', 'title'), /刷新/);
       assert.deepEqual(st.pageErrors, []);
       await context.close();
     });
@@ -513,6 +522,216 @@ async function main() {
         mock.setToken(mock.token);
       }
       assert.deepEqual(st.pageErrors, []);
+      await context.close();
+    });
+
+    await test('read-only fine-grained token (GET /repos says push: true, git writes are 403) → login error, nothing stored', async () => {
+      mock.setContentsWrite(false);
+      try {
+        const { context, page } = await newPage();
+        await openLoggedOut(page, mock);
+        await page.fill('[data-testid="login-token"]', mock.token);
+        await page.click('[data-testid="login-submit"]');
+        await page.waitForFunction(() => /没有写入权限/.test(document.querySelector('[data-testid="login-error"]')?.textContent || ''), null, { timeout: 15000 });
+        assert.match(await page.textContent('[data-testid="login-error"]'), /Repository access/);
+        const s = await storage(page);
+        assert.equal(s.local, null);
+        assert.equal(s.session, null);
+        await context.close();
+      } finally {
+        mock.setContentsWrite(true);
+      }
+    });
+
+    await test('401 while the view has unsaved changes → re-login dialog over the SAME view; edits kept; publish works after', async () => {
+      const { context, page, st } = await newPage();
+      await fakeView(page, 'files', PUBLISH_VIEW);
+      await openAdmin(page, mock, { path: '/admin/#/files?n=2' });
+      await waitViewReady(page, 'files');
+      await page.evaluate(() => { window.__dirty = true; });
+      const before = mock.commits.length;
+      mock.setToken('rotated-token');
+      try {
+        await page.click('[data-testid="t-publish"]');
+        await page.waitForSelector('[data-testid="reauth"]', { timeout: 15000 });
+        assert.match(await page.textContent('[data-testid="reauth"]'), /没有丢失/);
+        assert.equal(await bodyTestId(page), 'app-ready', 'still in the app, not the login page');
+        assert.equal(await page.evaluate(() => window.__unmounted || 0), 0, 'view was NOT unmounted');
+        assert.equal(await page.evaluate(() => location.hash), '#/files?n=2');
+        await page.waitForFunction(() => document.querySelector('[data-testid="t-result"]').textContent.startsWith('error:'));
+        const s0 = await storage(page);
+        assert.equal(s0.local, null, 'invalid token removed');
+        // Esc does not dismiss it
+        await page.keyboard.press('Escape');
+        assert.ok(await page.isVisible('[data-testid="reauth"]'));
+        // wrong token → inline error
+        await page.fill('[data-testid="reauth-token"]', 'still-wrong');
+        await page.click('[data-testid="reauth-submit"]');
+        await page.waitForSelector('[data-testid="reauth-error"]:visible');
+        assert.match(await page.textContent('[data-testid="reauth-error"]'), /令牌不正确/);
+        // the new token → dialog closes, same view, token swapped in place
+        await page.fill('[data-testid="reauth-token"]', 'rotated-token');
+        await page.press('[data-testid="reauth-token"]', 'Enter');
+        await page.waitForSelector('[data-testid="reauth"]', { state: 'detached' });
+        assert.equal(await page.evaluate(() => window.__unmounted || 0), 0);
+        assert.equal((await storage(page)).local, 'rotated-token', 'remembered like before');
+        await page.click('[data-testid="t-publish"]');
+        await page.waitForFunction(() => /commitSha/.test(document.querySelector('[data-testid="t-result"]').textContent), null, { timeout: 20000 });
+        assert.equal(mock.commits.length, before + 1);
+      } finally {
+        mock.setToken(mock.token);
+      }
+      assert.deepEqual(st.pageErrors, []);
+      await context.close();
+    });
+
+    await test('leaving a page (phone Back) closes its open dialog as "cancel"', async () => {
+      const { context, page } = await newPage();
+      await fakeView(page, 'background', `
+import { h, confirmDialog } from '../ui.js';
+export default async function mount(container) {
+  container.append(h('button', { class: 'btn', dataset: { testid: 't-confirm' }, on: { click: async () => {
+    window.__confirm = 'open';
+    window.__confirm = await confirmDialog({ title: '删除整篇文章？', okText: '删除', danger: true });
+  } } }, 'confirm'));
+}`);
+      await openAdmin(page, mock, { path: '/admin/#/pages' });
+      await waitViewReady(page, 'pages');
+      await page.click('[data-testid="nav-background"]');
+      await waitViewReady(page, 'background');
+      await page.click('[data-testid="t-confirm"]');
+      await page.waitForSelector('.modal');
+      await page.goBack();
+      await waitViewReady(page, 'pages');
+      await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 });
+      assert.equal(await page.evaluate(() => window.__confirm), false, 'confirm resolved as cancelled');
+      assert.equal(await page.evaluate(() => document.getElementById('app').hasAttribute('inert')), false);
+      await context.close();
+    });
+
+    await test('a dialog opened while the publish overlay is up is drawn ABOVE it (what you see is what you tap)', async () => {
+      const { context, page } = await newPage();
+      await openAdmin(page, mock, { path: '/admin/#/pages' });
+      await waitViewReady(page, 'pages');
+      const r = await page.evaluate(async () => {
+        const ui = await import('/admin/js/ui.js');
+        const ov = ui.showOverlay('正在发布…');
+        let answer = 'pending';
+        ui.confirmDialog({ title: '还有修改没有发表', okText: '离开' }).then((v) => { answer = v; });
+        await new Promise((res) => setTimeout(res, 300));
+        const ok = document.querySelector('[data-testid="confirm-ok"]');
+        const b = ok.getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        const zo = Number(getComputedStyle(document.querySelector('[data-testid="overlay"]')).zIndex);
+        const zm = Number(getComputedStyle(ok.closest('.modal-backdrop')).zIndex);
+        window.__ov = ov;
+        window.__answer = () => answer;
+        return { hitIsOk: !!hit && (hit === ok || ok.contains(hit)), zo, zm };
+      });
+      assert.ok(r.zm > r.zo, `dialog z-index ${r.zm} must be above the overlay ${r.zo}`);
+      assert.ok(r.hitIsOk, 'the visible 离开 button is the element that receives the tap');
+      await page.click('[data-testid="confirm-cancel"]');
+      assert.equal(await page.evaluate(() => window.__answer()), false);
+      // and the other way round: an overlay opened after a dialog covers the dialog
+      const r2 = await page.evaluate(async () => {
+        const ui = await import('/admin/js/ui.js');
+        window.__ov.close();
+        ui.confirmDialog({ title: 'x' });
+        await new Promise((res) => setTimeout(res, 100));
+        const ov = ui.showOverlay('正在发布…');
+        const zo = Number(getComputedStyle(document.querySelector('[data-testid="overlay"]')).zIndex);
+        const zm = Number(getComputedStyle(document.querySelector('.modal-backdrop')).zIndex);
+        ov.close();
+        return { zo, zm };
+      });
+      assert.ok(r2.zo > r2.zm, `overlay ${r2.zo} above the earlier dialog ${r2.zm}`);
+      await context.close();
+    });
+
+    await test('logging out in one tab ends the session in the other tabs too', async () => {
+      const { context, page } = await newPage();
+      await openAdmin(page, mock, { remember: true });
+      const page2 = await context.newPage();
+      await preparePage(page2, mock);
+      await page2.goto(mock.url + '/admin/#/pages');
+      await page2.waitForSelector('body[data-testid="app-ready"]', { state: 'attached', timeout: 30000 });
+      await page.click('[data-testid="logout"]');
+      await page.click('[data-testid="confirm-ok"]');
+      await page.waitForSelector('body[data-testid="login-ready"]', { state: 'attached' });
+      await page2.waitForSelector('body[data-testid="login-ready"]', { state: 'attached', timeout: 10000 });
+      assert.match(await page2.textContent('[data-testid="login-notice"]'), /其他标签页退出登录/);
+      const s2 = await storage(page2);
+      assert.equal(s2.local, null);
+      assert.equal(s2.session, null);
+      await context.close();
+    });
+
+    await test('admin embedded in an iframe refuses to start (clickjacking) and never uses the token', async () => {
+      const { context, page } = await newPage();
+      await openAdmin(page, mock, { remember: true });
+      await page.goto(mock.url + '/');
+      const n = mock.requests.length;
+      await page.evaluate((src) => {
+        const f = document.createElement('iframe');
+        f.src = src; f.width = '800'; f.height = '600'; f.id = 'evil';
+        document.body.appendChild(f);
+      }, mock.url + '/admin/');
+      const frame = await (await page.waitForSelector('#evil')).contentFrame();
+      await frame.waitForSelector('body[data-testid="framed"]', { state: 'attached', timeout: 15000 });
+      assert.match(await frame.textContent('body'), /请直接打开管理后台/);
+      assert.equal(await frame.$('.topbar'), null);
+      await page.waitForTimeout(500);
+      assert.equal(mock.requests.slice(n).filter((r) => r.path === '/user' || r.path.includes('/repos/')).length, 0, 'no API calls from the framed admin');
+      await context.close();
+    });
+
+    await test('ctx.publish viewUrl: "已上线 ✓" and the success toast link to the published page', async () => {
+      const { context, page } = await newPage();
+      await fakeView(page, 'files', PUBLISH_VIEW);
+      await openAdmin(page, mock, { path: '/admin/#/files' });
+      await waitViewReady(page, 'files');
+      await page.click('[data-testid="t-publish-view"]');
+      await page.waitForSelector('[data-testid="deploy-indicator"][data-state="success"]', { timeout: 30000 });
+      const v = mock.commits.at(-1).sha ? '?v=' + mock.commits.at(-1).sha.slice(0, 7) : null;
+      const href = await page.getAttribute('[data-testid="deploy-indicator"]', 'href');
+      assert.match(href, /^.*\/posts\/shell-view\/\?v=[0-9a-f]{7}$/);
+      assert.ok(href.startsWith(mock.url + '/posts/shell-view/?v='), href);
+      if (v) assert.equal(href, mock.url + '/posts/shell-view/' + v);
+      await page.waitForSelector('[data-testid="toast-link"]');
+      assert.equal(await page.getAttribute('[data-testid="toast-link"]', 'href'), href);
+      assert.match(await page.textContent('[data-testid="toast-link"]'), /查看文章/);
+      assert.equal(await page.getAttribute('[data-testid="toast-link"]', 'target'), '_blank');
+      await context.close();
+    });
+
+    await test('ctx.publish: ref update applied but its response lost → "无法确认" warning; publishing again is idempotent', async () => {
+      const { context, page } = await newPage();
+      await fakeView(page, 'files', PUBLISH_VIEW);
+      await openAdmin(page, mock, { path: '/admin/#/files' });
+      await waitViewReady(page, 'files');
+      const before = mock.commits.length;
+      let dropRefReads = false;
+      await page.route(/\/git\/refs\/heads\//, async (route) => {
+        if (route.request().method() !== 'PATCH') return route.continue();
+        await route.fetch();          // applied on the server …
+        dropRefReads = true;          // … and then the network goes away
+        return route.abort('connectionreset');
+      });
+      await page.route(/\/git\/ref\/heads\//, (route) => (dropRefReads ? route.abort('internetdisconnected') : route.continue()));
+      await page.click('[data-testid="t-publish-fixed"]');
+      await page.waitForFunction(() => document.querySelector('[data-testid="t-result"]').textContent.startsWith('error:'), null, { timeout: 40000 });
+      assert.equal(mock.commits.length, before + 1, 'the commit did land');
+      assert.match(await page.textContent('[data-testid="toast-warning"]'), /无法确认/);
+      assert.equal(await page.$('[data-testid="overlay"]'), null);
+      dropRefReads = false;
+      await page.unroute(/\/git\/refs\/heads\//);
+      await page.click('[data-testid="t-publish-fixed"]');
+      await page.waitForFunction(() => /commitSha/.test(document.querySelector('[data-testid="t-result"]').textContent), null, { timeout: 20000 });
+      const r = JSON.parse(await page.textContent('[data-testid="t-result"]'));
+      assert.equal(r.alreadyApplied, true);
+      assert.equal(await page.$('[data-testid="conflict-reload"]'), null, 'no false conflict dialog');
+      assert.equal(mock.commits.length, before + 1, 'not published twice');
+      assert.match(await page.textContent('.toast-stack'), /已经发布成功/);
       await context.close();
     });
 

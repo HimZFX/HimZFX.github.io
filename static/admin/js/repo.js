@@ -70,6 +70,7 @@ export class Repo {
     this._listeners = new Set();
     this._queue = Promise.resolve();  // load/commit 串行执行
     this._superseded = new Map();     // 被我们自己的提交「快进」掉的旧 head → 时间（用于识别读到的旧分支指针）
+    this._maybeLanded = new Map();    // 「移动分支」的响应丢了的提交写入的内容：path → blob sha（null = 删除）
     this._retryDelayMs = Math.max(0, Number(retryDelayMs) || 0);
   }
 
@@ -174,6 +175,7 @@ export class Repo {
 
   async _commitLocked(message, { ops, checks }, progress) {
     const uploaded = new Map();   // path → blob sha（重试时复用，不必重新上传）
+    const finalOps = new Map(ops.map((o) => [o.path, o]));
 
     for (let attempt = 0; ; attempt++) {
       if (attempt > 0) await sleep(this._retryDelayMs);
@@ -203,10 +205,18 @@ export class Repo {
       }
 
       // 3. 冲突检查
+      //    「已经是我们想要的结果」不算冲突：上一次发布其实成功了、只是响应在路上丢了（手机断网、
+      //    GitHub 502），用户再点一次发布时，文件现在的版本就是我们自己写进去的。
+      //    同理，文件现在的版本是我们那次「不确定是否成功」的提交写入的，也不算别人的修改。
       const conflicts = [];
+      let matched = 0;
       for (const c of checks) {
         const cur = latest.get(c.path);
-        const ok = c.baseSha === null ? !cur : !!cur && cur.sha === c.baseSha;
+        let ok = c.baseSha === null ? !cur : !!cur && cur.sha === c.baseSha;
+        if (!ok && (alreadyAs(finalOps.get(c.path), cur) || this._isOwnEarlierWrite(c.path, cur))) {
+          ok = true;
+          matched++;
+        }
         if (!ok) conflicts.push({ path: c.path, expected: c.baseSha, actual: cur ? cur.sha : null });
       }
       if (conflicts.length) {
@@ -217,7 +227,11 @@ export class Repo {
       // 删除不存在的文件：静默跳过（GitHub 对这种条目会报错）。
       const deletes = ops.filter((o) => o.delete && latest.has(o.path));
 
-      // 4. 上传 blob（最多 4 个并发）
+      // 4. 上传 blob（最多 4 个并发）；网站上已经是这份内容的文件不必再上传
+      for (const w of writes) {
+        const cur = latest.get(w.path);
+        if (!uploaded.has(w.path) && w.sha && cur && cur.sha === w.sha) uploaded.set(w.path, w.sha);
+      }
       const pending = writes.filter((w) => !uploaded.has(w.path));
       let done = writes.length - pending.length;
       if (pending.length) progress({ phase: 'upload', done, total: writes.length });
@@ -232,7 +246,9 @@ export class Repo {
       for (const w of writes) shas[w.path] = uploaded.get(w.path);
 
       const treeEntries = [
-        ...writes.map((w) => ({ path: w.path, sha: uploaded.get(w.path), mode: writeMode(latest.get(w.path)) })),
+        ...writes
+          .filter((w) => { const cur = latest.get(w.path); return !cur || cur.sha !== uploaded.get(w.path) || cur.mode !== writeMode(cur); })
+          .map((w) => ({ path: w.path, sha: uploaded.get(w.path), mode: writeMode(latest.get(w.path)) })),
         ...deletes.map((d) => ({ path: d.path, sha: null, mode: latest.get(d.path).mode || '100644' })),
       ];
 
@@ -243,7 +259,9 @@ export class Repo {
         this._setState(head, latest, submodules, false);
         this._emit({ type: 'commit', commitSha: head.commitSha, paths: [] });
         progress({ phase: 'done' });
-        return { commitSha: head.commitSha, shas, unchanged: true };
+        // alreadyApplied：有文件的 baseSha 对不上，但网站上已经正是这次要发布的内容（上一次其实成功了）
+        return matched ? { commitSha: head.commitSha, shas, unchanged: true, alreadyApplied: true }
+          : { commitSha: head.commitSha, shas, unchanged: true };
       }
 
       // 6. 建提交 + 移动分支
@@ -253,9 +271,19 @@ export class Repo {
       } catch (err) {
         const status = err && err.status;
         if ((status === 409 || status === 422) && attempt === 0) continue;   // 分支被移动：整体重来一次
-        // 网络断了 / 5xx：请求可能其实已经成功了，确认一下分支现在指向哪里。
-        if (!(status === 0 || status >= 500) || !(await this._headIs(newCommitSha))) {
-          throw friendlyRefError(err, this.client.branch);
+        if (!(status === 0 || status >= 500)) throw friendlyRefError(err, this.client.branch);
+        // 网络断了 / 5xx：请求可能其实已经成功了。记下这次写入的内容（再次发布时不会把它当成别人的修改），
+        // 然后多读几次分支指针确认（读副本可能还是旧的）。
+        for (const w of writes) this._maybeLanded.set(w.path, uploaded.get(w.path));
+        for (const d of deletes) this._maybeLanded.set(d.path, null);
+        const landed = await this._confirmHead(newCommitSha, head.commitSha);
+        if (landed === false) throw friendlyRefError(err, this.client.branch);
+        if (landed === null) {
+          const e = new GitHubError(
+            '网络中断，暂时无法确认这次是否已经发布成功。请稍等一会儿再点一次发布：如果其实已经发布了，不会重复发布。',
+            { status: 0, path: err.path, cause: err });
+          e.uncertain = true;
+          throw e;
         }
       }
 
@@ -266,6 +294,7 @@ export class Repo {
       }
       for (const d of deletes) next.delete(d.path);
       this._superseded.set(head.commitSha, Date.now());
+      for (const o of ops) this._maybeLanded.delete(o.path);
       this._setState({ commitSha: newCommitSha, treeSha: newTreeSha }, next, submodules, false);
       for (const w of writes) this._cacheBlob(uploaded.get(w.path), w.bytes);
 
@@ -403,13 +432,33 @@ export class Repo {
     return head;
   }
 
-  async _headIs(commitSha) {
-    try {
-      const head = await this.client.getBranchHead();
-      return head.commitSha === commitSha;
-    } catch {
-      return false;
+  /**
+   * 「移动分支」的响应丢失后，确认分支现在是否指向 target。
+   * 按 0、1、2、4 倍 retryDelayMs 的间隔读几次（读副本可能还停在 parent 上）。
+   * @returns {Promise<boolean|null>} true = 已经成功；false = 没有成功；null = 一直读不到，无法确定
+   */
+  async _confirmHead(target, parent) {
+    let sawParent = false;
+    for (const factor of [0, 1, 2, 4]) {
+      await sleep(this._retryDelayMs * factor);
+      let head;
+      try {
+        head = await this.client.getBranchHead();
+      } catch {
+        continue;
+      }
+      if (head.commitSha === target) return true;
+      if (head.commitSha !== parent) return false;   // 分支已经被移到别处：我们的提交没有生效
+      sawParent = true;
     }
+    return sawParent ? false : null;
+  }
+
+  /** 文件现在的版本是我们那次「不确定是否成功」的提交写入的。 */
+  _isOwnEarlierWrite(path, cur) {
+    if (!this._maybeLanded.has(path)) return false;
+    const sha = this._maybeLanded.get(path);
+    return sha === null ? !cur : !!cur && cur.sha === sha;
   }
 
   async _readBlob(sha, expectedSize) {
@@ -538,12 +587,42 @@ async function prepareChanges(changes) {
           `文件「${path}」太大（${(bytes.length / 1024 / 1024).toFixed(1)} MB），GitHub 单个文件不能超过 100 MB`,
           { status: 413, path });
       }
-      byPath.set(path, { path, bytes });
+      byPath.set(path, { path, bytes, sha: await gitBlobSha(bytes) });
     } else {
       throw new TypeError(`变更缺少内容：${path}`);
     }
   }
   return { ops: [...byPath.values()], checks };
+}
+
+/** 这个修改是否已经是现在的状态（写入：内容 sha 相同；删除：文件已经不存在）。 */
+function alreadyAs(op, cur) {
+  if (!op) return false;
+  if (op.delete) return !cur;
+  return !!cur && !!op.sha && cur.sha === op.sha;
+}
+
+/**
+ * 在本地计算 git blob sha（sha1('blob <长度>\0' + 内容)），与 GitHub 上的完全一致。
+ * 没有 WebCrypto（非安全上下文）时返回 null —— 只是少了「重复发布」识别，不影响发布。
+ * @param {Uint8Array} bytes
+ * @returns {Promise<string|null>}
+ */
+export async function gitBlobSha(bytes) {
+  const subtle = globalThis.crypto && globalThis.crypto.subtle;
+  if (!subtle) return null;
+  try {
+    const header = new TextEncoder().encode(`blob ${bytes.length}\0`);
+    const buf = new Uint8Array(header.length + bytes.length);
+    buf.set(header, 0);
+    buf.set(bytes, header.length);
+    const digest = new Uint8Array(await subtle.digest('SHA-1', buf));
+    let hex = '';
+    for (const b of digest) hex += b.toString(16).padStart(2, '0');
+    return hex;
+  } catch {
+    return null;
+  }
 }
 
 function blobMapFromTree(tree) {

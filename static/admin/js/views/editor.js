@@ -22,7 +22,7 @@
  */
 
 import {
-  h, svgIcon, render, toast, modal, confirmDialog, debounce, withBusy, errorMessage, loadingState,
+  h, svgIcon, render, toast, modal, confirmDialog, promptDialog, debounce, withBusy, errorMessage, loadingState,
   errorState, formatDate, formatBytes, badge,
 } from '../ui.js';
 import { VDITOR_CDN, PATHS, LIMITS } from '../config.js';
@@ -52,7 +52,13 @@ const recentUploads = new Map();
 const ICON_FORMULA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H7l6 7-6 7h11"/></svg>';
 const ICON_DOCS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 17v-6M9.5 13.5L12 11l2.5 2.5"/></svg>';
 
+const ICON_GALLERY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg>';
+const ICON_FIGURE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M3 13l5-4 4 3 3-2 6 4"/><path d="M7 20h10"/></svg>';
+
 const pad2 = (n) => String(n).padStart(2, '0');
+
+/** 短代码参数（"…" 里）不能有 " 和换行。 */
+const scArg = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/"/g, '“').trim();
 
 /** Date → 'YYYY-MM-DDTHH:mm:ss+08:00'（使用浏览器的时区偏移）。 */
 function hugoDate(d = new Date()) {
@@ -112,6 +118,170 @@ function stemOf(name) {
 /** Markdown 链接文字里的 [ ] 会破坏语法。 */
 const linkText = (s) => String(s || '').replace(/[[\]\n\r]/g, ' ').trim() || '文件';
 
+/**
+ * 网站路径 → Markdown 链接 / 图片地址：把会破坏 Markdown 语法或网址的字符按段编码
+ * （空格、#、?、%、括号、尖括号、引号…）。中文等非 ASCII 字符保持原样（Hugo 输出时会自动编码）。
+ * 已经是 %XX 的编码不会重复编码。
+ */
+function mdDest(sitePath) {
+  return String(sitePath || '').replace(/%(?![0-9A-Fa-f]{2})|[\s#?()<>[\]"'\\^`{}|]/g,
+    (c) => (c === ' ' ? '%20' : encodeURIComponent(c).replace(/[()'!*]/g, (x) => `%${x.charCodeAt(0).toString(16).toUpperCase()}`)));
+}
+
+/** Markdown 链接地址里出现「% 后面不是两位十六进制」会让 Hugo 构建失败（invalid URL escape）。 */
+function badPercentLinks(md) {
+  const bad = [];
+  const re = /\]\(\s*<?([^)\s>]*)|^\s{0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)/gm;
+  let m;
+  while ((m = re.exec(md))) {
+    const dest = m[1] ?? m[2] ?? '';
+    if (/%(?![0-9A-Fa-f]{2})/.test(dest)) bad.push(dest);
+  }
+  return bad;
+}
+
+/**
+ * 编辑区里不允许真正加载的嵌入元素（ADMIN_SPEC §2.3 例外 c 的收紧）：
+ * 文章里的 <iframe src="/某个网页"> 如果在后台里真的加载，那个同源网页里的脚本就能读到登录令牌。
+ * Vditor（Lute）生成的编辑区 HTML 在写进页面之前经过这里，这些标签被换成不会加载任何东西的占位 <span>。
+ * 只改「显示」用的 HTML：Markdown 原文由 Lute 从源码块（已转义的文字）还原，保存时不受影响。
+ */
+const EMBED_TAGS = 'iframe|frame|frameset|object|embed|portal|fencedframe|meta|base|link|style';
+const EMBED_TEST_RE = new RegExp(`<\\/?(?:${EMBED_TAGS})\\b`, 'i');
+const EMBED_RE = new RegExp(`<(\\/?)(${EMBED_TAGS})\\b[^>]*>`, 'gi');
+const VOID_EMBEDS = new Set(['embed', 'meta', 'base', 'link']);
+export function neutralizeEmbeds(html) {
+  if (typeof html !== 'string' || !EMBED_TEST_RE.test(html)) return html;
+  return html.replace(EMBED_RE, (m, close, tag) => {
+    const t = tag.toLowerCase();
+    if (close) return VOID_EMBEDS.has(t) ? '' : '</span>';
+    const open = `<span class="ed-embed-blocked" data-tag="${t}" contenteditable="false">`;
+    return VOID_EMBEDS.has(t) ? `${open}</span>` : open;
+  });
+}
+/** Lute 里所有「输出 HTML」的方法（编辑区三种模式 + 预览面板 + 粘贴）。 */
+const LUTE_HTML_METHODS = [
+  'Md2VditorDOM', 'SpinVditorDOM', 'HTML2VditorDOM',
+  'Md2VditorIRDOM', 'SpinVditorIRDOM', 'HTML2VditorIRDOM',
+  'Md2VditorSVDOM', 'SpinVditorSVDOM',
+  'Md2HTML', 'VditorDOM2HTML', 'VditorIRDOM2HTML',
+];
+
+// ---------------------------------------------------------------------------
+// 正文的「三方合并」：Vditor 会把整篇 Markdown 重新整理一遍（去掉行尾两个空格的换行、{#id}、
+// 链接标题、把 *** 改成 --- …）。保存时只把用户真正改过的行换成 Vditor 的输出，没改过的行保留文件原文。
+
+/** 两个字符串数组的最长公共子序列 → a 中每一行对应 b 的行号（没有对应为 -1）。太大时返回 null。 */
+function lcsMap(a, b) {
+  const map = new Int32Array(a.length).fill(-1);
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) { map[s] = s; s++; }
+  let ea = a.length;
+  let eb = b.length;
+  while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) { ea--; eb--; map[ea] = eb; }
+  const n = ea - s;
+  const m = eb - s;
+  if (n === 0 || m === 0) return map;
+  if (n * m > 6e6) return null;
+  // dp[i][j] = a[s+i..ea) 与 b[s+j..eb) 的 LCS 长度
+  const W = m + 1;
+  const dp = new Uint32Array((n + 1) * W);
+  for (let i = n - 1; i >= 0; i--) {
+    const ai = a[s + i];
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * W + j] = ai === b[s + j] ? dp[(i + 1) * W + j + 1] + 1 : Math.max(dp[(i + 1) * W + j], dp[i * W + j + 1]);
+    }
+  }
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[s + i] === b[s + j]) { map[s + i] = s + j; i++; j++; } else if (dp[(i + 1) * W + j] >= dp[i * W + j + 1]) i++; else j++;
+  }
+  return map;
+}
+
+const sameLines = (x, y) => x.length === y.length && x.every((l, i) => l === y[i]);
+
+/**
+ * 三方合并（按行）：base = 打开时 Vditor 整理过的正文，ours = 现在编辑器里的正文，theirs = 文件原文。
+ * 用户没改的区域用原文；改过的区域用编辑器的结果。合并不了（太大 / 有重叠的改动）→ null。
+ */
+export function mergeBody(base, ours, theirs) {
+  // 文末的空行不重要（保存时会统一成一个换行），先去掉，免得和最后一行的修改搅在一起
+  const trim = (x) => String(x).replace(/\s+$/, '');
+  base = trim(base);
+  ours = trim(ours);
+  theirs = trim(theirs);
+  const r = merge3(base, ours, theirs);
+  if (r !== null) return r + '\n';
+  // Vditor 在每次编辑后会把引用链接 / 脚注的定义（[ref]: … / [^1]: …）挪到文末，和原文的位置对不上。
+  // 如果用户没有改这些定义，就先把它们从 base / ours 里拿掉再合并（原文里的定义原样保留）。
+  const o = stripDefs(base);
+  const a = stripDefs(ours);
+  if (!o.defs.length || o.defs.join('\n\n') !== a.defs.join('\n\n')) return null;
+  const r2 = merge3(o.text, a.text, theirs);
+  return r2 === null ? null : r2 + '\n';
+}
+
+const DEF_RE = /^ {0,3}\[\^?[^\]\n]+\]:/;
+/** 去掉 Vditor 输出里的链接 / 脚注定义行（连同脚注的缩进续行），返回剩下的文字和排好序的定义。 */
+function stripDefs(text) {
+  const lines = text.split('\n');
+  const keep = [];
+  const defs = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (DEF_RE.test(lines[i])) {
+      const blk = [lines[i]];
+      while (i + 1 < lines.length && /^(?: {4}|\t)/.test(lines[i + 1])) blk.push(lines[++i]);
+      defs.push(blk.join('\n').replace(/\s+$/, ''));
+      continue;
+    }
+    // 拿掉定义后留下的连续空行合成一行（base 和 ours 用同样的处理，不影响比较）
+    if (lines[i] === '' && keep.length && keep[keep.length - 1] === '') continue;
+    keep.push(lines[i]);
+  }
+  return { text: keep.join('\n').replace(/\s+$/, ''), defs: defs.sort() };
+}
+
+function merge3(base, ours, theirs) {
+  const O = base.split('\n');
+  const A = ours.split('\n');
+  const B = theirs.split('\n');
+  const mA = lcsMap(O, A);
+  const mB = lcsMap(O, B);
+  if (!mA || !mB) return null;
+  const out = [];
+  let o = 0;
+  let a = 0;
+  let b = 0;
+  let conflict = false;
+  const flush = (o1, a1, b1) => {
+    const oc = O.slice(o, o1);
+    const ac = A.slice(a, a1);
+    const bc = B.slice(b, b1);
+    if (sameLines(oc, ac)) out.push(...bc);
+    else if (sameLines(oc, bc) || sameLines(ac, bc)) out.push(...ac);
+    else if (oc.length === ac.length && oc.length === bc.length && oc.every((l, k) => ac[k] === l || bc[k] === l)) {
+      // 同一段里两边都有变化，但每一行只有一边改过：逐行取（没改的行用原文，改过的行用编辑器的）
+      for (let k = 0; k < oc.length; k++) out.push(ac[k] === oc[k] ? bc[k] : ac[k]);
+    } else conflict = true;
+  };
+  for (let i = 0; i < O.length; i++) {
+    const j = mA[i];
+    const k = mB[i];
+    if (j < a || k < b || j < 0 || k < 0) continue;
+    flush(i, j, k);
+    out.push(A[j]);
+    o = i + 1;
+    a = j + 1;
+    b = k + 1;
+  }
+  flush(O.length, A.length, B.length);
+  // 用户改的地方和 Vditor 整理过的地方重叠（例如移动过位置的引用链接）：
+  // 拼起来可能丢行或重复，宁可整篇用编辑器的结果（格式可能有小变化，但内容完整）
+  return conflict ? null : out.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // 入口
 
@@ -167,6 +337,10 @@ class Editor {
     /** @type {Map<string, { blob: Blob, url: string|null, kind: 'image'|'doc', committed: boolean }>} */
     this.media = new Map();
     this.urlToName = new Map();
+    /** 仓库路径 → Blob：网站上还打不开、从仓库读出来的图片 */
+    this.repoImageCache = new Map();
+    /** 封面图网站路径 → Blob（同上） */
+    this.coverBlobs = new Map();
     this.vd = null;
     this.els = {};
     this.destroyed = false;
@@ -181,6 +355,24 @@ class Editor {
     this.onKeyDown = this.onKeyDown.bind(this);
     this.onHidden = (e) => { if (e.type === 'pagehide' || document.visibilityState === 'hidden') this.flushAutosave(); };
     this.mq = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+    this.phone = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+    /** 这个编辑器实例的标识：写进本机草稿，发表后只删除自己写的 / 打开前就有的草稿（另一个标签页的不删）。 */
+    this.writerId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    this.openedAt = Date.now();
+    // 另一个标签页发表了同一篇文章、删掉了本机草稿时，通知这边立刻把自己的修改重新存一遍
+    try {
+      this.channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('admin-editor-drafts') : null;
+      if (this.channel) this.channel.onmessage = (e) => this.onDraftMessage(e.data);
+    } catch { this.channel = null; }
+  }
+
+  onDraftMessage(d) {
+    if (this.destroyed || !d || d.type !== 'draft-removed' || d.writer === this.writerId) return;
+    let any = false;
+    for (const v of this.variants.values()) {
+      if (v.draftKey === d.key && !v.localDraft && this.variantDirty(v)) { v.needsAutosave = true; any = true; }
+    }
+    if (any) this.flushAutosave();
   }
 
   // =========================================================================
@@ -211,6 +403,7 @@ class Editor {
         throw userError('这份草稿对应的文件已经不存在了', `「${draftPath}」可能已经被删除或改名。可以在「文章」列表里丢弃这份本机草稿。`);
       } else {
         this.openNewFromDraft(p.draft, rec);
+        await this.checkPublishedTwin(rec);
       }
     } else if (p.path) {
       await this.openPath(p.path);
@@ -377,6 +570,7 @@ class Editor {
       checks.push(drafts.loadDraft(key).then((rec) => { if (rec) this.orphanDrafts.push({ key, lang: 'shared', path: vp, rec }); }));
     }
     await Promise.all(checks);
+    await this.resolveRepoImages();
   }
 
   /** 草稿和文件当前内容是否真的不同（自动保存后又发表了的草稿会被删除，这里只是兜底）。 */
@@ -468,6 +662,39 @@ class Editor {
     this.pendingAutoApply = true;
   }
 
+  /**
+   * 新文章的草稿，但同名文件已经在仓库里了：多半是发表成功后页面被关掉 / 切到后台，草稿没来得及删除。
+   * 提示用户打开已发表的文章，而不是换个文件名再发表一遍（那样会出现两篇一样的文章）。
+   */
+  async checkPublishedTwin(rec) {
+    if (this.kind !== 'post' || !this.slug.value) return;
+    const path = C.variantPath(PATHS.posts, this.slug.value, null);
+    if (!this.repo.has(path)) return;
+    let same = false;
+    try {
+      const fm = parseFrontMatter(splitDocument(await this.repo.readText(path)).fmText);
+      const draftTitle = str(rec.fields && rec.fields.form && rec.fields.form.title).trim();
+      same = !!draftTitle && str(fm.title).trim() === draftTitle;
+    } catch { /* 读不到就当作不同 */ }
+    this.publishedTwin = { path, same };
+  }
+
+  async openTwin({ discard }) {
+    const t = this.publishedTwin;
+    if (!t) return;
+    if (discard) {
+      const ok = await confirmDialog({
+        title: '丢弃这份草稿？', message: '这份本机草稿会被删除，不能恢复。已经发表的文章不受影响。', okText: '丢弃', danger: true,
+      });
+      if (!ok) return;
+      this.autosave.cancel();
+      this.discarded = true;
+      await drafts.deleteDraft(this.newKey);
+    }
+    this.leaving = true;
+    this.ctx.navigate(discard ? '#/edit?path=' + encodeURIComponent(t.path) : this.listHash(), { replace: true });
+  }
+
   defaultForm(extra = {}) {
     return {
       title: '', date: '', description: '', tags: [], categories: [], cover: '',
@@ -520,6 +747,9 @@ class Editor {
       published: !!exists && !C.isDraftFm(fm || {}),
       isNew: !exists,
       restored: false,
+      bodyEdited: false,         // 用户改过正文（输入 / 插入 / 上传）
+      copyBase: null,            // 复制出来的新版本：来源版本的基准正文和原文（保存时用来保留原文格式）
+      copyRaw: null,
       touched: false,
       stale: false,
       conflict: null,
@@ -539,13 +769,98 @@ class Editor {
   /** 文件正文 → 编辑器里显示的正文：去掉开头空行；刚上传、网站还没部署好的图片用 blob 地址显示。 */
   displayBody(body) {
     let md = String(body || '').replace(/^(?:[ \t]*\n)+/, '');
-    for (const [sitePath, blob] of recentUploads) {
-      if (!md.includes(`(${sitePath}`)) continue;
-      const name = sitePath.slice(sitePath.lastIndexOf('/') + 1);
-      const m = this.addMedia(name, blob, 'image', { committed: true, exactName: true });
-      md = md.split(`(${sitePath}`).join(`(${m.url}`);
-    }
+    for (const [sitePath, blob] of recentUploads) md = this.swapImage(md, sitePath, blob);
     return md;
+  }
+
+  /**
+   * 正文里 ](网站路径 的图片换成 blob 地址显示。登记的媒体记住原来的网站路径（sitePath），
+   * 保存时原样写回 —— 不会被改成当前文章的图片目录（图片可能属于另一篇文章）。
+   */
+  swapImage(md, sitePath, blob) {
+    const forms = [...new Set([mdDest(sitePath), sitePath])].filter((f) => md.includes(`](${f}`));
+    if (!forms.length) return md;
+    const m = this.addMedia(sitePath, blob, 'image', { committed: true, sitePath: forms[0] });
+    for (const f of forms) md = md.split(`](${f}`).join(`](${m.url}`);
+    return md;
+  }
+
+  /**
+   * 仓库里有、但网站上（还）打不开的图片（刚发表还没部署好 / 部署失败 / 从「资料」页上传的），
+   * 从仓库读出来用 blob 地址显示，避免编辑器和手机预览里出现裂图。
+   * @param {string[]} sitePaths 网站路径（/images/…，可以是编码过的）
+   * @returns {Promise<Map<string, Blob>>} 网站路径 → Blob（只包含需要替换的）
+   */
+  async fetchRepoImages(sitePaths) {
+    const out = new Map();
+    const todo = [];
+    for (const p of new Set(sitePaths)) {
+      if (!p.startsWith('/') || p.startsWith('//')) continue;
+      let rel;
+      try { rel = decodeURIComponent(p.split(/[?#]/)[0]); } catch { continue; }
+      const repoPath = 'static' + rel;
+      if (recentUploads.has(rel)) { out.set(p, recentUploads.get(rel)); continue; }
+      if (this.repoImageCache.has(repoPath)) { out.set(p, this.repoImageCache.get(repoPath)); continue; }
+      if (!IMAGE_EXTS.has(extOf(rel)) || !this.repo.has(repoPath)) continue;
+      todo.push({ p, repoPath });
+    }
+    await Promise.all(todo.slice(0, 60).map(async ({ p, repoPath }) => {
+      try {
+        let ok = false;
+        try {
+          const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+          const timer = ctl ? setTimeout(() => ctl.abort(), 4000) : null;
+          const res = await fetch(new URL(p.replace(/^\/+/, ''), this.ctx.siteUrl).href, {
+            method: 'HEAD', cache: 'no-store', credentials: 'omit', signal: ctl ? ctl.signal : undefined,
+          });
+          if (timer) clearTimeout(timer);
+          ok = res.ok;
+        } catch { ok = false; }
+        if (ok) return;
+        const bytes = await this.repo.readBytes(repoPath);
+        const ext = extOf(repoPath);
+        const type = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+        const blob = new Blob([bytes], { type });
+        this.repoImageCache.set(repoPath, blob);
+        out.set(p, blob);
+      } catch (err) {
+        console.warn('[editor] could not load repo image', repoPath, err);
+      }
+    }));
+    return out;
+  }
+
+  /** 正文里引用的站内图片地址：![…](/x) 和 {{< gallery "/x" >}} / {{< figure src="/x" >}} 的参数。 */
+  imagePathsIn(md) {
+    const out = [];
+    const re = /!\[[^\]\n]*\]\(\s*<?(\/[^)\s>]+)/g;
+    let m;
+    while ((m = re.exec(md))) out.push(m[1]);
+    const sc = /\{\{[<%]\s*(?:gallery|figure)\b([^}]*)[>%]\}\}/g;
+    while ((m = sc.exec(md))) {
+      const arg = /"(\/[^"]+)"|'(\/[^']+)'/g;
+      let a;
+      while ((a = arg.exec(m[1]))) out.push(a[1] || a[2]);
+    }
+    return out;
+  }
+
+  /** 打开文件后：所有版本正文 / 封面里还没部署好的图片换成 blob 地址（在放进编辑器之前）。 */
+  async resolveRepoImages() {
+    const paths = [];
+    for (const v of this.variants.values()) {
+      paths.push(...this.imagePathsIn(v.markdown));
+      if (v.form.cover && v.form.cover.startsWith('/')) paths.push(v.form.cover);
+    }
+    if (!paths.length) return;
+    const found = await this.fetchRepoImages(paths);
+    if (!found.size) return;
+    for (const v of this.variants.values()) {
+      let md = v.markdown;
+      for (const [p, blob] of found) md = this.swapImage(md, p, blob);
+      if (md !== v.markdown) { v.markdown = md; v._display = md; }
+      if (v.form.cover && found.has(v.form.cover)) this.coverBlobs.set(v.form.cover, found.get(v.form.cover));
+    }
   }
 
   // =========================================================================
@@ -555,8 +870,17 @@ class Editor {
    * 登记一个待上传文件，返回 { name, url }。名字和已登记的冲突时自动加 -2、-3 …
    * exactName：用于恢复草稿 / 已上传的图片，名字必须保持不变。
    */
-  addMedia(name, blob, kind, { committed = false, exactName = false } = {}) {
+  addMedia(name, blob, kind, { committed = false, exactName = false, sitePath } = {}) {
     let finalName = name;
+    if (sitePath) {
+      // 已经在仓库里的图片：以网站路径为键（不同文章里的同名图片互不影响）
+      const existing = this.media.get(name);
+      if (existing) return { name, url: existing.url, kind: existing.kind };
+      const url = URL.createObjectURL(blob);
+      this.media.set(name, { blob, url, kind: 'image', committed: true, sitePath });
+      this.urlToName.set(url, name);
+      return { name, url, kind: 'image' };
+    }
     if (!exactName) {
       const dot = name.lastIndexOf('.');
       const stem = dot > 0 ? name.slice(0, dot) : name;
@@ -584,12 +908,20 @@ class Editor {
     return C.imageDirFor(this.group);
   }
 
+  /** 图片在网站上的路径（写进 front matter 用，不编码）。 */
   imageSitePath(name, imgDir = this.imageDir()) {
     return C.sitePathFor(`${imgDir}/${name}`);
   }
 
+  /** 媒体在 Markdown 正文里的地址：已在仓库里的用它原来的网站路径，待上传的放进当前文章的图片目录。 */
+  mediaDest(name, imgDir = this.imageDir()) {
+    const m = this.media.get(name);
+    if (m && m.sitePath) return m.sitePath;
+    return mdDest(this.imageSitePath(name, imgDir));
+  }
+
   docSitePath(name) {
-    return C.sitePathFor(`${PATHS.documents}/${name}`);
+    return mdDest(C.sitePathFor(`${PATHS.documents}/${name}`));
   }
 
   /** 草稿用：blob 地址 → admin-pending://名字 */
@@ -598,7 +930,7 @@ class Editor {
     for (const [url, name] of this.urlToName) {
       const m = this.media.get(name);
       // 已经提交到仓库的图片直接写网站路径；还没上传的用占位符，图片本身存进草稿
-      const target = m && m.committed ? this.imageSitePath(name) : PENDING + name;
+      const target = m && m.committed ? this.mediaDest(name) : PENDING + name;
       out = out.split(url).join(target);
     }
     return out;
@@ -638,10 +970,8 @@ class Editor {
       const m = this.media.get(cover.slice(PENDING.length));
       return m ? m.url : null;
     }
-    if (recentUploads.has(cover)) {
-      const name = cover.slice(cover.lastIndexOf('/') + 1);
-      return this.addMedia(name, recentUploads.get(cover), 'image', { committed: true, exactName: true }).url;
-    }
+    const blob = recentUploads.get(cover) || this.coverBlobs.get(cover);
+    if (blob) return this.addMedia(cover, blob, 'image', { committed: true, sitePath: mdDest(cover) }).url;
     return safeUrl(cover, this.ctx.siteUrl);
   }
 
@@ -676,6 +1006,8 @@ class Editor {
     });
     els.titleError = h('div', { class: 'error ed-title-error', role: 'alert' }, '请先填写标题');
     els.titleError.hidden = true;
+    els.slugHint = h('div', { class: 'ed-slug-hint small', dataset: { testid: 'editor-slug-hint' } });
+    els.slugHint.hidden = true;
 
     els.vditor = h('div', { class: 'ed-vditor', dataset: { testid: 'editor-body' } });
 
@@ -685,6 +1017,7 @@ class Editor {
       els.banners,
       els.title,
       els.titleError,
+      els.slugHint,
       els.vditor);
 
     els.settingsBody = h('div', { class: 'ed-settings-body stack' });
@@ -728,6 +1061,15 @@ class Editor {
     render(this.container,
       h('div', { class: 'ed-layout' }, h('div', { class: 'ed-main' }, mainCard), els.side),
       els.bar);
+    // 有还没处理的本机草稿时，开始编辑之前（获得焦点时）就问清楚，而不是等到打字打到一半弹出对话框
+    const askOnFocus = (e) => {
+      const v = this.active;
+      if (!v || !v.localDraft || this.pendingAsk || this.destroyed) return;
+      if (e.target && e.target.closest && e.target.closest('.banner, .ed-back, .ed-tabs, .ed-settings-toggle')) return;
+      this.askPendingDraft(v);
+    };
+    mainCard.addEventListener('focusin', askOnFocus);
+    els.settingsBody.addEventListener('focusin', askOnFocus);
   }
 
   renderFatal(title, detail) {
@@ -787,14 +1129,7 @@ class Editor {
           counter: { enable: true },
           toolbarConfig: { pin: true },
           outline: { enable: false, position: 'right' },
-          toolbar: [
-            'headings', 'bold', 'italic', 'strike', '|',
-            'line', 'quote', 'list', 'ordered-list', 'check', '|',
-            'code', 'inline-code', 'table', 'link', 'upload',
-            { name: 'formula', tip: '插入公式', tipPosition: 'n', icon: ICON_FORMULA, click: () => this.insertFormula() },
-            { name: 'documents', tip: '插入资料链接', tipPosition: 'n', icon: ICON_DOCS, click: () => this.openDocuments() },
-            '|', 'undo', 'redo', '|', 'edit-mode', 'outline', 'fullscreen',
-          ],
+          toolbar: this.toolbarItems(),
           preview: {
             math: { engine: 'KaTeX', inlineDigit: true },
             hljs: { style: dark ? 'github-dark' : 'github', lineNumber: false },
@@ -810,10 +1145,17 @@ class Editor {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            // 安全：编辑区里的 <iframe> 等嵌入内容一律不加载（见 neutralizeEmbeds）
+            if (!this.guardLute()) {
+              reject(new Error('编辑器组件加载失败（安全检查没有通过），请刷新页面重试'));
+              return;
+            }
+            this.setupToolbarHint();
             resolve();
           },
         });
         this.els.vditor._vditor = this.vd; // 方便自动化测试直接读写正文
+        this.els.vditor._editor = this; // 同上（只用于测试里检查内部状态）
       } catch (err) {
         settled = true;
         clearTimeout(timer);
@@ -822,12 +1164,103 @@ class Editor {
     });
   }
 
+  /** 工具栏：手机上把常用的（图片、公式、资料、标题…）放在最前面，不常用的收进「更多」。 */
+  toolbarItems() {
+    const formula = { name: 'formula', tip: '插入公式', tipPosition: 'n', icon: ICON_FORMULA, click: () => this.insertFormula() };
+    const docs = { name: 'documents', tip: '插入资料链接', tipPosition: 'n', icon: ICON_DOCS, click: () => this.openDocuments() };
+    const gallery = { name: 'gallery', tip: '多图并排', tipPosition: 'n', icon: ICON_GALLERY, click: () => this.pickImages('gallery') };
+    const figure = { name: 'figure', tip: '带说明的图片', tipPosition: 'n', icon: ICON_FIGURE, click: () => this.pickImages('figure') };
+    if (this.phone) {
+      return [
+        { name: 'upload', tip: '插入图片', tipPosition: 'n' }, figure, gallery, formula, docs, 'headings', 'bold', 'quote', 'list',
+        'ordered-list', 'line', 'link', 'table', 'undo', 'redo',
+        { name: 'more', tip: '更多', tipPosition: 'n', toolbar: ['italic', 'strike', 'check', 'code', 'inline-code', 'edit-mode', 'outline', 'fullscreen'] },
+      ];
+    }
+    return [
+      'headings', 'bold', 'italic', 'strike', '|',
+      'line', 'quote', 'list', 'ordered-list', 'check', '|',
+      'code', 'inline-code', 'table', 'link', 'upload', figure, gallery,
+      formula, docs,
+      '|', 'undo', 'redo', '|', 'edit-mode', 'outline', 'fullscreen',
+    ];
+  }
+
+  /** 把 Lute 输出 HTML 的方法包一层 neutralizeEmbeds。返回是否成功。 */
+  guardLute() {
+    const lute = this.vd && this.vd.vditor && this.vd.vditor.lute;
+    if (!lute) return false;
+    if (lute.__adminGuarded) return true;
+    try {
+      for (const name of LUTE_HTML_METHODS) {
+        const orig = lute[name];
+        if (typeof orig !== 'function') continue;
+        lute[name] = (...args) => neutralizeEmbeds(orig.apply(lute, args));
+      }
+      lute.__adminGuarded = true;
+      // 自检：包装真的生效
+      return !/<iframe/i.test(String(lute.Md2VditorDOM('<iframe src="/x"></iframe>\n')));
+    } catch (err) {
+      console.error('[editor] could not guard lute', err);
+      return false;
+    }
+  }
+
+  /** 手机上工具栏横向滑动：右边还有按钮时显示渐隐提示。 */
+  setupToolbarHint() {
+    const bar = this.els.vditor.querySelector('.vditor-toolbar');
+    if (!bar) return;
+    const update = () => {
+      const more = bar.scrollWidth - bar.clientWidth - bar.scrollLeft > 4;
+      this.els.vditor.classList.toggle('ed-toolbar-more', more);
+    };
+    bar.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    this.toolbarCleanup = () => window.removeEventListener('resize', update);
+    requestAnimationFrame(update);
+  }
+
   getEditorValue() {
     try { return this.vd ? this.vd.getValue() : this.active.markdown; } catch { return this.active.markdown; }
   }
 
   focusEditor() {
     try { this.vd && this.vd.focus(); } catch { /* ignore */ }
+  }
+
+  /** 当前编辑模式的编辑区元素。 */
+  editRoot() {
+    try {
+      const mode = this.vd && this.vd.getCurrentMode ? this.vd.getCurrentMode() : 'wysiwyg';
+      return { mode, internal: this.vd.vditor[mode], root: this.vd.vditor[mode].element };
+    } catch { return null; }
+  }
+
+  /** 记下光标位置（打开对话框之前调用：对话框里的输入框会把光标拿走）。 */
+  saveCaret() {
+    const r = this.editRoot();
+    if (!r || !r.root) return null;
+    try {
+      const sel = getSelection();
+      if (sel.rangeCount && r.root.contains(sel.getRangeAt(0).startContainer)) return sel.getRangeAt(0).cloneRange();
+      if (r.internal.range && r.root.contains(r.internal.range.startContainer)) return r.internal.range.cloneRange();
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /** 把焦点和光标放回 saveCaret() 记下的位置（之后的插入就会插在那里）。 */
+  restoreCaret(range) {
+    const r = this.editRoot();
+    if (!r || !r.root) return;
+    try {
+      r.root.focus({ preventScroll: true });
+      if (range && r.root.contains(range.startContainer)) {
+        const sel = getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        r.internal.range = range;
+      }
+    } catch { /* ignore */ }
   }
 
   /**
@@ -897,22 +1330,37 @@ class Editor {
     }
   }
 
+  /**
+   * Vditor 的 input 回调（停止输入 0.8 秒后触发，md 是 Vditor 自己刚生成的 Markdown）。
+   * 这里直接用 md，不再调用 getValue()：长文章里每次 getValue 都要把整篇重新转换一遍。
+   */
   onEditorInput(md) {
     const v = this.active;
-    if (!v || this.settingValue) return;
+    if (!v || this.settingValue || md === v.markdown) return;
     v.markdown = md;
-    v.touched = true;
-    if (v.localDraft && !this.warnedPending) {
-      this.warnedPending = true;
-      toast('请先在上方选择「恢复」或「丢弃」本机草稿，之后的修改才会自动保存', { type: 'warning' });
-    }
+    this.noteBodyEdit(v);
     this.changed();
   }
 
-  /** 把编辑器里的正文写回当前版本。 */
+  /** 记下「正文被用户改过」（而不是靠比较 Vditor 的输出：它的整理并不稳定）。 */
+  noteBodyEdit(v) {
+    v.bodyEdited = true;
+    v.touched = true;
+    v.needsAutosave = true;
+  }
+
+  /**
+   * 把编辑器里的正文写回当前版本（需要准确快照时调用：保存、离开、切换版本、预览）。
+   * Vditor 的 input 回调有 0.8 秒延迟，这里也能发现还没报告的修改。
+   */
   syncActive() {
     const v = this.active;
-    if (v && this.vd) v.markdown = this.getEditorValue();
+    if (!v || !this.vd) return;
+    const cur = this.getEditorValue();
+    if (cur !== v.markdown) {
+      v.markdown = cur;
+      if (!this.settingValue) this.noteBodyEdit(v);
+    }
   }
 
   /** 切换到某个语言版本（各版本的修改都保留在内存里）。 */
@@ -923,16 +1371,15 @@ class Editor {
     this.activeKey = key;
     const v = this.active;
     this.setEditorValue(v.markdown);
-    if (v.baseMarkdown === undefined) {
-      const normalized = this.getEditorValue();
-      if (!v.isNew && !v.restored) {
-        // Vditor 会做一些无损的格式整理（例如单行 $$…$$ 变成多行）；以整理后的结果为「未修改」基准
-        v.baseMarkdown = normalized;
-        v.markdown = normalized;
-      } else {
-        v.baseMarkdown = null;
-      }
+    const normalized = this.getEditorValue();
+    if (!v.isNew && !v.restored && (v.baseMarkdown === undefined || !v.bodyEdited)) {
+      // Vditor 会整理格式（例如单行 $$…$$ 变成多行）；以整理后的结果为「未修改」基准。
+      // 没改过的版本每次放回编辑器都重新取基准（Vditor 的整理不是每次都一样）。
+      v.baseMarkdown = normalized;
+    } else if (v.baseMarkdown === undefined) {
+      v.baseMarkdown = null;
     }
+    v.markdown = normalized;
     this.els.title.value = v.form.title;
     requestAnimationFrame(() => this.fitTitle());
     this.els.titleError.hidden = true;
@@ -961,9 +1408,14 @@ class Editor {
   variantDirty(v) {
     if (v.isNew || v.restored) return true;
     if (JSON.stringify(this.formKeys(v.form)) !== JSON.stringify(this.formKeys(v.baseForm))) return true;
-    const md = v === this.active && this.vd ? this.getEditorValue() : v.markdown;
-    if (v.baseMarkdown === undefined) return md !== this.displayBodyCached(v);
-    return md !== v.baseMarkdown;
+    return this.bodyChanged(v);
+  }
+
+  /** 正文是否改过：用户确实编辑过，而且和打开时（Vditor 整理后）的内容不同。不调用 getValue()。 */
+  bodyChanged(v) {
+    if (!v.bodyEdited) return false;
+    if (v.baseMarkdown == null) return v.markdown !== this.displayBodyCached(v);
+    return v.markdown !== v.baseMarkdown;
   }
 
   displayBodyCached(v) {
@@ -982,23 +1434,110 @@ class Editor {
   }
 
   getVariantMarkdown(v) {
-    return v === this.active && this.vd ? this.getEditorValue() : v.markdown;
+    return v.markdown;
   }
 
   changed() {
     const v = this.active;
     if (v) { v.needsAutosave = true; v.touched = true; }
+    this.autosave(); // 先排队，状态栏才会显示「正在自动保存…」而不是上一次的保存时间
     this.renderTabs();
     this.renderStatus();
-    this.autosave();
+    // 有一份还没处理的本机草稿时，新的修改不会自动保存 → 马上让用户选「恢复」还是「丢弃」
+    if (v && v.localDraft && !this.pendingAsk && !this.destroyed) this.askPendingDraft(v);
+  }
+
+  /**
+   * 询问怎么处理一份还没恢复 / 丢弃的本机草稿。
+   * @returns {Promise<'restore'|'discard'|null>} null = 关掉了对话框（什么都没做）
+   */
+  askPendingDraft(v, { publishing = false } = {}) {
+    if (this.pendingAsk) return this.pendingAsk;
+    const rec = v.localDraft;
+    if (!rec) return Promise.resolve('discard');
+    const when = rec.updatedAt ? formatDate(new Date(rec.updatedAt)) : '';
+    const ask = new Promise((resolve) => {
+      let choice = null;
+      modal({
+        title: '先处理本机未发布的修改',
+        dismissible: publishing,
+        content: h('div', { class: 'stack-sm stack' },
+          h('p', { class: 'modal-message' }, `这台设备上还保存着这一页没有发表的修改（${when}）。` +
+            (publishing ? '发表之前，请先决定怎么处理它。' : '在你做出选择之前，新的修改不会自动保存。')),
+          h('p', { class: 'muted small' }, '「恢复」会用本机保存的版本替换编辑器里现在的内容；「丢弃」会删除本机保存的版本，之后的修改照常自动保存。')),
+        actions: [
+          { text: '丢弃本机修改', kind: 'ghost', testid: 'editor-pending-discard', onClick: (close) => { choice = 'discard'; close(); } },
+          { text: '恢复本机修改', kind: 'primary', testid: 'editor-pending-restore', autofocus: true, onClick: (close) => { choice = 'restore'; close(); } },
+        ],
+        onClose: () => resolve(choice),
+      });
+    }).then(async (choice) => {
+      if (!this.destroyed && v.localDraft === rec) {
+        if (choice === 'restore') {
+          this.applyDraft(v, rec);
+        } else if (choice === 'discard') {
+          await drafts.deleteDraft(v.draftKey);
+          v.localDraft = null;
+          if (this.variantDirty(v)) { v.needsAutosave = true; this.autosave(); }
+          this.renderBanners();
+          this.renderStatus();
+          toast('已丢弃本机草稿', { type: 'success' });
+        }
+      }
+      this.pendingAsk = null;
+      return choice;
+    });
+    this.pendingAsk = ask;
+    return ask;
+  }
+
+  /** 日期在未来时确认。@returns {Promise<'now'|'keep'|null>} */
+  askFutureDate(date) {
+    return new Promise((resolve) => {
+      let choice = null;
+      modal({
+        title: '文章日期在未来',
+        content: h('div', { class: 'stack-sm stack' },
+          h('p', { class: 'modal-message' }, `这篇文章的日期是 ${formatDate(date)}，还没到。网站只显示日期已经到了的文章：现在发表的话，要等到这个时间之后网站再次更新，它才会出现。`),
+          h('p', { class: 'muted small' }, '如果只是想现在发表，请选「改为现在并发表」。')),
+        actions: [
+          { text: '取消', kind: 'ghost', testid: 'editor-future-cancel', onClick: (close) => { choice = null; close(); } },
+          { text: '仍按这个日期', testid: 'editor-future-keep', onClick: (close) => { choice = 'keep'; close(); } },
+          { text: '改为现在并发表', kind: 'primary', testid: 'editor-future-now', autofocus: true, onClick: (close) => { choice = 'now'; close(); } },
+        ],
+        onClose: () => resolve(choice),
+      });
+    });
+  }
+
+  /** 日期是否在未来（Hugo 默认不显示这样的文章）。 */
+  isFuture(date) {
+    if (this.kind !== 'post') return false;
+    const t = Date.parse(date);
+    return Number.isFinite(t) && t > Date.now() + 60 * 1000;
+  }
+
+  /**
+   * 发表成功后删除本机草稿：只删这个编辑器写的、或打开之前就存在（已经处理过）的草稿。
+   * 同一篇文章在另一个标签页里打开时，那边的自动保存不会被这边的发表删掉。
+   */
+  async cleanupDrafts(keys) {
+    for (const key of new Set(keys.filter(Boolean))) {
+      const rec = await drafts.loadDraft(key);
+      if (!rec) continue;
+      const writer = rec.fields && rec.fields.writer;
+      if (writer === this.writerId || !(Number(rec.updatedAt) > this.openedAt)) {
+        await drafts.deleteDraft(key);
+        try { if (this.channel) this.channel.postMessage({ type: 'draft-removed', key, writer: this.writerId }); } catch { /* ignore */ }
+      }
+    }
   }
 
   // =========================================================================
   // 自动保存（IndexedDB）
 
   async autosaveNow() {
-    if (this.destroyed && !this.flushing) return;
-    this.syncActive();
+    if ((this.destroyed && !this.flushing) || this.discarded) return;
     let saved = false;
     for (const v of this.variants.values()) {
       if (!v.needsAutosave || v.localDraft) continue;
@@ -1015,6 +1554,7 @@ class Editor {
           title: v.form.title.trim() || '（无标题）',
           markdown: this.toDraftMarkdown(md),
           fields: {
+            writer: this.writerId,
             form: clone(v.form),
             kind: this.kind,
             dir: this.group.dir,
@@ -1043,7 +1583,11 @@ class Editor {
 
   /** 立即把待保存的内容写进本机（离开页面 / 登录失效 / 发布前调用）。 */
   flushAutosave() {
-    if (this.autosave.pending()) return this.autosave.flush();
+    try { this.syncActive(); } catch (err) { console.warn(err); }
+    if (this.autosave.pending() || [...this.variants.values()].some((x) => x.needsAutosave)) {
+      this.autosave.cancel();
+      return this.autosaveNow();
+    }
     return undefined;
   }
 
@@ -1057,6 +1601,7 @@ class Editor {
     v.form.tags = strList(v.form.tags);
     v.form.categories = strList(v.form.categories);
     v.markdown = this.fromDraftMarkdown(rec.markdown, rec.images);
+    v.bodyEdited = true;
     if (this.isNewGroup && rec.fields) {
       if (rec.fields.slug) this.slug = { value: str(rec.fields.slug), touched: !!rec.fields.slugTouched };
     }
@@ -1073,6 +1618,22 @@ class Editor {
     }
     this.renderAll();
     if (!silent) toast('已恢复本机保存的修改', { type: 'success' });
+    this.resolveImagesLater(v);
+  }
+
+  /** 恢复的草稿里引用的、网站上还打不开的图片：读出来后换成 blob 地址（用户还没接着改时）。 */
+  async resolveImagesLater(v) {
+    const before = v.markdown;
+    const found = await this.fetchRepoImages(this.imagePathsIn(before));
+    if (!found.size || this.destroyed || v.markdown !== before) return;
+    let md = before;
+    for (const [p, blob] of found) md = this.swapImage(md, p, blob);
+    if (md === before) return;
+    v.markdown = md;
+    if (v === this.active) {
+      this.setEditorValue(md);
+      v.markdown = this.getEditorValue();
+    }
   }
 
   async discardDraft(v) {
@@ -1126,6 +1687,7 @@ class Editor {
     this.renderBanners();
     this.renderSettings();
     this.renderStatus();
+    this.renderSlugHint();
   }
 
   renderTabs() {
@@ -1219,6 +1781,17 @@ class Editor {
         'editor-stale'));
     }
 
+    if (this.publishedTwin && this.isNewGroup) {
+      const t = this.publishedTwin;
+      list.push(this.banner('warning', 'warning',
+        t.same
+          ? `这篇文章看起来已经发表过了（${t.path}），这份是发表时没来得及删除的本机草稿。再发表一次会出现两篇一样的文章。`
+          : `文件名「${this.slug.value}」已经被一篇已发表的文章（${t.path}）使用了。如果这篇其实已经发表过，请打开那篇文章；否则请在文章设置里换一个文件名。`,
+        [
+          h('button', { type: 'button', class: 'btn btn-sm btn-primary', dataset: { testid: 'editor-twin-open' }, on: { click: () => this.openTwin({ discard: true }) } }, t.same ? '丢弃草稿，打开已发表的文章' : '丢弃草稿并打开那篇文章'),
+        ], 'editor-twin-banner'));
+    }
+
     for (const o of this.orphanDrafts) {
       const when = o.rec.updatedAt ? formatDate(new Date(o.rec.updatedAt)) : '';
       list.push(this.banner('warning', 'clock',
@@ -1255,7 +1828,10 @@ class Editor {
     const v = this.active;
     let b;
     if (!v.exists) b = badge('未发表', 'orange');
-    else if (v.published) b = badge('已发表', 'green');
+    else if (v.published && this.isFuture(v.baseForm.date)) {
+      b = badge('定时发表', 'blue');
+      b.title = '日期还没到：到了这个时间之后，网站再次更新时才会显示';
+    } else if (v.published) b = badge('已发表', 'green');
     else b = badge('草稿', 'gray');
     render(els.status, b);
 
@@ -1264,6 +1840,12 @@ class Editor {
     els.publishBtn.querySelector('.ed-publish-text').textContent = label;
     els.publishBtn.title = v.exists && v.published ? '把修改更新到网站上（Ctrl/⌘+S）' : '发表到网站上';
     els.draftBtn.title = v.exists && v.published ? '改为草稿：网站上将不再显示' : '保存为草稿（不会在网站上显示，Ctrl/⌘+S）';
+    els.draftBtn.setAttribute('aria-label', v.exists && v.published ? '改为草稿（网站上将不再显示）' : '保存草稿');
+    const draftText = els.draftBtn.querySelector('.ed-btn-text');
+    if (draftText) {
+      draftText.textContent = v.exists && v.published ? '改为草稿' : '保存草稿';
+      draftText.dataset.short = v.exists && v.published ? '转草稿' : '存草稿';
+    }
 
     // 自动保存状态
     const dirty = this.isDirty();
@@ -1271,6 +1853,9 @@ class Editor {
     let cls = '';
     if (!this.autosaveOk) {
       text = '这个浏览器无法自动保存到本机，请及时保存';
+      cls = 'text-danger';
+    } else if (dirty && [...this.variants.values()].some((x) => x.localDraft && this.variantDirty(x))) {
+      text = '修改还没有自动保存：请先处理上方的本机草稿';
       cls = 'text-danger';
     } else if (dirty && this.lastAutosave && !this.autosave.pending()) {
       text = `已自动保存到本机 · ${pad2(this.lastAutosave.getHours())}:${pad2(this.lastAutosave.getMinutes())}`;
@@ -1384,6 +1969,7 @@ class Editor {
           this.slug.touched = this.slug.value !== '';
           if (!this.slug.touched) this.updateSlugSuggestion();
           update();
+          this.renderSlugHint();
           this.changed();
         });
         slugInput.addEventListener('blur', () => {
@@ -1508,6 +2094,36 @@ class Editor {
       this.els.slugInput.value = this.slug.value;
       this.els.slugUpdate && this.els.slugUpdate();
     }
+    this.renderSlugHint();
+  }
+
+  /**
+   * 全中文标题时自动生成的网址是 post-日期，没有意义；而手机上网址输入框藏在折叠的设置里。
+   * 在标题下面提示一下（不拦着发表）。
+   */
+  renderSlugHint() {
+    const el = this.els.slugHint;
+    if (!el) return;
+    const show = this.isNewGroup && this.kind === 'post' && !this.slug.touched &&
+      /^post-\d{8}(-\d+)?$/.test(this.slug.value) && !!this.active.form.title.trim();
+    el.hidden = !show;
+    if (!show) return;
+    render(el,
+      svgIcon('info'),
+      h('span', {}, `网址会是 /posts/${this.slug.value}/。建议改成英文或拼音（如 harmonic-oscillator），发表后就不能改了。`),
+      h('button', {
+        type: 'button', class: 'btn btn-ghost btn-sm', dataset: { testid: 'editor-slug-hint-edit' },
+        on: { click: () => this.focusSlug() },
+      }, '修改网址'));
+  }
+
+  focusSlug() {
+    this.toggleSettings(true);
+    const input = this.els.slugInput;
+    if (!input) return;
+    input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    input.focus({ preventScroll: true });
+    input.select();
   }
 
   slugError() {
@@ -1587,6 +2203,45 @@ class Editor {
     return null;
   }
 
+  /**
+   * 「多图并排」/「带说明的图片」：选图片 → 压缩 → 插入网站的 {{< gallery >}} / Hugo 自带的 {{< figure >}} 短代码。
+   * 图片先用 admin-pending://名字 占位，发表时换成网站路径（和普通图片一样随文章一起上传）。
+   */
+  pickImages(kind) {
+    const caret = this.saveCaret();
+    const input = h('input', { type: 'file', accept: 'image/*', multiple: kind === 'gallery', hidden: true, dataset: { testid: `editor-${kind}-input` } });
+    this.els.pickInput && this.els.pickInput.remove();
+    this.els.pickInput = input;
+    this.els.vditor.after(input);
+    input.addEventListener('change', async () => {
+      const files = [...(input.files || [])].filter(isImageFile);
+      input.remove();
+      if (!files.length) return;
+      const list = [];
+      for (const f of files) {
+        const m = await this.prepareImage(f);
+        if (m) list.push(m);
+      }
+      if (!list.length || this.destroyed) return;
+      let md;
+      if (kind === 'figure') {
+        const caption = await promptDialog({
+          title: '图片说明', label: '显示在图片下方的说明文字', placeholder: '图：……', okText: '插入',
+          hint: '可以留空。发表后网站上会显示在图片正下方。',
+        });
+        if (caption === null || this.destroyed) return;
+        md = `{{< figure src="${PENDING}${list[0].name}"` + (caption.trim() ? ` caption="${scArg(caption)}"` : '') + ' >}}';
+      } else {
+        md = `{{< gallery ${list.map((m) => `"${PENDING}${m.name}"`).join(' ')} >}}`;
+      }
+      this.restoreCaret(caret);
+      this.moveCaretOutOfBlock();
+      this.insertMarkdown(`\n${md}\n`);
+      toast(kind === 'gallery' ? `已插入 ${list.length} 张并排的图片（点「手机预览」看效果），发表时一起上传` : '已插入带说明的图片（点「手机预览」看效果），发表时一起上传', { type: 'success', timeout: 6000 });
+    });
+    input.click();
+  }
+
   /** 「资料」按钮：选择 static/documents/ 里的文件插入链接，或上传新资料。 */
   openDocuments() {
     const files = this.repo.list(PATHS.documents + '/');
@@ -1595,11 +2250,19 @@ class Editor {
     const search = h('input', { class: 'input', type: 'search', placeholder: '搜索资料…', 'aria-label': '搜索资料', dataset: { testid: 'editor-docs-search' } });
     const listEl = h('div', { class: 'list ed-doc-list' });
     let m;
+    const caret = this.saveCaret();
+    const insertAtCaret = (md) => {
+      // 对话框里的搜索框拿走了光标、关闭时焦点又回到了工具栏按钮（m.close() 是同步的）：
+      // 先把焦点和光标放回打开对话框之前的位置再插入（否则会插到文章开头，再按空格还会重新打开对话框）
+      if (this.destroyed) return;
+      this.restoreCaret(caret);
+      this.moveCaretOutOfBlock();
+      this.insertMarkdown(md);
+    };
     const insert = (path) => {
       const name = path.slice(path.lastIndexOf('/') + 1);
       m.close();
-      this.moveCaretOutOfBlock();
-      this.insertMarkdown(`[${linkText(name)}](${C.sitePathFor(path)})`);
+      insertAtCaret(`[${linkText(name)}](${mdDest(C.sitePathFor(path))})`);
     };
     const draw = () => {
       const q = search.value.trim().toLowerCase();
@@ -1629,8 +2292,7 @@ class Editor {
       }
       m.close();
       if (parts.length) {
-        this.moveCaretOutOfBlock();
-        this.insertMarkdown(parts.join('\n\n') + '\n');
+        insertAtCaret(parts.join('\n\n') + '\n');
         toast('已插入资料链接，发表时一起上传', { type: 'success' });
       }
     });
@@ -1658,6 +2320,14 @@ class Editor {
     const v = this.makeVariant({ key: lang, path, exists: false, sha: null, fmText: src.fmText, fm: src.fm, body: '' });
     v.form = clone(src.form);
     v.markdown = src.markdown;
+    if (!src.isNew && !src.restored && typeof src.baseMarkdown === 'string') {
+      v.copyBase = src.baseMarkdown;
+      v.copyRaw = src.rawBody;
+    } else if (src.copyBase != null) {
+      v.copyBase = src.copyBase;
+      v.copyRaw = src.copyRaw;
+    }
+    v.bodyEdited = true;
     v.isNew = true;
     v.touched = true;
     v.needsAutosave = true;
@@ -1687,25 +2357,43 @@ class Editor {
     return !!(s && s.exists && s.published);
   }
 
+  /** blob 地址 / 占位符 → 网站路径。 */
+  toSiteMarkdown(md, names, imgDir) {
+    let out = md;
+    for (const name of names) {
+      const m = this.media.get(name);
+      if (!m || m.kind !== 'image') continue;
+      const site = this.mediaDest(name, imgDir);
+      if (m.url) out = out.split(m.url).join(site);
+      out = out.split(PENDING + name).join(site);
+    }
+    return out;
+  }
+
   /** 生成要写入的正文和用到的待上传文件。 */
   finalBody(v, imgDir) {
-    const current = this.getVariantMarkdown(v);
-    const unchanged = !v.isNew && !v.restored && (v.baseMarkdown === undefined || v.baseMarkdown === null
-      ? current === this.displayBodyCached(v)
-      : current === v.baseMarkdown);
+    const current = v.markdown;
+    const unchanged = !v.isNew && !v.restored && !this.bodyChanged(v);
     const used = this.referencedMedia(current, v.form.cover);
     if (unchanged) return { body: v.rawBody, unchanged: true, used: used.filter((n) => v.form.cover === PENDING + n), current };
-    let md = current;
-    for (const name of used) {
-      const m = this.media.get(name);
-      if (m.kind !== 'image') continue;
-      const site = this.imageSitePath(name, imgDir);
-      if (m.url) md = md.split(m.url).join(site);
-      md = md.split(PENDING + name).join(site);
-    }
+    let md = this.toSiteMarkdown(current, used, imgDir);
     // 没有登记过的 blob 地址（理论上不会出现）不能写进文件
-    if (/\]\(blob:/.test(md)) {
+    if (/\]\(blob:|["']blob:/.test(md)) {
       throw new Error('正文里有图片还没有处理完（blob 地址）。请删除这些图片后重新插入。');
+    }
+    // 只把真正改过的行换成 Vditor 的输出，其余保留文件原文（行尾两个空格的换行、{#id}、链接标题…）
+    const base = !v.isNew && typeof v.baseMarkdown === 'string' ? v.baseMarkdown : v.copyBase;
+    const raw = !v.isNew && typeof v.baseMarkdown === 'string' ? v.rawBody : v.copyRaw;
+    if (typeof base === 'string' && typeof raw === 'string') {
+      const baseSite = this.toSiteMarkdown(base, [...this.media.keys()], imgDir);
+      const theirs = String(raw).replace(/^(?:[ \t]*\n)+/, '');
+      const merged = mergeBody(baseSite, md, theirs);
+      if (merged !== null) {
+        if (!v.isNew && merged.replace(/\s+$/, '') === theirs.replace(/\s+$/, '')) {
+          return { body: v.rawBody, unchanged: true, used: used.filter((n) => v.form.cover === PENDING + n), current };
+        }
+        md = merged;
+      }
     }
     return { body: md, unchanged: false, used, current };
   }
@@ -1822,7 +2510,35 @@ class Editor {
       toast('请先在上方选择「保留我的修改」或「加载最新版本」', { type: 'warning' });
       return;
     }
+    // 还没处理的本机草稿：发表后会被删除，先让用户决定
+    if (v.localDraft) {
+      const choice = await this.askPendingDraft(v, { publishing: true });
+      if (choice !== 'discard') return;
+    }
+    // 新文章的文件名已经被一篇「同标题」的已发表文章占用：多半是上一次发表其实成功了（发表途中网络断了、
+    // 页面被关掉）。给出打开那篇文章的按钮，而不是只让用户换个文件名（那样会出现两篇一样的文章）。
+    if (this.isNewGroup && this.kind === 'post' && this.slug.value && this.repo.has(C.variantPath(PATHS.posts, this.slug.value, null))) {
+      const prev = this.publishedTwin;
+      await this.checkPublishedTwin({ fields: { form: v.form } });
+      if (this.destroyed) return;
+      if (this.publishedTwin && this.publishedTwin.same) {
+        this.renderBanners();
+        toast('这篇文章看起来已经发表过了（网站上有同名、同标题的文章）。请点上方的按钮打开它，不要换文件名再发表一次。', { type: 'warning', timeout: 9000 });
+        return;
+      }
+      this.publishedTwin = prev;
+    }
     if (!this.validate(v)) return;
+
+    // 日期在未来：Hugo 默认不构建未来日期的文章，网站上会暂时看不到
+    if (mode === 'publish' && this.isFuture(v.form.date)) {
+      const choice = await this.askFutureDate(v.form.date);
+      if (!choice) return;
+      if (choice === 'now') {
+        v.form.date = hugoDate();
+        this.renderSettings();
+      }
+    }
 
     // 确认：专属版本存为草稿会让该语言站点上的页面消失；已发表的文章改为草稿会下线
     if (mode === 'draft') {
@@ -1850,16 +2566,24 @@ class Editor {
       toast('已经有同名的文件了，请换一个文件名', { type: 'warning' });
       return;
     }
+    // 新文章第一次发表时把日期固定下来：万一这次发表的结果没收到（网络中断），再点一次发表的内容逐字节相同，
+    // 不会被当成「别人改过」
+    if (this.kind === 'post' && v.isNew && !v.form.date) {
+      v.form.date = hugoDate();
+      v.needsAutosave = true;
+    }
     const imgDir = this.imageDir();
 
     let content;
     let body;
     let used;
     let newFm;
+    let bodyUnchanged = false;
     try {
       const fb = this.finalBody(v, imgDir);
       body = fb.body;
       used = fb.used;
+      bodyUnchanged = fb.unchanged;
       if (v.isNew && v.fmText === null) {
         newFm = newFrontMatter(this.newFields(v, mode, imgDir));
       } else {
@@ -1880,6 +2604,13 @@ class Editor {
       console.error('[editor] build failed', err);
       toast(err instanceof FrontMatterError ? err.message : errorMessage(err), { type: 'error', timeout: 9000 });
       return;
+    }
+    if (!bodyUnchanged) {
+      const bad = badPercentLinks(body);
+      if (bad.length) {
+        toast(`正文里的链接地址「${bad[0]}」含有单独的「%」，网站会因此无法更新。请把这个链接删掉后重新插入（或把 % 改成 %25）。`, { type: 'error', timeout: 12000 });
+        return;
+      }
     }
 
     // 什么都没改：不产生提交（文件末尾少一个换行之类的差别也不值得一次提交）
@@ -1915,19 +2646,27 @@ class Editor {
     this.flushAutosave();
     let res;
     try {
-      res = await this.ctx.publish({ message: `admin: ${verb}《${title}》${label}`, changes, summary });
+      const view = mode === 'draft' ? null : this.publishedUrlFor(v, content);
+      res = await this.ctx.publish({
+        message: `admin: ${verb}《${title}》${label}`, changes, summary,
+        viewUrl: view || undefined, viewLabel: view ? (this.kind === 'post' ? '查看文章' : '查看页面') : undefined,
+      });
     } catch (err) {
       // 外壳已经提示过错误；修改仍在编辑器里和本机草稿中
       console.warn('[editor] publish failed', err);
       return;
     }
-    if (this.destroyed) return;
     if (res && res.conflict) {
-      this.onConflict(v, res);
+      if (!this.destroyed) this.onConflict(v, res);
       return;
     }
-
     // ---- 成功 ----
+    // 先清理本机草稿（即使编辑器已经关掉了，例如发表途中离开），否则会留下一份「未发表」的旧草稿
+    const oldKey = v.draftKey;
+    const newKey = drafts.draftKeyForPath(path);
+    await this.cleanupDrafts([oldKey, newKey]);
+    if (this.destroyed) return;
+
     const sha = (res.shas && res.shas[path]) || this.repo.entry(path)?.sha || v.sha;
     const parsed = splitDocument(content);
     v.path = path;
@@ -1941,24 +2680,26 @@ class Editor {
     if (this.isNewGroup && !v.form.date) v.form.date = v.fm.date ? str(v.fm.date) : '';
     v.form = { ...this.formFromFm(v.fm), ...v.form, date: v.fm.date == null ? '' : str(v.fm.date) };
     v.baseForm = clone(v.form);
-    v.baseMarkdown = v === this.active ? this.getEditorValue() : v.markdown;
-    v.markdown = v.baseMarkdown;
+    v.baseMarkdown = v.markdown;
     v.published = mode !== 'draft';
     v.isNew = false;
     v.restored = false;
     v.stale = false;
     v.touched = false;
     v.needsAutosave = false;
+    v.bodyEdited = false;
+    v.copyBase = null;
+    v.copyRaw = null;
     for (const name of used) {
       const m = this.media.get(name);
       if (!m) continue;
+      if (m.kind === 'image' && !m.sitePath) {
+        recentUploads.set(this.imageSitePath(name, imgDir), m.blob);
+        m.sitePath = mdDest(this.imageSitePath(name, imgDir));
+      }
       m.committed = true;
-      if (m.kind === 'image') recentUploads.set(this.imageSitePath(name, imgDir), m.blob);
     }
-    const oldKey = v.draftKey;
-    v.draftKey = drafts.draftKeyForPath(path);
-    await drafts.deleteDraft(oldKey);
-    if (oldKey !== v.draftKey) await drafts.deleteDraft(v.draftKey);
+    v.draftKey = newKey;
     v.draftWritten = false;
     this.group.variants[v.key] = path;
 
@@ -1973,7 +2714,8 @@ class Editor {
   onConflict(v, res) {
     this.flushOthers(null);
     if (!res.reloaded) {
-      toast('没有发布。你的修改还保留在编辑器里（也已自动保存在本机）。', { type: 'info', timeout: 6000 });
+      const saved = this.autosaveOk && ![...this.variants.values()].some((x) => x.localDraft && this.variantDirty(x));
+      toast(saved ? '没有发布。你的修改还保留在编辑器里（也已自动保存在本机）。' : '没有发布。你的修改还保留在编辑器里。', { type: 'info', timeout: 6000 });
       return;
     }
     // 外壳已经重新读取了仓库：记下文件现在的版本，让用户选择怎么处理
@@ -2009,7 +2751,10 @@ class Editor {
     });
     if (!ok) return;
     if (!this.repo.has(v.path)) {
-      await drafts.deleteDraft(v.draftKey);
+      v.needsAutosave = false;
+      v.bodyEdited = false;
+      v.draftKey = null;
+      await drafts.deleteDraft(drafts.draftKeyForPath(v.path));
       v.conflict = null;
       toast('这个文件已经在 GitHub 上被删除了', { type: 'warning' });
       this.leaving = true;
@@ -2098,12 +2843,36 @@ class Editor {
     return items;
   }
 
-  /** 某个语言站点上这一页的网址（只有已发表时才返回）。 */
-  siteUrlFor(lang) {
-    const own = this.variants.get(lang);
-    const v = own && own.exists ? own : this.variants.get('shared');
-    if (!v || !v.exists || !v.published) return null;
-    const fm = v.fm || {};
+  /**
+   * 即将发表的这个版本在网站上的地址（发表成功后「已上线 ✓」和提示里的链接用）。
+   * 共用版本：取第一个没有专属版本的语言站点；日期在未来时网站暂时不会显示，不给链接。
+   */
+  publishedUrlFor(v, content) {
+    try {
+      let fm;
+      try { fm = parseFrontMatter(splitDocument(content).fmText) || {}; } catch { fm = {}; }
+      if (this.kind === 'post' && fm.date != null && this.isFuture(str(fm.date))) return null;
+      let lang = v.key;
+      if (lang === 'shared') {
+        lang = this.langs.find((l) => { const o = this.variants.get(l); return !(o && o.exists); });
+        if (!lang) return null;
+      }
+      return this.siteUrlFor(lang, fm);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 某个语言站点上这一页的网址（只有已发表时才返回；传入 fmOverride 时按这份 front matter 计算，不检查是否已发表）。 */
+  siteUrlFor(lang, fmOverride) {
+    let fm;
+    if (fmOverride) fm = fmOverride;
+    else {
+      const own = this.variants.get(lang);
+      const v = own && own.exists ? own : this.variants.get('shared');
+      if (!v || !v.exists || !v.published) return null;
+      fm = v.fm || {};
+    }
     const prefix = lang === this.ctx.defaultLang ? '' : `${lang}/`;
     let rel;
     if (typeof fm.url === 'string' && fm.url.trim()) {
@@ -2117,7 +2886,9 @@ class Editor {
     const dir = this.group.dir === PATHS.content ? '' : this.group.dir.slice(PATHS.content.length + 1);
     if (this.group.isIndex) rel = dir ? `${dir}/` : '';
     else {
-      const base = typeof fm.slug === 'string' && fm.slug.trim() ? fm.slug.trim() : this.group.base;
+      const fileBase = this.isNewGroup && this.kind === 'post' ? this.slug.value : this.group.base;
+      const base = typeof fm.slug === 'string' && fm.slug.trim() ? fm.slug.trim() : fileBase;
+      if (!base) return null;
       rel = `${dir ? dir + '/' : ''}${base}/`;
     }
     return new URL(prefix + rel.toLowerCase(), this.ctx.siteUrl).href;
@@ -2135,6 +2906,7 @@ class Editor {
     const ok = await confirmDialog({ title: '放弃这篇新文章？', message: '还没有发表的内容和本机草稿都会被删除。', okText: '放弃', danger: true });
     if (!ok) return;
     this.autosave.cancel();
+    this.discarded = true;
     for (const v of this.variants.values()) if (v.draftKey) await drafts.deleteDraft(v.draftKey);
     this.leaving = true;
     this.ctx.navigate(this.listHash(), { replace: true });
@@ -2146,6 +2918,7 @@ class Editor {
     if (!v.exists) {
       const ok = await confirmDialog({ title: '放弃这个新版本？', message: `还没有发表的「${label}」内容和它的本机草稿都会被删除。`, okText: '放弃', danger: true });
       if (!ok) return;
+      v.needsAutosave = false;
       if (v.draftKey) await drafts.deleteDraft(v.draftKey);
       this.variants.delete(v.key);
       this.activate([...this.variants.keys()][0], { initial: true });
@@ -2175,7 +2948,9 @@ class Editor {
     } catch { return; }
     if (res && res.conflict) { this.onConflict(v, res); return; }
     this.autosave.cancel();
+    v.needsAutosave = false;
     if (v.draftKey) await drafts.deleteDraft(v.draftKey);
+    v.draftKey = null;
     await this.flushOthers(v);
     const remaining = [...this.variants.values()].find((x) => x !== v && x.exists);
     this.leaving = true;
@@ -2192,7 +2967,13 @@ class Editor {
   async deleteAll() {
     const existing = [...this.variants.values()].filter((x) => x.exists);
     const imgDir = this.imageDir();
-    const images = this.repo.list(imgDir + '/');
+    // 只删这一页自己的图片：子目录如果是另一页的图片目录（例如栏目首页 courses/_index.md 的目录
+    // static/images/pages/courses 里有子页面 courses/optics.md 的 static/images/pages/courses/optics），保留
+    const others = C.groupPages(this.repo.list(PATHS.content + '/'), this.langs)
+      .filter((g) => g.key !== this.group.key)
+      .map((g) => C.imageDirFor(g) + '/')
+      .filter((d) => d.startsWith(imgDir + '/'));
+    const images = this.repo.list(imgDir + '/').filter((e) => !others.some((d) => e.path.startsWith(d)));
     const title = this.active.form.title.trim() || this.group.base;
     const cb = h('input', { type: 'checkbox', dataset: { testid: 'editor-delete-images' } });
     const what = this.kind === 'post' ? '文章' : '页面';
@@ -2226,6 +3007,7 @@ class Editor {
     } catch { return; }
     if (res && res.conflict) { this.onConflict(this.active, res); return; }
     this.autosave.cancel();
+    this.discarded = true;
     for (const x of this.variants.values()) if (x.draftKey) await drafts.deleteDraft(x.draftKey);
     for (const o of this.orphanDrafts) await drafts.deleteDraft(o.key);
     this.leaving = true;
@@ -2279,13 +3061,17 @@ class Editor {
       loading.hidden = false;
       iframe.dataset.state = 'loading';
       try {
+        const markdown = this.getVariantMarkdown(v);
+        const imageMap = await this.previewImageMap(markdown, v.form.cover);
+        if (my !== seq) return;
         await renderPreview(iframe, {
           title: v.form.title,
           date: v.form.date ? formatDate(v.form.date) : '',
           description: this.kind === 'post' ? v.form.description : '',
-          markdown: this.getVariantMarkdown(v),
+          markdown,
           dark,
           lang,
+          imageMap,
           cover: this.coverDisplayUrl(v.form.cover) || '',
           siteUrl: this.ctx.siteUrl,
         });
@@ -2301,21 +3087,54 @@ class Editor {
     update();
   }
 
+  /**
+   * 预览用的地址替换：待上传图片的占位符（短代码里）→ blob 地址；
+   * 仓库里有、网站上还打不开的图片 → 从仓库读出的 blob 地址。
+   */
+  async previewImageMap(md, cover) {
+    const map = new Map();
+    for (const [name, m] of this.media) {
+      if (m.kind === 'image' && m.url && !m.sitePath) map.set(PENDING + name, m.url);
+    }
+    const paths = this.imagePathsIn(md);
+    if (cover && cover.startsWith('/')) paths.push(cover);
+    try {
+      const found = await this.fetchRepoImages(paths);
+      for (const [p, blob] of found) {
+        const m = this.addMedia(p, blob, 'image', { committed: true, sitePath: p });
+        // 只替换完整的地址（后面是引号或右括号），避免改到更长的路径
+        for (const end of ['"', ')', "'", ' ']) map.set(p + end, m.url + end);
+      }
+    } catch (err) {
+      console.warn('[editor] preview images', err);
+    }
+    return map;
+  }
+
   // =========================================================================
   // 离开 / 卸载
 
   async canLeave() {
-    if (this.leaving || !this.isDirty()) return true;
-    this.syncActive();
+    if (this.leaving) return true;
+    if (this.saving || (this.ctx.isPublishing && this.ctx.isPublishing())) {
+      toast('正在发表，请稍候再离开', { type: 'warning' });
+      return false;
+    }
+    try { this.syncActive(); } catch (err) { console.warn(err); }
+    if (!this.isDirty()) return true;
     for (const v of this.variants.values()) if (this.variantDirty(v)) v.needsAutosave = true;
     this.autosave.cancel();
     await this.autosaveNow();
+    const blocked = [...this.variants.values()].some((x) => x.localDraft && this.variantDirty(x));
+    const saved = this.autosaveOk && !blocked;
     const ok = await confirmDialog({
       title: '还有修改没有发表',
-      message: this.autosaveOk
+      message: saved
         ? '这些修改已经自动保存在这台设备上，下次打开时可以恢复。确定要离开吗？'
-        : '这个浏览器无法保存本机草稿，离开后这些修改会丢失。确定要离开吗？',
-      okText: '离开', cancelText: '继续编辑', danger: !this.autosaveOk,
+        : blocked
+          ? '有修改还没有自动保存：这一页还有一份没有处理的本机草稿（上方的「恢复 / 丢弃」）。离开后，刚才的修改会丢失。确定要离开吗？'
+          : '这个浏览器无法保存本机草稿，离开后这些修改会丢失。确定要离开吗？',
+      okText: '离开', cancelText: '继续编辑', danger: !saved,
     });
     if (ok) this.leaving = true;
     return ok;
@@ -2326,9 +3145,10 @@ class Editor {
     // 立即写入本机草稿（例如登录失效、关闭标签页之前切换视图）
     try {
       this.syncActive();
-      if (this.autosave.pending()) {
+      if (!this.discarded && (this.autosave.pending() || [...this.variants.values()].some((x) => x.needsAutosave))) {
         this.flushing = true;
-        this.autosave.flush();
+        this.autosave.cancel();
+        this.autosaveNow();
       }
     } catch (err) { console.warn(err); }
     this.destroyed = true;
@@ -2336,6 +3156,10 @@ class Editor {
     document.removeEventListener('keydown', this.onKeyDown, true);
     document.removeEventListener('visibilitychange', this.onHidden);
     window.removeEventListener('pagehide', this.onHidden);
+    if (this.toolbarCleanup) this.toolbarCleanup();
+    // 关闭频道稍后进行：上面的自动保存可能还在写
+    const ch = this.channel;
+    if (ch) setTimeout(() => { try { ch.close(); } catch { /* ignore */ } }, 3000);
     try { if (this.vd) this.vd.destroy(); } catch { /* ignore */ }
     this.vd = null;
     // blob 地址不再需要（图片本身在 recentUploads / 本机草稿里）。稍后再释放，避免正在保存的草稿读不到。

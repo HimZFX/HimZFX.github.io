@@ -4,7 +4,10 @@
  * 运行环境：<iframe sandbox="allow-scripts">，没有 allow-same-origin，所以本页的源是 "null"，
  * 读不到管理后台的 localStorage / 令牌。代码只通过 postMessage 从父页面（管理后台）拿到。
  *
- * 消息协议（只接受来自 window.parent 的消息，event.source 必须是 parent）：
+ * 安全：只有在 self.origin === 'null'（确实在没有 allow-same-origin 的沙箱里）时才工作；
+ * 被不加沙箱地嵌入（例如别的网站嵌入本页）时什么都不做，不注册任何监听。
+ *
+ * 消息协议（只接受来自 window.parent、且 event.origin 等于管理后台的源的消息；回消息也只发给这个源）：
  *   父 → 框  { type: 'run', code: string, dark: boolean }   运行一次（引擎 core.js + '\n' + 卡带代码）；
  *                                                           同一次加载只运行一次，重新运行 = 父页面重建 iframe。
  *            { type: 'pause' } / { type: 'resume' }         暂停 / 继续动画（不在屏幕上时省电）
@@ -22,6 +25,16 @@
   var parentWin = window.parent;
   // 被直接打开（不在 iframe 里）时什么都不做
   if (!parentWin || parentWin === window) return;
+  // 安全：只在管理后台创建的沙箱里工作。<iframe sandbox="allow-scripts">（没有 allow-same-origin）
+  // 里本页的源是不透明的 "null"；如果 self.origin 不是 "null"，说明有人（可能是别的网站）不加沙箱
+  // 把本页嵌了进去 —— 这时运行传进来的代码就等于让对方以本网站的身份执行脚本、读走令牌，所以直接退出。
+  var selfOrigin;
+  try { selfOrigin = self.origin; } catch (e) { selfOrigin = undefined; }
+  if (selfOrigin !== 'null') return;
+  // 沙箱里 location.origin 仍是本页网址的源，也就是管理后台的源；只接受来自这个源的父页面的消息，
+  // 回消息也只发给这个源（别的网站用沙箱嵌入本页时，什么也收不到、什么也运行不了）。
+  var adminOrigin = location.origin;
+  if (!adminOrigin || adminOrigin === 'null') return;
 
   var ran = false;
   var code = '';
@@ -33,8 +46,8 @@
 
   function post(msg) {
     try {
-      // 父页面的源对沙箱来说未知（本页源为 null），所以用 '*'；消息里不含任何敏感信息
-      parentWin.postMessage(msg, '*');
+      // 只发给管理后台的源（父页面若是别的网站，浏览器会丢弃这条消息）
+      parentWin.postMessage(msg, adminOrigin);
     } catch (e) { /* 父页面已经关闭 */ }
   }
 
@@ -134,6 +147,7 @@
 
   window.addEventListener('message', function (ev) {
     if (ev.source !== parentWin) return;            // 只听父页面的
+    if (ev.origin !== adminOrigin) return;          // 而且父页面必须是管理后台本身
     var data = ev.data;
     if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
     switch (data.type) {

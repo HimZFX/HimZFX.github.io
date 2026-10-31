@@ -18,8 +18,19 @@ const CACHE_FRESH = 'no-store';
 /** 按 sha 寻址的 git 对象永不改变，允许浏览器缓存。 */
 const CACHE_IMMUTABLE = 'default';
 
-/** 读取 / 上传文件内容的请求可能很大，不设超时（慢网络下上传 50 MB 也要能完成）。 */
+/** 读取文件内容的请求可能很大，不设超时（慢网络下读取 50 MB 也要能完成）。 */
 const NO_TIMEOUT = 0;
+/** 读取整棵文件树：比普通请求宽松，但网络卡死时不能让「正在发布…」永远转下去。 */
+const TREE_TIMEOUT_MS = 2 * 60 * 1000;
+
+/**
+ * 上传文件的超时按大小放宽：60 秒 + 每 MB 40 秒（约 200 kbit/s 的慢速网络也能传完），
+ * 连接卡死（Wi-Fi 切换到流量、半开的 TCP）时最终会报「网络超时」，而不是一直转圈。
+ * @param {number} bytes
+ */
+export function uploadTimeoutMs(bytes) {
+  return 60000 + Math.ceil(Math.max(0, Number(bytes) || 0) / (1024 * 1024) * 40000);
+}
 
 /**
  * GitHub 接口错误。message 是可以直接展示给用户的中文。
@@ -85,6 +96,14 @@ export class GitHubClient {
 
   /** API 根地址（只读）。 */
   get apiBase() { return this.#apiBase; }
+
+  /**
+   * 换一个令牌（登录失效后重新登录时使用，界面和未发布的修改都保留）。空字符串 = 让之后的请求都失败。
+   * @param {string} token
+   */
+  setToken(token) {
+    this.#token = String(token == null ? '' : token).trim();
+  }
 
   /** 不要让 console.log / JSON.stringify 意外带出令牌（私有字段本身就不会被序列化）。 */
   toJSON() { return { owner: this.owner, repo: this.repo, branch: this.branch, apiBase: this.#apiBase }; }
@@ -219,7 +238,7 @@ export class GitHubClient {
   async getTree(treeSha) {
     const data = await this.request('GET',
       `${this.#repoPath}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`, undefined,
-      { cache: CACHE_IMMUTABLE, timeoutMs: NO_TIMEOUT });
+      { cache: CACHE_IMMUTABLE, timeoutMs: TREE_TIMEOUT_MS });
     const out = [];
     const submodules = [];
     for (const e of (data && Array.isArray(data.tree) ? data.tree : [])) {
@@ -261,11 +280,33 @@ export class GitHubClient {
    * @returns {Promise<string>}
    */
   async createBlob(bytes) {
+    const u8 = toUint8Array(bytes);
     const data = await this.request('POST', `${this.#repoPath}/git/blobs`,
-      { content: encodeBase64(bytes), encoding: 'base64' },
+      { content: encodeBase64(u8), encoding: 'base64' },
       // blob 是内容寻址的，重复创建无副作用，网络抖动时可以安全重试一次。
-      { retry: 1, timeoutMs: NO_TIMEOUT });
+      { retry: 1, timeoutMs: uploadTimeoutMs(u8.length) });
     return requireSha(data, 'blob');
+  }
+
+  /**
+   * 确认令牌真的能写入这个仓库。
+   *
+   * GET /repos 返回的 permissions.push 反映的是「账号」在仓库里的角色（仓库主人永远是 true），
+   * 而不是细粒度令牌被授予的权限：只读令牌、或者没选这个仓库的令牌（公开仓库照样能读）也会得到 push: true。
+   * 这里上传一个空文件内容（git 的空 blob e69de29…，仓库里本来就有，不改变任何东西）来实际试一下写权限。
+   *
+   * @returns {Promise<boolean|null>} true = 可以写；false = 403/404（没有写权限）；null = 无法判断（其他错误，不阻止登录）
+   */
+  async checkWriteAccess() {
+    try {
+      await this.request('POST', `${this.#repoPath}/git/blobs`, { content: '', encoding: 'base64' }, { retry: 1 });
+      return true;
+    } catch (err) {
+      if (err instanceof GitHubError && (err.status === 403 || err.status === 404) &&
+          !/rate limit|次数已用完/i.test(err.message + ' ' + ((err.data && err.data.message) || ''))) return false;
+      if (err instanceof GitHubError && err.status === 401) throw err;
+      return null;
+    }
   }
 
   /**

@@ -227,6 +227,8 @@ export async function listDrafts() {
           path: v.path,
           groupKey: v.groupKey,
           updatedAt: Number(v.updatedAt) || 0,
+          // 新文章草稿的文件名（列表用来判断「是不是其实已经发表了」）
+          slug: v.fields && typeof v.fields.slug === 'string' ? v.fields.slug : undefined,
         });
         cur.continue();
       };

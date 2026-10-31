@@ -13,7 +13,7 @@
 
 import { REPO, apiBase, STORAGE_KEYS, PATHS, SITE_LABELS, LANG_NAMES, VENDOR } from './config.js';
 import {
-  h, svgIcon, render, toast, modal, confirmDialog, showOverlay, errorMessage, loadingState, closeAllLayers,
+  h, svgIcon, render, toast, modal, confirmDialog, showOverlay, errorMessage, loadingState, closeAllLayers, closeModals,
 } from './ui.js';
 import { createRouter } from './router.js';
 
@@ -105,7 +105,7 @@ function setReturnHash(hash) {
 // ---------------------------------------------------------------------------
 // 状态
 
-/** @type {null | { id: number, token: string, client: any, repo: any, user: any, langs: string[], defaultLang: string, langNames: object, ready: boolean, deployWatch?: any }} */
+/** @type {null | { id: number, token: string, remember: boolean, client: any, repo: any, user: any, langs: string[], defaultLang: string, langNames: object, ready: boolean, deployWatch?: any }} */
 let session = null;
 let sessionSeq = 0;
 let mods = null;            // 动态导入的模块
@@ -143,6 +143,10 @@ const router = createRouter({
     return null;
   },
   onRouteChange(info) {
+    // 旧页面的对话框（裁剪头像、删除确认、手机预览…）不能留在新页面上：
+    // 手机上用「返回」手势离开页面时，点里面的按钮会对已经关掉的页面生效（头像丢失、照样删除文章）。
+    // 关闭 = 点「取消」。「正在发布…」遮罩和「登录已失效」框不受影响。
+    closeModals();
     document.body.dataset.route = info.route;
     delete document.body.dataset.viewReady;
     if (info.route !== 'login') {
@@ -195,6 +199,12 @@ const router = createRouter({
 // 启动
 
 async function boot() {
+  // 防点击劫持：GitHub Pages 不能发送 X-Frame-Options，CSP 的 frame-ancestors 写在 <meta> 里也无效，
+  // 所以被别的网页用 iframe 嵌入时，什么都不加载（不读令牌、不显示界面）。
+  if (isFramed()) {
+    showFramedNotice();
+    return;
+  }
   installGlobalHandlers();
   const token = readToken();
   if (!token) {
@@ -202,6 +212,29 @@ async function boot() {
     return;
   }
   await startSession(token, { remember: tokenRemembered(), fromLogin: false });
+}
+
+function isFramed() {
+  try { return window.top !== window.self; } catch { return true; }
+}
+
+function showFramedNotice() {
+  const app = appEl();
+  if (!app) return;
+  document.body.dataset.layout = 'boot';
+  document.body.dataset.testid = 'framed';
+  render(app,
+    h('div', { class: 'boot' },
+      h('div', { class: 'card boot-card' },
+        h('div', { class: 'error-state', role: 'alert' },
+          h('div', { class: 'error-state-icon' }, svgIcon('warning')),
+          h('div', { class: 'error-state-title' }, '请直接打开管理后台'),
+          h('div', { class: 'error-state-detail muted' }, '为了安全，管理后台不能放在其他网页里使用。请点下面的按钮，在新的标签页里打开。'),
+          h('div', { class: 'row error-state-actions' },
+            h('a', {
+              class: 'btn btn-primary', href: location.origin + location.pathname, target: '_blank', rel: 'noopener noreferrer',
+              dataset: { testid: 'framed-open' },
+            }, svgIcon('external'), '在新标签页打开管理后台'))))));
 }
 
 /**
@@ -244,6 +277,13 @@ async function connect(token, id) {
   const [user, repoInfo] = await Promise.all([client.getUser(), client.getRepo()]);
   if (!repoInfo || !repoInfo.permissions || !repoInfo.permissions.push) {
     const e = new Error('这个令牌没有写入权限。请在 GitHub 的令牌设置里，把 Contents 权限设为「Read and write」。');
+    e.kind = 'permission';
+    throw e;
+  }
+  // permissions.push 只说明「账号」有写权限（仓库主人永远有），不代表这个细粒度令牌有：
+  // 只读令牌、没选这个仓库的令牌（公开仓库照样能读）也会通过上面的检查。实际试一次写入。
+  if (typeof client.checkWriteAccess === 'function' && (await client.checkWriteAccess()) === false) {
+    const e = new Error(`这个令牌没有写入权限。请在 GitHub 的令牌设置里确认：Repository access 选了 ${REPO.owner}/${REPO.repo}，并且 Contents 权限是「Read and write」（改完权限后令牌不用重新生成）。`);
     e.kind = 'permission';
     throw e;
   }
@@ -313,14 +353,14 @@ async function startSession(token, { remember, fromLogin }) {
   storeToken(token, remember);
   if (fromLogin) {
     // 让登录按钮的「忙碌」状态先结束，再切换到加载页
-    setTimeout(() => loadSite(id, token, conn), 0);
+    setTimeout(() => loadSite(id, token, conn, remember), 0);
     return;
   }
-  await loadSite(id, token, conn);
+  await loadSite(id, token, conn, remember);
 }
 
 /** 读取仓库文件树和语言配置，然后显示后台界面。 */
-async function loadSite(id, token, { client, user }) {
+async function loadSite(id, token, { client, user }, remember = tokenRemembered()) {
   if (id !== sessionSeq) return;
   router.stop();
   showBootScreen('正在读取网站内容…');
@@ -334,7 +374,7 @@ async function loadSite(id, token, { client, user }) {
     const langInfo = await readLanguages(repo);
     if (id !== sessionSeq) return;
     session = {
-      id, token, client, repo, user,
+      id, token, remember: !!remember, client, repo, user,
       langs: langInfo.langs,
       defaultLang: langInfo.defaultLang,
       langNames: langInfo.names,
@@ -353,7 +393,7 @@ async function loadSite(id, token, { client, user }) {
       await showLogin({ notice: '登录已过期或令牌已失效，请重新输入令牌。' });
       return;
     }
-    showBootError(friendlyConnectError(err), () => loadSite(id, token, { client, user }));
+    showBootError(friendlyConnectError(err), () => loadSite(id, token, { client, user }, remember));
   }
 }
 
@@ -421,7 +461,9 @@ function endSession() {
 function loginCtx() {
   return {
     notice: loginNotice,
-    remember: true,
+    // 默认不记住：记住的令牌在 localStorage 里，整个 himzfx.github.io 共用，
+    // 网站页面上加载的第三方脚本（KaTeX、giscus）理论上也能读到。
+    remember: false,
     repoName: `${REPO.owner}/${REPO.repo}`,
     siteUrl: SITE_URL,
     /**
@@ -438,15 +480,134 @@ function loginCtx() {
   };
 }
 
-/** 任何时候 API 返回 401：卸载当前视图（让编辑器有机会保存本机草稿）→ 清除令牌 → 登录页。 */
-function handleAuthExpired() {
+/**
+ * 任何时候 API 返回 401（或在其他标签页退出了登录）：清除令牌，然后
+ * - 当前页面有未发布的修改（或正在发布）：页面保持不动，弹出「登录已失效」框，粘贴新令牌后原地继续，
+ *   修改一点都不会丢（首页设置、背景动画、菜单顺序这些页面没有本机草稿）；
+ * - 否则：卸载当前视图 → 登录页，登录后回到原来的页面。
+ * @param {{ reason?: 'expired' | 'other-tab' }} [opts]
+ */
+function handleAuthExpired({ reason = 'expired' } = {}) {
   if (expiring || !session || !session.ready) return;
   expiring = true;
+  clearToken();
+  if (reason === 'other-tab') {
+    // 这个标签页里的令牌也必须立刻失效
+    try { session.client.setToken(''); } catch { /* ignore */ }
+  }
+  if (publishing || router.isDirty()) {
+    showReauthModal(reason);
+    return;
+  }
   const here = router.current;
   if (here && here.route !== 'login') setReturnHash(here.hash);
-  clearToken();
-  showLogin({ notice: '登录已失效（令牌无效、被撤销或已过期），请重新输入令牌。本机自动保存的草稿不会丢失。' })
-    .finally(() => { expiring = false; });
+  const notice = reason === 'other-tab'
+    ? '已在其他标签页退出登录。'
+    : '登录已失效（令牌无效、被撤销或已过期），请重新输入令牌。本机自动保存的修改（文章草稿、首页设置、背景动画）不会丢失，重新登录后可以继续。';
+  showLogin({ notice }).finally(() => { expiring = false; });
+}
+
+let reauthSeq = 0;
+
+/** 「登录已失效」框：不卸载当前页面，粘贴新令牌后把它换进现有的 GitHubClient。 */
+function showReauthModal(reason) {
+  const s = session;
+  const inputId = `reauth-token-${++reauthSeq}`;
+  const input = h('input', {
+    class: 'input login-token-input', id: inputId, type: 'password', autocomplete: 'off', autocapitalize: 'off',
+    spellcheck: 'false', placeholder: 'github_pat_…', 'data-autofocus': true, dataset: { testid: 'reauth-token' },
+  });
+  const remember = h('input', { type: 'checkbox', checked: !!s.remember, dataset: { testid: 'reauth-remember' } });
+  const error = h('div', { class: 'error login-error', role: 'alert', dataset: { testid: 'reauth-error' } });
+  error.hidden = true;
+  const showErr = (msg) => {
+    error.textContent = msg || '';
+    error.hidden = !msg;
+    input.setAttribute('aria-invalid', msg ? 'true' : 'false');
+  };
+  input.addEventListener('input', () => { if (!error.hidden) showErr(''); });
+
+  const submit = async (close) => {
+    if (session !== s) { close(); return; }
+    const token = input.value.trim();
+    if (!token) { showErr('请先粘贴令牌'); input.focus(); return; }
+    if (/\s/.test(token)) { showErr('令牌里不应该有空格或换行，请重新复制'); input.focus(); return; }
+    try {
+      await connect(token, -1);   // -1：校验期间的 401 不触发会话的过期处理
+    } catch (err) {
+      if (session === s) { showErr(friendlyConnectError(err)); input.focus(); }
+      return;
+    }
+    if (session !== s) { close(); return; }
+    s.client.setToken(token);
+    s.token = token;
+    s.remember = remember.checked;
+    storeToken(token, s.remember);
+    input.value = '';
+    expiring = false;
+    close();
+    toast('已重新登录，可以继续了。刚才没发布成功的修改还在，请再点一次发布。', { type: 'success', timeout: 7000 });
+  };
+
+  const intro = reason === 'other-tab'
+    ? '你已在其他标签页退出了登录。'
+    : '令牌无效、被撤销或已经过期（GitHub 的令牌默认 30 天到期）。';
+  const m = modal({
+    title: '登录已失效',
+    testid: 'reauth',
+    dismissible: false,
+    sticky: true,
+    content: h('div', { class: 'stack reauth-body' },
+      h('p', { class: 'modal-message' }, intro, '这一页上还没发布的修改都还在，没有丢失。粘贴一个新的令牌就能接着用，然后再点一次发布。'),
+      h('p', { class: 'muted' }, '令牌过期了：到 GitHub 的令牌页面点「Regenerate token」（或新建一个），复制后粘贴到这里。'),
+      h('div', { class: 'field' },
+        h('label', { htmlFor: inputId }, '新的令牌'),
+        input),
+      h('label', { class: 'checkbox' }, remember, h('span', {}, '在此设备上记住')),
+      error),
+    actions: [
+      {
+        text: '退出登录', kind: 'ghost', testid: 'reauth-logout',
+        onClick: async (close) => {
+          if (session !== s) { close(); return; }
+          // 有未发布的修改时，视图会问「放弃修改？」
+          if (!(await router.canLeave())) return;
+          close();
+          setReturnHash(null);
+          broadcastLogout();
+          await showLogin();
+          expiring = false;
+        },
+      },
+      { text: '继续', kind: 'primary', testid: 'reauth-submit', onClick: submit },
+    ],
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      m.footer.querySelector('[data-testid="reauth-submit"]')?.click();
+    }
+  });
+}
+
+// 多个标签页：在一个标签页里退出登录，其他标签页也立刻失去令牌（不传递令牌本身）。
+let sessionChannel = null;
+
+function setupSessionChannel() {
+  if (sessionChannel || typeof BroadcastChannel !== 'function') return;
+  try {
+    sessionChannel = new BroadcastChannel('admin.session');
+  } catch {
+    sessionChannel = null;
+    return;
+  }
+  sessionChannel.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'logout' && session && session.ready) handleAuthExpired({ reason: 'other-tab' });
+  });
+}
+
+function broadcastLogout() {
+  try { if (sessionChannel) sessionChannel.postMessage({ type: 'logout' }); } catch { /* ignore */ }
 }
 
 async function logout() {
@@ -468,6 +629,7 @@ async function logout() {
   }
   clearToken();
   setReturnHash(null);
+  broadcastLogout();
   await showLogin();
   toast('已退出登录', { type: 'success' });
 }
@@ -518,11 +680,29 @@ const PHASE_TEXT = {
 };
 
 /**
- * 视图提交修改的唯一入口（§4 ctx.publish）。
- * @param {{ message: string, changes: Array<object>, summary?: string|string[] }} opts
- * @returns {Promise<{ commitSha: string, shas: Record<string,string>, unchanged?: boolean } | { conflict: true, reloaded: boolean, paths: string[] }>}
+ * 网站上的页面地址（只接受本网站的 http(s) 地址），用于「已上线 ✓」和提示里的链接。
+ * @returns {string|null}
  */
-async function publish({ message, changes, summary } = {}) {
+function siteLink(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(String(url), SITE_URL);
+    if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.origin !== new URL(SITE_URL).origin) return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 视图提交修改的唯一入口（§4 ctx.publish）。
+ * @param {{ message: string, changes: Array<object>, summary?: string|string[], viewUrl?: string, viewLabel?: string }} opts
+ *        viewUrl / viewLabel（扩展，可选）：发布的内容在网站上的地址（例如文章页）和链接文字（默认「打开看看」）。
+ *        部署完成后「已上线 ✓」指向这里，提示里也会带上这个链接；不传时指向网站首页。
+ * @returns {Promise<{ commitSha: string, shas: Record<string,string>, unchanged?: boolean, alreadyApplied?: boolean } | { conflict: true, reloaded: boolean, paths: string[] }>}
+ *        alreadyApplied：这些修改其实已经在网站上了（上一次发布成功了，只是没收到 GitHub 的回复）。
+ */
+async function publish({ message, changes, summary, viewUrl, viewLabel } = {}) {
   const s = session;
   if (!s || !s.ready) throw new Error('还没有登录');
   if (publishing) {
@@ -558,18 +738,30 @@ async function publish({ message, changes, summary } = {}) {
       handleAuthExpired();
       throw err;
     }
+    if (err && err.uncertain) {
+      // 「移动分支」的回复丢了：可能已经发布成功。再点一次发布是安全的（不会重复发布）。
+      console.warn('[publish] outcome unknown', err);
+      toast(err.message, { type: 'warning', timeout: 15000 });
+      throw err;
+    }
     console.error('[publish] failed', err);
     toast(`发布失败：${errorMessage(err)}`, { type: 'error', timeout: 9000 });
     throw err;
   }
   overlay.close();
   publishing = false;
+  const view = { url: siteLink(viewUrl), label: String(viewLabel || '打开看看') };
+  if (result.alreadyApplied) {
+    toast('这些修改其实已经发布成功了（上一次只是没收到 GitHub 的回复），不会重复发布。', { type: 'success', timeout: 7000 });
+    startDeployWatch(result.commitSha, view);
+    return { commitSha: result.commitSha, shas: result.shas || {}, alreadyApplied: true };
+  }
   if (result.unchanged) {
     toast('内容和网站上的一样，不需要发布', { type: 'info' });
     return { commitSha: result.commitSha, shas: result.shas || {}, unchanged: true };
   }
-  toast('已发布，正在部署…', { type: 'success' });
-  startDeployWatch(result.commitSha);
+  toast(view.url ? '已发布，正在部署…约 1–2 分钟后就能在网站上看到' : '已发布，正在部署…', { type: 'success', timeout: view.url ? 5000 : undefined });
+  startDeployWatch(result.commitSha, view);
   return { commitSha: result.commitSha, shas: result.shas || {} };
 }
 
@@ -609,24 +801,49 @@ function conflictDialog(err) {
 const DEPLOY_STATES = {
   pending: { text: '部署中…', short: '部署中', cls: 'is-running', title: '网站正在重新生成，通常需要 1–2 分钟（点击查看进度）' },
   running: { text: '部署中…', short: '部署中', cls: 'is-running', title: '网站正在重新生成，通常需要 1–2 分钟（点击查看进度）' },
-  success: { text: '已上线 ✓', short: '已上线 ✓', cls: 'is-success', icon: 'globe', title: '修改已经生效（点击打开网站）' },
+  success: { text: '已上线 ✓', short: '已上线 ✓', cls: 'is-success', icon: 'globe', title: '修改已经生效（点击打开网站；如果还看到旧内容，请刷新一下页面）' },
   failure: { text: '部署失败', short: '失败', cls: 'is-failure', icon: 'warning', title: '网站生成失败，点击查看 GitHub Actions 的详细信息' },
   unknown: { text: '已提交，约 1–2 分钟后生效', short: '已提交', cls: 'is-unknown', icon: 'clock', title: '已提交到 GitHub，约 1–2 分钟后生效（令牌没有 Actions 权限时无法显示进度）' },
 };
 let deployHideTimer = null;
+/** 最近一次发布的内容在网站上的地址：{ url, label } | null（没有时「已上线 ✓」指向首页）。 */
+let deployView = null;
+/** 最近一次发布的提交（「已上线 ✓」的链接带上 ?v=<提交前 7 位>，避开浏览器缓存的旧页面）。 */
+let deployCommit = '';
 
-function startDeployWatch(commitSha) {
+/** 给网站地址加上 ?v=<提交>：GitHub Pages 的页面会被浏览器缓存约 10 分钟，换个地址就能看到新内容。 */
+function withVersion(url, commitSha) {
+  const v = String(commitSha || '').slice(0, 7);
+  if (!v || !/^[0-9a-f]+$/i.test(v)) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set('v', v);
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function startDeployWatch(commitSha, view = {}) {
   const s = session;
   if (!s) return;
   if (s.deployWatch) {
     try { s.deployWatch.stop(); } catch { /* ignore */ }
   }
+  deployView = view && view.url ? view : null;
+  deployCommit = String(commitSha || '');
   setDeployState('pending', null);
   try {
     s.deployWatch = s.repo.watchDeploy(commitSha, ({ state, url }) => {
       if (session !== s) return;
       setDeployState(state, url);
-      if (state === 'success') toast('网站已更新，修改已上线 ✓', { type: 'success' });
+      if (state === 'success') {
+        toast('网站已更新，修改已上线 ✓', {
+          type: 'success',
+          timeout: deployView ? 9000 : undefined,
+          link: deployView ? { text: `${deployView.label} ↗`, href: withVersion(deployView.url, deployCommit) } : undefined,
+        });
+      }
       if (state === 'failure') toast('网站部署失败，点击右上角「部署失败」查看原因', { type: 'error', timeout: 10000 });
     });
   } catch (err) {
@@ -640,13 +857,16 @@ function setDeployState(state, url) {
   const el = shell.deploy;
   const info = DEPLOY_STATES[state] || DEPLOY_STATES.unknown;
   clearTimeout(deployHideTimer);
-  const href = state === 'success' ? SITE_URL : (url || `https://github.com/${REPO.owner}/${REPO.repo}/actions`);
+  const href = state === 'success'
+    ? withVersion((deployView && deployView.url) || SITE_URL, deployCommit)
+    : (url || `https://github.com/${REPO.owner}/${REPO.repo}/actions`);
   el.hidden = false;
   el.dataset.state = state;
   el.className = `deploy-indicator ${info.cls}`;
   el.href = href;
-  el.title = info.title;
-  el.setAttribute('aria-label', `${info.text}。${info.title}`);
+  const title = state === 'success' && deployView ? '修改已经生效（点击打开刚发布的页面；如果还看到旧内容，请刷新一下）' : info.title;
+  el.title = title;
+  el.setAttribute('aria-label', `${info.text}。${title}`);
   render(el,
     info.icon ? svgIcon(info.icon) : h('span', { class: 'spinner spinner-sm', 'aria-hidden': 'true' }),
     h('span', { class: 'deploy-text' }, info.text),
@@ -702,7 +922,7 @@ function showBootError(message, retry) {
             retryBtn,
             h('button', {
               type: 'button', class: 'btn btn-ghost', dataset: { testid: 'boot-logout' },
-              on: { click: () => { clearToken(); showLogin(); } },
+              on: { click: () => { clearToken(); broadcastLogout(); showLogin(); } },
             }, '退出登录'))))));
 }
 
@@ -824,6 +1044,8 @@ let globalsInstalled = false;
 function installGlobalHandlers() {
   if (globalsInstalled) return;
   globalsInstalled = true;
+
+  setupSessionChannel();
 
   window.addEventListener('beforeunload', (e) => {
     if (publishing || router.isDirty()) {

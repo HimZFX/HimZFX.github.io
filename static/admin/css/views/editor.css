@@ -347,11 +347,45 @@
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
-  .ed-vditor .vditor-toolbar__item { flex: none; padding: 0 1px; }
-  .ed-vditor .vditor-toolbar__item .vditor-tooltipped { padding: 10px 7px; }
+  .ed-vditor .vditor-toolbar__item { flex: none; padding: 0; }
+  /* 手指好点：每个按钮至少 40×40 */
+  .ed-vditor .vditor-toolbar__item .vditor-tooltipped {
+    box-sizing: border-box;
+    min-width: 40px;
+    height: 40px;
+    padding: 0 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ed-vditor .vditor-toolbar__item svg { width: 17px; height: 17px; }
   .ed-vditor .vditor-toolbar__divider { flex: none; }
   .ed-vditor .vditor-counter { display: none; }
   .ed-vditor .vditor-toolbar::-webkit-scrollbar { display: none; }
+  /* 右边还有按钮（横向滑动可见）时，右侧渐隐提示 */
+  /* （用贴在右边的渐变层而不是 mask-image：mask 会把弹出的「标题 / 更多」菜单也遮掉） */
+  .ed-vditor .vditor-toolbar::after {
+    content: '';
+    position: sticky;
+    right: 0;
+    flex: none;
+    align-self: stretch;
+    width: 36px;
+    margin-left: -36px;
+    background: linear-gradient(to right, transparent, var(--card) 85%);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .15s;
+  }
+  .ed-vditor.ed-toolbar-more .vditor-toolbar::after { opacity: 1; }
+  /* 「更多」弹出的菜单不被横向滚动的工具栏裁掉 */
+  .ed-vditor .vditor-toolbar__item .vditor-hint,
+  .ed-vditor .vditor-toolbar__item .vditor-panel { position: fixed; }
+  /* 语言版本标签放不下时换行，「＋ 单独写…版」不会被挤出屏幕 */
+  .ed-head { flex-wrap: wrap; }
+  .ed-tabs { flex-wrap: wrap; overflow: visible; }
+  .ed-tabs .tab { padding: 10px 8px; }
+  .ed-slug-hint { margin-top: 6px; }
 
   .ed-side {
     position: static;
@@ -368,8 +402,14 @@
   .ed-bar-inner { height: 58px; gap: 8px; padding: 0 12px; }
   .ed-autosave { font-size: 12px; white-space: normal; line-height: 1.35; max-height: 2.7em; }
   .ed-bar-actions { gap: 6px; }
-  .ed-btn-preview, .ed-btn-draft { width: 40px; padding: 0; }
-  .ed-btn-preview .ed-btn-text, .ed-btn-draft .ed-btn-text { display: none; }
+  /* 手机上也保留简短的文字（没有鼠标悬停提示，光有图标看不懂） */
+  .ed-btn-preview, .ed-btn-draft { padding: 0 9px; gap: 4px; }
+  .ed-btn-preview .icon, .ed-btn-draft .icon { display: none; }
+  .ed-btn-preview .ed-btn-text { font-size: 0; }
+  .ed-btn-preview .ed-btn-text::after { content: '预览'; font-size: 14px; }
+  .ed-btn-draft .ed-btn-text { font-size: 0; }
+  .ed-btn-draft .ed-btn-text::after { content: attr(data-short); font-size: 14px; }
+  .ed-autosave { -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; }
   .ed-btn-more { width: 40px; }
   .ed-btn-publish { min-width: 76px; padding: 0 14px; }
   .ed-btn-publish .icon { display: none; }
@@ -385,6 +425,38 @@
   .ed-phone-loading { background: rgba(30, 31, 34, 0.85); }
 }
 
-/* 自定义工具栏按钮（公式 / 资料）的图标是描边风格 */
+/* 自定义工具栏按钮（公式 / 资料 / 排版）的图标是描边风格 */
 .ed-vditor .vditor-toolbar__item [data-type="formula"] svg,
-.ed-vditor .vditor-toolbar__item [data-type="documents"] svg { fill: none; stroke: currentColor; stroke-width: 2; }
+.ed-vditor .vditor-toolbar__item [data-type="documents"] svg,
+.ed-vditor .vditor-toolbar__item [data-type="gallery"] svg,
+.ed-vditor .vditor-toolbar__item [data-type="figure"] svg { fill: none; stroke: currentColor; stroke-width: 2; }
+
+/* 文章里的 <iframe> 等嵌入内容在编辑器里不加载（安全），只显示一个占位框 */
+.ed-vditor .ed-embed-blocked {
+  display: inline-block;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong, #c9cdd4);
+  border-radius: 6px;
+  color: var(--muted, #8f959e);
+  font-size: 13px;
+  white-space: normal;
+}
+.ed-vditor .ed-embed-blocked::before { content: '嵌入内容（' attr(data-tag) '）：编辑器里不显示，发表后在网站上显示'; }
+.ed-vditor .ed-embed-blocked[data-tag="style"],
+.ed-vditor .ed-embed-blocked[data-tag="meta"],
+.ed-vditor .ed-embed-blocked[data-tag="link"],
+.ed-vditor .ed-embed-blocked[data-tag="base"] { display: none; }
+
+/* 全中文标题时的网址提示 */
+.ed-slug-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 2px 0 8px;
+  color: var(--muted, #8f959e);
+}
+.ed-slug-hint[hidden] { display: none; }
+.ed-slug-hint .icon { width: 15px; height: 15px; flex: none; }
+.ed-slug-hint span { flex: 1 1 200px; }

@@ -1,6 +1,6 @@
 // content.js — 双语内容模型（纯函数，无 DOM，可在 Node 里直接导入测试）。
 //
-// 网站的双语规则（与 SITE_GUIDE.md §3、new_post.py --status 完全一致）：
+// 网站的双语规则（与 SITE_GUIDE.md「双语机制」、new_post.py --status 完全一致）：
 //   xxx.md      共用版本：每种语言的站点都显示
 //   xxx.en.md   英文专属：存在时，英文站用它「整体替换」共用版本（front matter 也一起替换）
 //   xxx.zh.md   中文专属：同理
@@ -302,7 +302,10 @@ export function isDraftFm(fm) {
   const d = fm.draft;
   if (d === true) return true;
   if (typeof d === 'number') return d !== 0;
-  if (typeof d === 'string') return /^(true|t|1)$/i.test(d.trim());
+  // Hugo（固定版本实测）：未加引号的 YAML 1.1 布尔词 yes / y / on 也会被当成草稿。
+  // js-yaml 的 CORE_SCHEMA 把它们读成字符串，分不清有没有加引号；手写时几乎不会给它们加引号，
+  // 所以按草稿处理（宁可在后台显示「草稿」，也不要显示「已发表」而网站上其实看不到）。
+  if (typeof d === 'string') return /^(true|t|1|yes|y|on)$/i.test(d.trim());
   return false;
 }
 

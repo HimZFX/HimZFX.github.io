@@ -3,7 +3,7 @@
  *
  * 流程：Markdown → Vditor.md2html → 在一个「惰性」文档（document.implementation.createHTMLDocument，
  * 不加载图片、不执行脚本）里渲染公式（Vditor.mathRender / KaTeX）和代码高亮（Vditor.highlightRender），
- * 把 {{< gallery … >}} 短代码换成网站同款的图集结构，最后拼成完整 HTML 写进 iframe.srcdoc。
+ * 把 {{< gallery … >}} / {{< figure … >}} 短代码换成网站同款的结构，最后拼成完整 HTML 写进 iframe.srcdoc。
  *
  * 安全（§2.3 例外 b、§2.4）：这是整个后台唯一把 HTML 字符串写进页面的地方，而且只写进
  * sandbox="allow-same-origin"（没有 allow-scripts）的预览 iframe —— 里面的任何脚本都不会运行。
@@ -164,6 +164,45 @@ function renderGalleries(doc, root) {
   }
 }
 
+/**
+ * 把 {{< figure src="…" caption="…" >}}（Hugo 自带的短代码）段落替换成和网站一样的
+ * <figure><img><figcaption>…</figcaption></figure>。说明文字只当纯文本处理。
+ */
+function renderFigures(doc, root) {
+  const re = /^\{\{[<%]\s*figure\s+([\s\S]*?)\s*\/?[>%]\}\}$/;
+  for (const p of [...root.querySelectorAll('p')]) {
+    const m = re.exec((p.textContent || '').trim());
+    if (!m) continue;
+    const args = {};
+    const argRe = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+    let a;
+    while ((a = argRe.exec(m[1]))) args[a[1].toLowerCase()] = a[2] ?? a[3] ?? a[4];
+    const src = safeSrc(args.src);
+    if (!src) continue;
+    const fig = doc.createElement('figure');
+    const img = doc.createElement('img');
+    img.setAttribute('src', src);
+    img.setAttribute('alt', args.alt || args.caption || '');
+    if (/^\d+$/.test(args.width || '')) img.setAttribute('width', args.width);
+    fig.appendChild(img);
+    if (args.caption || args.title) {
+      const cap = doc.createElement('figcaption');
+      if (args.title) {
+        const h4 = doc.createElement('h4');
+        h4.textContent = args.title;
+        cap.appendChild(h4);
+      }
+      if (args.caption) {
+        const cp = doc.createElement('p');
+        cp.textContent = args.caption;
+        cap.appendChild(cp);
+      }
+      fig.appendChild(cap);
+    }
+    p.replaceWith(fig);
+  }
+}
+
 /** 去掉预览里用不到 / 不该出现的东西（iframe 本身已禁止脚本，这里只是保持干净）。 */
 function scrub(root) {
   root.querySelectorAll('script, .vditor-copy').forEach((el) => el.remove());
@@ -212,6 +251,10 @@ body{min-height:100vh}
 .post-content iframe{max-width:100%}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin:1em 0}
 .gallery-item img{width:100%;height:100%;object-fit:cover;border-radius:6px;display:block}
+.post-content figure{margin:1em 0;text-align:center}
+.post-content figure img{margin:0 auto}
+.post-content figcaption{color:var(--secondary,#6c6c6c);font-size:.9em;text-align:center}
+.post-content figcaption p{margin:.3em 0}
 .preview-empty{color:#999;font-style:italic}
 `;
 
@@ -261,6 +304,7 @@ export async function renderPreview(iframe, {
   doc.body.appendChild(root);
 
   renderGalleries(doc, root);
+  renderFigures(doc, root);
 
   // 公式
   const mathEls = () => [...root.querySelectorAll('.language-math')];

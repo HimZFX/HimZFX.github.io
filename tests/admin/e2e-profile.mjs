@@ -156,6 +156,7 @@ const SUB_NEW = 'PKU Physics · 测试简介 2026';
 const SUB_EN = 'English-only subtitle for the test';
 const SITE_TITLE_NEW = "HimZFX's Lab Test";
 const ZHIHU = 'https://www.zhihu.com/people/himzfx-test';
+let FAVICON_VER = null;
 
 // ---------------------------------------------------------------------------
 
@@ -172,6 +173,27 @@ async function main() {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
+
+  // Requests that bypass the HTTP cache (fetch with cache: 'reload' → Cache-Control: no-cache on the wire).
+  // Playwright's request.headers() does not show those network-layer headers, so read them over CDP.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  const reqUrl = new Map();
+  const reqNoCache = new Map();
+  cdp.on('Network.requestWillBeSent', (e) => reqUrl.set(e.requestId, { url: e.request.url, at: Date.now() }));
+  cdp.on('Network.requestWillBeSentExtraInfo', (e) => {
+    const cc = Object.entries(e.headers || {}).find(([k]) => k.toLowerCase() === 'cache-control');
+    if (cc && /no-cache/i.test(cc[1])) reqNoCache.set(e.requestId, true);
+  });
+  const reloadsOf = (pathname, since) => [...reqUrl].filter(([id, r]) => reqNoCache.has(id) && r.at >= since &&
+    new URL(r.url).pathname === pathname);
+  const waitReload = async (pathname, since, timeout) => {
+    const end = Date.now() + timeout;
+    while (!reloadsOf(pathname, since).length) {
+      if (Date.now() > end) throw new Error(`no cache-bypassing request for ${pathname} within ${timeout} ms`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
 
   try {
     await step('open #/profile and show the current settings', async () => {
@@ -313,10 +335,21 @@ async function main() {
         const missing = missingInOrder(commentLines(before), after);
         assert.deepEqual(missing, [], `${name}.toml lost comment lines`);
       }
-      // params.toml: only the edited lines changed (buttons are reordered, i.e. same lines)
+      // params.toml: only the edited lines changed (buttons are reordered, i.e. same lines).
+      // The new favicon gets a versioned address (?v=<hash of the new icon>) so browsers do not keep
+      // showing the cached old icon (GitHub Pages serves everything with max-age=600).
       const d = lineDiff(ORIG.params, params);
-      assert.deepEqual(d.removed, ['  enabled = true', '  subtitle = "Peking University | Physics & Astrophysics | Quant Trading"'].sort());
-      assert.deepEqual(d.added, ['  enabled = false', `  subtitle = "${SUB_NEW}"`, '[[socialIcons]]', '  name = "zhihu"', `  url = "${ZHIHU}"`].sort());
+      const FAV_RE = /^  favicon(?:16x16|32x32)? = "\/favicon\.jpg\?v=([0-9a-f]{8})"$/;
+      const favAdded = d.added.filter((l) => FAV_RE.test(l));
+      assert.equal(favAdded.length, 3, `favicon, favicon16x16 and favicon32x32 are versioned:\n${d.added.join('\n')}`);
+      const vers = new Set(favAdded.map((l) => FAV_RE.exec(l)[1]));
+      assert.equal(vers.size, 1, 'all three icon links use the same version');
+      FAVICON_VER = [...vers][0];
+      assert.deepEqual(d.removed, ['  enabled = true', '  subtitle = "Peking University | Physics & Astrophysics | Quant Trading"',
+        '  favicon = "/favicon.jpg"', '  favicon16x16 = "/favicon.jpg"', '  favicon32x32 = "/favicon.jpg"'].sort());
+      assert.deepEqual(d.added.filter((l) => !FAV_RE.test(l)), ['  enabled = false', `  subtitle = "${SUB_NEW}"`, '[[socialIcons]]', '  name = "zhihu"', `  url = "${ZHIHU}"`].sort());
+      // the avatar keeps its address (the imageUrl line, with its comment, is untouched)
+      assert.equal(p.profileMode.imageUrl, 'avatar.jpg');
       const dh = lineDiff(ORIG.hugo, hugo);
       assert.deepEqual(dh.removed, ['title = "HimZFX\'s Lab"']);
       assert.deepEqual(dh.added, [`title = "${SITE_TITLE_NEW}"`]);
@@ -360,6 +393,30 @@ async function main() {
       }
       // holiday favicon disabled → its inline script is gone
       assert.ok(!zh.includes('link[rel~=') && !zh.includes("link[rel~='icon']"), 'holiday favicon script removed');
+      // the tab icon now has a new address on both sites
+      for (const html of [zh, en]) {
+        assert.ok(new RegExp(`<link rel=["']?icon["']?[^>]*favicon\\.jpg\\?v=${FAVICON_VER}`).test(html), 'versioned favicon link');
+      }
+      fs.writeFileSync(path.join(OUT, 'site-1-index.html'), zh);
+    });
+
+    await step('after publishing a new avatar, this browser refreshes its cached copy once the site serves it', async () => {
+      // GitHub Pages caches /avatar.jpg for 10 minutes; the admin re-fetches it with cache: 'reload' until
+      // the deployed bytes are the new avatar, then refreshes the home pages too.
+      const newAvatar = mock.readBytes('static/avatar.jpg');
+      const t0 = Date.now();
+      await waitReload('/avatar.jpg', t0, 30000);
+      // "deploy": the site now serves the new avatar
+      fs.copyFileSync(path.join(SITE_DIR, 'avatar.jpg'), path.join(OUT, 'site-avatar-before.jpg'));
+      const t1 = Date.now();
+      fs.writeFileSync(path.join(SITE_DIR, 'avatar.jpg'), newAvatar);
+      await waitReload('/', t1, 40000);
+      await waitReload('/en/', t1, 40000);
+      // and then it stops polling
+      const t2 = Date.now();
+      await page.waitForTimeout(17000);
+      assert.equal(reloadsOf('/avatar.jpg', t2).length, 0, 'no more re-fetches once the new avatar is live');
+      fs.copyFileSync(path.join(OUT, 'site-avatar-before.jpg'), path.join(SITE_DIR, 'avatar.jpg'));
     });
 
     await step('conflict: external edit while editing → reload keeps my edit and theirs', async () => {
@@ -418,6 +475,116 @@ async function main() {
       await page.click(tid('confirm-ok'));
       await page.waitForFunction((s) => document.querySelector(s) && document.querySelector(s).value === 'Zhong F.', tid('profile-title'));
       assert.ok(await page.isDisabled(tid('profile-save')));
+    });
+
+    await step('401 while editing: the edits and the cropped avatar survive re-login (local autosave)', async () => {
+      const SUB_AUTO = '自动保存测试简介';
+      await page.fill(tid('profile-subtitle'), SUB_AUTO);
+      const png = await makeTestPng(page);
+      await page.setInputFiles(tid('profile-avatar-file'), { name: 'me.png', mimeType: 'image/png', buffer: png });
+      await page.waitForSelector(tid('crop-stage'));
+      await page.waitForTimeout(300);
+      await page.click(tid('crop-ok'));
+      await page.waitForSelector(tid('profile-avatar-pending'), { state: 'visible' });
+      await page.waitForTimeout(1500); // autosave debounce
+      // the token is revoked; 保存并发布 gets a 401 → the view has unsaved edits, so the shell keeps it
+      // mounted and shows a re-login dialog over it (nothing is torn down, nothing is committed)
+      const token = mock.token;
+      const n = mock.commits.length;
+      mock.setToken('revoked-' + token);
+      try {
+        await page.click(tid('profile-save'));
+        await page.waitForSelector(tid('profile-confirm'));
+        await page.click(tid('confirm-ok'));
+        await page.waitForSelector(tid('reauth'), { timeout: 20000 });
+        assert.equal(mock.commits.length, n);
+        assert.equal(await page.locator(tid('login-token')).count(), 0, 'no full login page: the view stays');
+        assert.equal(await page.inputValue(tid('profile-subtitle')), SUB_AUTO, 'edits still in the form under the dialog');
+        // the local autosave holds the edits too (in case the tab dies now)
+        const rec = await page.evaluate(() => new Promise((resolve) => {
+          const r = indexedDB.open('himzfx-admin-profile');
+          r.onerror = () => resolve(null);
+          r.onsuccess = () => {
+            const db = r.result;
+            try {
+              const names = [...db.objectStoreNames];
+              const tx = db.transaction(names[0], 'readonly');
+              const g = tx.objectStore(names[0]).get('home');
+              g.onsuccess = () => { resolve(g.result ? JSON.stringify(g.result).includes('自动保存测试简介') : false); db.close(); };
+              g.onerror = () => { resolve(null); db.close(); };
+            } catch { resolve(null); db.close(); }
+          };
+        }));
+        assert.equal(rec, true, 'the unsaved subtitle is in the local autosave');
+      } finally {
+        mock.setToken(token);
+      }
+      await page.fill(tid('reauth-token'), token);
+      await page.click(tid('reauth-submit'));
+      await page.waitForSelector(tid('reauth'), { state: 'detached' });
+      assert.equal(await page.inputValue(tid('profile-subtitle')), SUB_AUTO);
+      assert.ok(await page.isVisible(tid('profile-avatar-pending')), 'the cropped avatar is back');
+      assert.ok(await page.isChecked(tid('profile-avatar-favicon')));
+      const { commit } = await publish(page, mock, ['头像', '简介']);
+      assert.deepEqual(commit.changes.map((c) => c.path).sort(), [P_PARAMS, 'static/avatar.jpg', 'static/favicon.jpg'].sort());
+      assert.equal(parseToml(mock.readFile(P_PARAMS)).profileMode.subtitle, SUB_AUTO);
+      const a = await decodeJpeg(page, mock.readBytes('static/avatar.jpg'));
+      assert.equal(a.w, 512);
+      // published → the local copy is gone: a fresh tab shows no restore banner
+      await page.waitForTimeout(500);
+      const p2 = await context.newPage();
+      p2.on('pageerror', (e) => pageErrors.push('p2: ' + e.message));
+      await openAdmin(p2, mock, { path: '/admin/#/profile' });
+      await waitView(p2, 'profile');
+      await p2.waitForSelector(tid('profile-save'));
+      await p2.waitForTimeout(800);
+      assert.equal(await p2.locator(tid('profile-restore')).count(), 0, 'no stale local copy after publishing');
+      await p2.close();
+    });
+
+    await step('tab closed with unpublished edits → a new tab offers 恢复 / 丢弃', async () => {
+      await page.fill(tid('profile-title'), 'Closed-tab name');
+      await page.waitForTimeout(1500);
+      const p2 = await context.newPage();
+      p2.on('pageerror', (e) => pageErrors.push('p2: ' + e.message));
+      await openAdmin(p2, mock, { path: '/admin/#/profile' });
+      await waitView(p2, 'profile');
+      await p2.waitForSelector(tid('profile-restore'), { timeout: 10000 });
+      await p2.click(tid('profile-restore-discard'));
+      await p2.click(tid('confirm-ok'));
+      await p2.waitForSelector(tid('profile-restore'), { state: 'detached' });
+      assert.equal(await p2.inputValue(tid('profile-title')), 'Zhong F.');
+      assert.ok(await p2.isDisabled(tid('profile-save')));
+      await p2.close();
+      // clean up the first tab
+      await page.click(tid('profile-reset'));
+      await page.click(tid('confirm-ok'));
+      await page.waitForFunction((s) => document.querySelector(s) && document.querySelector(s).value === 'Zhong F.', tid('profile-title'));
+      await page.waitForTimeout(1200);
+      const p3 = await context.newPage();
+      await openAdmin(p3, mock, { path: '/admin/#/profile' });
+      await waitView(p3, 'profile');
+      await p3.waitForSelector(tid('profile-save'));
+      await p3.waitForTimeout(800);
+      assert.equal(await p3.locator(tid('profile-restore')).count(), 0, '放弃修改 also removes the local copy');
+      await p3.close();
+    });
+
+    await step('imageUrl pointing to a PNG: the current avatar is read from that file in the repo', async () => {
+      const params = mock.readFile(P_PARAMS);
+      const png = await makeTestPng(page);
+      mock.setFiles({ [P_PARAMS]: params.replace('imageUrl = "avatar.jpg"', 'imageUrl = "avatar.png"'), 'static/avatar.png': png });
+      const p2 = await context.newPage();
+      p2.on('pageerror', (e) => pageErrors.push('p2: ' + e.message));
+      await openAdmin(p2, mock, { path: '/admin/#/profile' });
+      await waitView(p2, 'profile');
+      await p2.waitForSelector(tid('profile-save'));
+      await p2.waitForFunction((s) => { const i = document.querySelector(s); return i && !i.hidden && i.complete && i.naturalWidth > 0; }, tid('profile-avatar-img'), { timeout: 10000 });
+      const img = await p2.$eval(tid('profile-avatar-img'), (i) => ({ src: i.src, w: i.naturalWidth, h: i.naturalHeight }));
+      assert.ok(img.src.startsWith('blob:'), `read from the repo, not the deployed site: ${img.src}`);
+      assert.deepEqual([img.w, img.h], [800, 600], 'the PNG itself is shown');
+      await p2.close();
+      mock.setFiles({ [P_PARAMS]: params, 'static/avatar.png': null });
     });
 
     await step('mobile layout (390×844): no horizontal scroll, crop modal works', async () => {

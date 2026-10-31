@@ -220,10 +220,12 @@ function syncInert() {
     else app.removeAttribute('inert');
   }
   document.documentElement.classList.toggle('ui-locked', blocking);
-  // 只有最上层可以交互
+  // 只有最上层可以交互；画面上的叠放顺序也和打开顺序一致（例如发布遮罩打开之后弹出的对话框要画在遮罩上面，
+  // 否则对话框被遮罩盖住却仍然能被点到）
   layers.forEach((l, i) => {
     if (i === layers.length - 1) l.el.removeAttribute('inert');
     else l.el.setAttribute('inert', '');
+    l.el.style.zIndex = String(1000 + Math.min(i, 45) * 2);
   });
 }
 
@@ -309,6 +311,22 @@ export function closeAllLayers() {
   }
 }
 
+/**
+ * （扩展）关闭所有普通模态框（不含「正在发布…」遮罩和 sticky 模态框），用于切换页面时：
+ * 旧页面的对话框不能留在新页面上面（否则点「确定」会对已经关掉的页面生效）。
+ * 和点「取消」一样：confirmDialog 得到 false、promptDialog 得到 null、onClose 会被调用。
+ * @returns {number} 关闭的个数
+ */
+export function closeModals() {
+  let n = 0;
+  for (const l of [...layers].reverse()) {
+    if (l.kind !== 'modal' || l.sticky) continue;
+    n++;
+    try { l.close ? l.close() : popLayer(l); } catch (err) { console.error(err); popLayer(l); }
+  }
+  return n;
+}
+
 // ---------------------------------------------------------------------------
 // 按钮忙碌状态
 
@@ -382,9 +400,10 @@ let modalSeq = 0;
  *   - actions[].onClick(close) 可以是 async；Promise 未完成时按钮显示忙碌；抛错会以 toast 提示且不关闭。
  *     没有 onClick 的按钮直接关闭。
  *   - dismissible（扩展，默认 true）：false 时 Esc / 点背景 / × 都不能关闭。
+ *   - sticky（扩展，默认 false）：true 时切换页面也不会自动关闭（例如「登录已失效」）。
  * @returns {{ el: HTMLElement, body: HTMLElement, footer: HTMLElement, close: () => void }}
  */
-export function modal({ title = '', content, actions = [], wide = false, onClose, dismissible = true, className } = {}) {
+export function modal({ title = '', content, actions = [], wide = false, onClose, dismissible = true, className, sticky = false, testid } = {}) {
   const id = `modal-${++modalSeq}`;
   let closed = false;
   const body = h('div', { class: 'modal-body' });
@@ -427,6 +446,7 @@ export function modal({ title = '', content, actions = [], wide = false, onClose
     class: ['modal', wide && 'modal-wide', className],
     role: 'dialog',
     'aria-modal': 'true',
+    dataset: { testid },
     'aria-labelledby': title ? `${id}-title` : undefined,
     tabindex: '-1',
   },
@@ -445,7 +465,7 @@ export function modal({ title = '', content, actions = [], wide = false, onClose
     downOnBackdrop = false;
   });
 
-  const layer = { el: backdrop, kind: 'modal', trap: true, onEscape: dismissible ? close : () => {}, close };
+  const layer = { el: backdrop, kind: 'modal', trap: true, sticky: !!sticky, onEscape: dismissible ? close : () => {}, close };
   pushLayer(layer);
   requestAnimationFrame(() => { if (!closed) focusFirst(dialog); });
   return { el: dialog, body, footer, close };
@@ -565,10 +585,11 @@ const MAX_TOASTS = 4;
 /**
  * 轻提示。错误默认显示更久（6 秒）；timeout = 0 表示一直显示直到点击。
  * @param {string} message
- * @param {{ type?: 'info'|'success'|'error'|'warning', timeout?: number }} [opts]
+ * @param {{ type?: 'info'|'success'|'error'|'warning', timeout?: number, link?: { text: string, href: string } }} [opts]
+ *        link（扩展）：在提示里附一个在新标签页打开的链接（例如「查看文章 ↗」）。只接受 http(s) 地址。
  * @returns {{ close(): void }}
  */
-export function toast(message, { type = 'info', timeout } = {}) {
+export function toast(message, { type = 'info', timeout, link } = {}) {
   if (!TOAST_ICONS[type]) type = 'info';
   const ms = timeout ?? (type === 'error' ? 6000 : type === 'warning' ? 4500 : 3000);
   const stack = getToastStack();
@@ -579,6 +600,7 @@ export function toast(message, { type = 'info', timeout } = {}) {
   },
     h('span', { class: 'toast-icon' }, svgIcon(TOAST_ICONS[type])),
     h('span', { class: 'toast-text' }, String(message ?? '')),
+    toastLink(link),
     h('button', { type: 'button', class: 'toast-close', 'aria-label': '关闭提示' }, svgIcon('close')));
   let timer = null;
   let closed = false;
@@ -604,6 +626,19 @@ export function toast(message, { type = 'info', timeout } = {}) {
   if (live.length > MAX_TOASTS) live.slice(0, live.length - MAX_TOASTS).forEach((t) => t.remove());
   arm();
   return { close };
+}
+
+function toastLink(link) {
+  if (!link || !link.href || !link.text) return null;
+  let href;
+  try {
+    const u = new URL(String(link.href), location.href);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    href = u.href;
+  } catch {
+    return null;
+  }
+  return h('a', { class: 'toast-link', href, target: '_blank', rel: 'noopener noreferrer', dataset: { testid: 'toast-link' } }, String(link.text));
 }
 
 /** 把任意错误转成给用户看的一句中文。 */

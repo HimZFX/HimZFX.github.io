@@ -312,7 +312,13 @@ export default async function mount(container, params, ctx) {
     render(draftsHost, draftsCard(ctx, state.drafts, {
       onChanged: refreshDrafts,
       describe: (d) => {
-        if (!d.path) return '新文章，还没有发表过';
+        if (!d.path) {
+          // 发表成功后页面被关掉 / 切到后台，草稿没来得及删除：网站上已经有这个文件名的文章了
+          if (d.slug && /^[\w.-]+$/.test(d.slug) && repo.has(`${PATHS.posts}/${d.slug}.md`)) {
+            return `可能已经发表过了（网站上已有 ${d.slug}.md），打开后可以直接跳到那篇文章`;
+          }
+          return '新文章，还没有发表过';
+        }
         const info = parseContentPath(d.path, langs);
         const which = info && info.lang ? `${ctx.langName(info.lang)}专属版本` : '共用版本';
         return `${which} · ${d.path.replace(/^content\/posts\//, '')}`;
@@ -351,7 +357,11 @@ export default async function mount(container, params, ctx) {
     const fm = fmOf(mainPath);
     const perLang = present.map((lang) => {
       const p = status.perLang[lang];
-      return { lang, path: p, draft: isDraftFm(fmOf(p)), fm: fmOf(p) };
+      const draft = isDraftFm(fmOf(p));
+      // 日期还没到：Hugo 默认不生成未来日期的文章，网站上暂时看不到
+      const t = dateValue(fmOf(p).date);
+      const future = !draft && Number.isFinite(t) && t > Date.now() + 60 * 1000;
+      return { lang, path: p, draft, future, fm: fmOf(p) };
     });
     const fmByPath = {};
     for (const p of Object.values(group.variants)) fmByPath[p] = fmOf(p);
@@ -464,10 +474,19 @@ export default async function mount(container, params, ctx) {
     const hasLocalDraft = Object.values(g.variants).some((p) => draftPaths.has(p));
 
     // 发表状态：各语言一致时一个徽标，不一致时分别显示
-    const uniform = r.perLang.every((x) => x.draft === r.perLang[0].draft);
+    const stateOf = (x) => (x.draft ? 'draft' : x.future ? 'future' : 'live');
+    const STATE_TEXT = { draft: '草稿', future: '定时发表', live: '已发表' };
+    const STATE_COLOR = { draft: 'gray', future: 'blue', live: 'green' };
+    const futureTitle = (x) => `日期是 ${x.fm.date instanceof Date ? x.fm.date.toISOString() : String(x.fm.date)}，还没到。网站只显示日期已经到了的文章：到那个时间之后网站下一次更新时才会出现。`;
+    const stateBadge = (x, text) => {
+      const b = badge(text, STATE_COLOR[stateOf(x)]);
+      if (x.future) { b.title = futureTitle(x); b.dataset.state = 'future'; }
+      return b;
+    };
+    const uniform = r.perLang.every((x) => stateOf(x) === stateOf(r.perLang[0]));
     const statusBadges = !r.perLang.length ? [] : uniform
-      ? [r.perLang[0].draft ? badge('草稿', 'gray') : badge('已发表', 'green')]
-      : r.perLang.map((x) => badge(`${ctx.langName(x.lang)}${x.draft ? '草稿' : '已发表'}`, x.draft ? 'gray' : 'green'));
+      ? [stateBadge(r.perLang[0], STATE_TEXT[stateOf(r.perLang[0])])]
+      : r.perLang.map((x) => stateBadge(x, `${ctx.langName(x.lang)}${STATE_TEXT[stateOf(x)]}`));
 
     const langText = statusText(r.status, ctx);
     const langBadge = badge(langText, r.status.kind === 'split' ? 'blue' : 'gray');

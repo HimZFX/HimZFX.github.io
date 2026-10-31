@@ -27,6 +27,10 @@
 .pf-card-hint .kbd { font-size: 12px; }
 .pf-banner { margin-bottom: 14px; font-size: 13px; }
 
+/* 本机自动保存：「发现本机未发布的首页修改」 */
+.pf-restore-host:empty { display: none; }
+.pf-restore { margin-bottom: 20px; }
+
 .pf-grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

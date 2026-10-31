@@ -36,13 +36,17 @@
   --card: #fff;
   --text: #1f2329;
   --text-2: #4e5969;
-  --muted: #8f959e;
+  /* 次要文字：#646a73 在白底约 5.5:1、在 --bg 上约 5:1（WCAG AA 4.5:1）；原来的 #8f959e 只有约 3:1 */
+  --muted: #646a73;
   --border: #e5e6eb;
   --border-strong: #c9cdd4;
   --primary: #07c160;
   --primary-hover: #06ad56;
   --primary-soft: #e8f8ef;
   --primary-text: #059a4c;
+  /* 主按钮底色：白字在 #07c160 上只有约 2.4:1，按钮用深一点的绿（约 4.6:1），其余点缀仍用品牌绿 */
+  --primary-strong: #06873f;
+  --primary-strong-hover: #057536;
   --danger: #f54a45;
   --danger-hover: #e03e39;
   --danger-soft: #feeceb;
@@ -435,8 +439,8 @@ p:last-child { margin-bottom: 0; }
 .btn:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--primary); }
 .btn .icon { width: 16px; height: 16px; }
 
-.btn-primary { --btn-fg: #fff; background: var(--primary); border-color: var(--primary); }
-.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn-primary { --btn-fg: #fff; background: var(--primary-strong); border-color: var(--primary-strong); }
+.btn-primary:hover { background: var(--primary-strong-hover); border-color: var(--primary-strong-hover); }
 
 .btn-danger { --btn-fg: #fff; background: var(--danger); border-color: var(--danger); }
 .btn-danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
@@ -980,6 +984,7 @@ a.list-item-title:hover { color: var(--primary-text); text-decoration: none; }
   cursor: pointer;
 }
 .toast-close:hover { background: var(--hover); color: var(--text); }
+.toast-link { flex: none; align-self: center; margin-left: 4px; font-weight: 600; white-space: nowrap; }
 .toast-close .icon { width: 13px; height: 13px; }
 @keyframes ui-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
@@ -1026,8 +1031,10 @@ a.list-item-title:hover { color: var(--primary-text); text-decoration: none; }
 .login-reveal[aria-pressed="true"] { color: var(--primary-text); }
 .checkbox-note { font-size: 12.5px; }
 .login-error { padding: 8px 12px; border-radius: 8px; background: var(--danger-soft); }
-.login-safe { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0; font-size: 13px; text-align: center; }
-.login-safe .icon { width: 14px; height: 14px; }
+.login-safe { display: flex; align-items: flex-start; justify-content: center; gap: 6px; margin: 0; font-size: 13px; line-height: 1.6; text-align: left; }
+.login-safe .icon { flex: none; width: 14px; height: 14px; margin-top: 3px; }
+.login-remember { gap: 4px; }
+.login-remember .hint { font-size: 12.5px; line-height: 1.6; color: var(--muted); padding-left: 26px; }
 .login-guide { padding: 24px 28px; }
 .login-steps { display: flex; flex-direction: column; gap: 16px; margin: 0; padding: 0; list-style: none; }
 .login-step { display: flex; gap: 12px; }
@@ -1060,8 +1067,12 @@ a.list-item-title:hover { color: var(--primary-text); text-decoration: none; }
   .brand-text { display: none; }
   .brand-mark { width: 28px; height: 28px; font-size: 15px; }
   .topbar-title { font-size: 16px; }
-  .topbar-actions { gap: 2px; }
-  .topbar-actions .btn-sm { width: 34px; padding: 0; }
+  .topbar-actions { gap: 6px; }
+  .topbar-actions .btn-sm { width: 40px; padding: 0; }
+
+  /* 手指点按的目标至少 40px（小按钮、图标按钮在手机上放大，避免点「查看」时误点到旁边的「删除」） */
+  .btn-sm { min-height: 40px; }
+  .btn-icon, .btn-sm.btn-icon { min-width: 40px; min-height: 40px; }
   .user-chip { padding: 0 2px; }
   .deploy-indicator { height: 28px; padding: 0 10px; font-size: 12px; }
   .deploy-text { display: none; }

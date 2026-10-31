@@ -18,7 +18,7 @@
 
 import {
   h, svgIcon, render, clear, toast, modal, confirmDialog, withBusy, badge, loadingState,
-  errorState, errorMessage,
+  errorState, errorMessage, formatDate,
 } from '../ui.js';
 import { parseToml, getIn, setValue, replaceArrayOfTables, removeTableIfEmpty } from '../tomlpatch.js';
 import { loadImage, cropToBlob, extOf } from '../images.js';
@@ -103,15 +103,171 @@ function toOut(it, keys) {
  */
 export function avatarTarget(imageUrl) {
   const fallback = { path: PATHS.avatar, imageUrl: PATHS.avatar.replace(/^static\//, '') };
-  let u = str(imageUrl).trim();
-  if (!u || /^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith('//')) return fallback;
-  u = u.split(/[?#]/)[0].replace(/^\/+/, '');
-  try { u = decodeURIComponent(u); } catch { /* 保持原样 */ }
-  if (!u || u.endsWith('/') || u.split('/').some((seg) => seg === '..' || seg === '.' || seg === '') || u.includes('\\')) return fallback;
-  if (/^admin\//.test(u)) return fallback;
+  const u = staticRel(imageUrl);
+  if (!u) return fallback;
   if (/\.jpe?g$/i.test(u)) return { path: 'static/' + u, imageUrl: str(imageUrl).trim() };
   const jpg = u.replace(/\.[^./]*$/, '') + '.jpg';
   return { path: 'static/' + jpg, imageUrl: jpg };
+}
+
+/** 站内图片地址 → static/ 下的相对路径（去掉 ?#、开头的 /）；外部网址 / 不安全的路径 → null。 */
+function staticRel(imageUrl) {
+  let u = str(imageUrl).trim();
+  if (!u || /^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith('//')) return null;
+  u = u.split(/[?#]/)[0].replace(/^\/+/, '');
+  try { u = decodeURIComponent(u); } catch { /* 保持原样 */ }
+  if (!u || u.endsWith('/') || u.split('/').some((seg) => seg === '..' || seg === '.' || seg === '') || u.includes('\\')) return null;
+  if (/^admin\//.test(u)) return null;
+  return u;
+}
+
+/**
+ * 显示「当前头像」时读仓库里的哪个文件：就是 imageUrl 指向的文件（不像 avatarTarget 那样改成 .jpg）。
+ * @returns {string|null} 例如 'static/avatar.png'；外部网址 → null
+ */
+export function avatarSourcePath(imageUrl) {
+  const u = staticRel(imageUrl);
+  return u ? 'static/' + u : null;
+}
+
+const IMAGE_MIME = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
+  svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
+};
+
+/** 32 位 FNV-1a → 8 位十六进制。用作图标地址里的版本号（内容变了，地址就变）。 */
+export function shortHash(bytes) {
+  let x = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    x ^= bytes[i];
+    x = Math.imul(x, 0x01000193);
+  }
+  return (x >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * [assets] 里指向我们写的 static/favicon.jpg 的图标地址，换成带版本号的新地址（'/favicon.jpg?v=1a2b3c4d'）。
+ * GitHub Pages 给每个文件 10 分钟缓存，浏览器还会单独缓存标签页图标；地址不变时换了图标也看不到。
+ * 指向别的文件 / 外部网址时返回 null（不改）。
+ */
+export function versionedFaviconHref(cur, ver) {
+  const s = str(cur).trim();
+  if (!s || !ver || /^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith('//')) return null;
+  const pathPart = s.split(/[?#]/)[0];
+  if (pathPart.replace(/^\/+/, '') !== PATHS.favicon.replace(/^static\//, '')) return null;
+  const next = `${pathPart}?v=${ver}`;
+  return next === s ? null : next;
+}
+
+// ---------------------------------------------------------------------------
+// 本机自动保存（IndexedDB）
+//
+// 首页设置的修改（含裁剪好的新头像）只在内存里的话，手机切到后台被系统回收、iOS 关标签页
+// （不触发 beforeunload）、选照片时页面被重新加载、令牌失效（外壳直接卸载视图）都会让它们消失。
+// 所以每次修改后（防抖）存一份到本机，下次打开「首页设置」时提示恢复。
+// 用单独的数据库：drafts.js 的草稿库会被「文章 / 页面」列表当成文章草稿列出来。
+// 和 drafts.js 一样：任何失败都安静地返回空结果，永远不影响正常使用。
+
+const LOCAL_DB = 'himzfx-admin-profile';
+const LOCAL_STORE = 'state';
+const LOCAL_KEY = 'home';
+const LOCAL_VERSION = 1;
+let localDbPromise = null;
+
+function localDb() {
+  if (localDbPromise) return localDbPromise;
+  localDbPromise = new Promise((resolve) => {
+    let idb = null;
+    try { idb = typeof indexedDB !== 'undefined' ? indexedDB : null; } catch { idb = null; }
+    if (!idb) return resolve(null);
+    let settled = false;
+    const done = (db) => {
+      if (settled) { if (db) try { db.close(); } catch { /* ignore */ } return; }
+      settled = true;
+      clearTimeout(timer);
+      resolve(db);
+    };
+    const timer = setTimeout(() => done(null), 4000);
+    let req;
+    try { req = idb.open(LOCAL_DB, 1); } catch { return done(null); }
+    req.onupgradeneeded = () => {
+      try { if (!req.result.objectStoreNames.contains(LOCAL_STORE)) req.result.createObjectStore(LOCAL_STORE); } catch { /* onerror */ }
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { try { db.close(); } catch { /* ignore */ } localDbPromise = null; };
+      db.onclose = () => { localDbPromise = null; };
+      done(db);
+    };
+    req.onerror = (e) => { if (e && e.preventDefault) e.preventDefault(); done(null); };
+  }).then((db) => {
+    if (!db) localDbPromise = null;
+    return db;
+  });
+  return localDbPromise;
+}
+
+async function localOp(mode, fn, fallback) {
+  const db = await localDb();
+  if (!db) return fallback;
+  return new Promise((resolve) => {
+    let tx;
+    let get;
+    try {
+      tx = db.transaction(LOCAL_STORE, mode);
+      get = fn(tx.objectStore(LOCAL_STORE));
+    } catch {
+      return resolve(fallback);
+    }
+    tx.oncomplete = () => { try { resolve(typeof get === 'function' ? get() : get); } catch { resolve(fallback); } };
+    tx.onerror = (e) => { if (e && e.preventDefault) e.preventDefault(); resolve(fallback); };
+    tx.onabort = () => resolve(fallback);
+  });
+}
+
+const localLoad = () => localOp('readonly', (s) => { const r = s.get(LOCAL_KEY); return () => r.result; }, undefined).catch(() => undefined);
+const localPut = (rec) => localOp('readwrite', (s) => { s.put(rec, LOCAL_KEY); return () => true; }, false).catch(() => false);
+const localDelete = () => localOp('readwrite', (s) => { s.delete(LOCAL_KEY); return () => true; }, false).catch(() => false);
+
+// ---------------------------------------------------------------------------
+// 发布新头像后刷新本机浏览器缓存
+//
+// GitHub Pages 的每个文件都带 Cache-Control: max-age=600。头像地址（/avatar.jpg）不变，
+// 所以这个浏览器 10 分钟内打开网站仍会显示缓存里的旧头像，看起来像「没改成功」。
+// 发布后在后台用 cache: 'reload' 重新下载它（这会更新浏览器缓存），直到网站上的文件就是新头像
+// （= 部署完成），然后把各语言首页也刷新一次。只访问本站（与后台同源），不带令牌。
+
+let warmGen = 0;
+
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function refreshSiteCache({ url, bytes }, pages, { firstDelay = 10000, every = 15000, maxMs = 8 * 60000 } = {}) {
+  if (typeof fetch !== 'function' || !bytes) return;
+  const gen = ++warmGen;
+  const t0 = Date.now();
+  const get = async (u) => {
+    const r = await fetch(u, { cache: 'reload', credentials: 'same-origin' });
+    const buf = new Uint8Array(await r.arrayBuffer()); // 读完正文，缓存条目才完整
+    return r.ok ? buf : null;
+  };
+  const tick = async () => {
+    if (gen !== warmGen) return; // 又发布了新头像：由新的任务接手
+    let live = false;
+    try {
+      const got = await get(url);
+      live = !!got && sameBytes(got, bytes);
+    } catch { /* 网络问题：下次再试 */ }
+    if (live) {
+      for (const p of pages) get(p).catch(() => {});
+      return;
+    }
+    if (Date.now() - t0 < maxMs) setTimeout(tick, every);
+  };
+  setTimeout(tick, firstDelay);
 }
 
 /**
@@ -146,6 +302,65 @@ function cloneModel(m) {
   return { ...m, overrides, buttons: cloneList(m.buttons), social: cloneList(m.social), rules: cloneList(m.rules) };
 }
 
+const LISTS = [['buttons', BUTTON_KEYS], ['social', SOCIAL_KEYS], ['rules', RULE_KEYS]];
+
+/** 模型 → 能存进 IndexedDB 的普通对象（Symbol 键存不进去，原始 TOML 对象放到 orig 里）。 */
+function serModel(m, { withOrig = true } = {}) {
+  const overrides = {};
+  for (const [k, v] of Object.entries(m.overrides)) overrides[k] = { title: v.title, subtitle: v.subtitle };
+  const out = { title: m.title, subtitle: m.subtitle, imageUrl: m.imageUrl, siteTitle: m.siteTitle, holidayEnabled: m.holidayEnabled, overrides };
+  for (const [k, keys] of LISTS) {
+    out[k] = m[k].map((it) => {
+      const o = {};
+      for (const key of keys) o[key] = it[key];
+      if (withOrig && it[ORIG]) o.orig = it[ORIG];
+      return o;
+    });
+  }
+  return out;
+}
+
+/**
+ * serModel 的反过程。没有 orig 的项，从 ref（当前文件的模型）里找内容相同的项借用它的原始对象，
+ * 这样没改过的项写回时仍然原样保留（包括我们不认识的键）。
+ */
+function deserModel(o, ref) {
+  const src = plainObj(o) || {};
+  const overrides = {};
+  for (const [k, v] of Object.entries(plainObj(src.overrides) || {})) {
+    overrides[k] = { title: str(v && v.title), subtitle: str(v && v.subtitle) };
+  }
+  const m = {
+    title: str(src.title), subtitle: str(src.subtitle), imageUrl: str(src.imageUrl), siteTitle: str(src.siteTitle),
+    holidayEnabled: src.holidayEnabled === true, overrides,
+  };
+  for (const [k, keys] of LISTS) {
+    const refItems = ref ? ref[k] : [];
+    m[k] = (Array.isArray(src[k]) ? src[k] : []).filter(plainObj).map((x) => {
+      const it = {};
+      for (const key of keys) it[key] = str(x[key]);
+      let orig = plainObj(x.orig);
+      if (!orig) {
+        const same = refItems.find((r) => keys.every((key) => r[key] === it[key]));
+        orig = same ? same[ORIG] : null;
+      }
+      if (orig) it[ORIG] = orig;
+      return it;
+    });
+  }
+  return m;
+}
+
+/** 让 m.overrides 正好包含 langs 这些语言（缺的从 fallback 补，没有就是空）。 */
+function fitOverrides(m, langs, fallback) {
+  const overrides = {};
+  for (const l of langs) {
+    const v = m.overrides[l] || (fallback && fallback.overrides[l]) || { title: '', subtitle: '' };
+    overrides[l] = { title: str(v.title), subtitle: str(v.subtitle) };
+  }
+  return { ...m, overrides };
+}
+
 /** 各区块是否有修改（不含头像）。 */
 function changedSections(base, form) {
   const names = form.title !== base.title || form.subtitle !== base.subtitle || form.siteTitle !== base.siteTitle ||
@@ -163,9 +378,10 @@ function changedSections(base, form) {
  * @returns {{ params: string, languages: string, hugo: string }}
  * @throws {TomlPatchError} 中文消息
  */
-function patchTexts(texts, base, form, { avatarImageUrl } = {}) {
+function patchTexts(texts, base, form, { avatarImageUrl, assetHrefs } = {}) {
   let p = texts.params;
   if (form.title !== base.title) p = setValue(p, 'profileMode', 'title', form.title);
+  for (const [key, href] of Object.entries(assetHrefs || {})) p = setValue(p, 'assets', key, href);
   if (form.subtitle !== base.subtitle) p = setValue(p, 'profileMode', 'subtitle', form.subtitle);
   if (avatarImageUrl != null && avatarImageUrl !== base.imageUrl) p = setValue(p, 'profileMode', 'imageUrl', avatarImageUrl);
   if (!sameList(form.buttons, base.buttons, BUTTON_KEYS)) {
@@ -369,6 +585,8 @@ export default async function mount(container, params, ctx) {
     urls: new Set(),
     imageShas: {},      // 读取设置时头像 / 图标文件的 sha（发布时作为 baseSha）
     previewFavUrl: null, // 预览里标签页图标用的地址
+    // 本机自动保存：ready = 已确认本机没有待恢复的记录（或已经恢复 / 丢弃），之后的修改才会保存
+    local: { ready: false, pending: null, timer: 0, stored: false, ok: false, warned: false, chain: Promise.resolve() },
   };
 
   const objectUrl = (blob) => {
@@ -428,10 +646,10 @@ export default async function mount(container, params, ctx) {
   }
 
   async function loadImageFromRepo(path) {
-    if (!repo.has(path)) return null;
+    if (!path || !repo.has(path)) return null;
     try {
       const bytes = await repo.readBytes(path);
-      return objectUrl(new Blob([bytes], { type: 'image/jpeg' }));
+      return objectUrl(new Blob([bytes], { type: IMAGE_MIME[extOf(path)] || 'image/jpeg' }));
     } catch (err) {
       console.warn('[profile] read image failed', path, err);
       return null;
@@ -439,14 +657,20 @@ export default async function mount(container, params, ctx) {
   }
 
   async function loadCurrentImages() {
-    const target = avatarTarget(st.base.imageUrl);
-    const [a, f] = await Promise.all([loadImageFromRepo(target.path), loadImageFromRepo(PATHS.favicon)]);
+    // 先读 imageUrl 真正指向的文件（可能是 .png），再读我们会写入的 .jpg
+    const source = avatarSourcePath(st.base.imageUrl);
+    const target = avatarTarget(st.base.imageUrl).path;
+    const [a, f] = await Promise.all([
+      loadImageFromRepo(source).then((u) => u || (target !== source ? loadImageFromRepo(target) : null)),
+      loadImageFromRepo(PATHS.favicon),
+    ]);
     if (st.disposed) return;
     dropUrl(st.currentAvatarUrl);
     dropUrl(st.currentFaviconUrl);
     // 仓库里读不到时退回网站上的图片（加时间戳避免缓存）
+    const rel = st.base.imageUrl.replace(/^\/+/, '');
     const siteImg = /^https?:/i.test(st.base.imageUrl) ? st.base.imageUrl
-      : st.base.imageUrl ? ctx.siteUrl + st.base.imageUrl.replace(/^\/+/, '') + '?t=' + Date.now() : null;
+      : rel ? ctx.siteUrl + rel + (rel.includes('?') ? '&' : '?') + 't=' + Date.now() : null;
     st.currentAvatarUrl = a || siteImg;
     st.currentFaviconUrl = f;
     refreshImages();
@@ -476,6 +700,10 @@ export default async function mount(container, params, ctx) {
   const ui = {};
   buildUi();
   loadCurrentImages();
+  localLoad().then(checkLocal);
+  const onHidden = (e) => { if (e.type === 'pagehide' || document.visibilityState === 'hidden') flushLocal(); };
+  document.addEventListener('visibilitychange', onHidden);
+  window.addEventListener('pagehide', onHidden);
 
   function buildUi() {
     const saveBtn = h('button', { type: 'button', class: 'btn btn-primary', dataset: { testid: 'profile-save' } }, svgIcon('send'), '保存并发布');
@@ -488,6 +716,7 @@ export default async function mount(container, params, ctx) {
     ui.saveHint = saveHint;
 
     ui.cards = {};
+    ui.restoreHost = h('div', { class: 'pf-restore-host' });
     const main = h('div', { class: 'pf-main stack' },
       avatarCard(), namesCard(), buttonsCard(), socialCard(), holidayCard());
     const side = h('aside', { class: 'pf-side' }, previewCard());
@@ -496,9 +725,11 @@ export default async function mount(container, params, ctx) {
         h('div', {},
           h('h1', {}, '首页设置'),
           h('p', { class: 'page-desc' }, '网站首页的头像、名字、按钮和社交链接。改完点「保存并发布」，约 1–2 分钟后生效。'))),
+      ui.restoreHost,
       h('div', { class: 'pf-layout' }, main, side),
       h('div', { class: 'pf-savebar', dataset: { testid: 'profile-savebar' } },
         saveHint, h('div', { class: 'pf-savebar-actions' }, resetBtn, saveBtn)));
+    renderRestoreBanner();
     update();
   }
 
@@ -555,7 +786,7 @@ export default async function mount(container, params, ctx) {
           h('div', { class: 'row' }, pickBtn, undoBtn, pending, fileInput),
           favLabel,
           info,
-          h('div', { class: 'hint muted small' }, '新头像发布后约 1–2 分钟生效，浏览器可能缓存几分钟。'))));
+          h('div', { class: 'hint muted small' }, '新头像发布后约 1–2 分钟生效（这台设备会自动刷新缓存；其他设备上可能要再过几分钟才显示新头像）。'))));
   }
 
   function refreshImages() {
@@ -609,13 +840,29 @@ export default async function mount(container, params, ctx) {
     }
     const result = await openCropper(image, { width: w, height: hgt });
     if (!result || st.disposed) return;
+    let buf;
+    let favBuf;
+    try {
+      [buf, favBuf] = await Promise.all([result.blob.arrayBuffer(), result.favBlob.arrayBuffer()]);
+    } catch {
+      toast('处理图片时出错了，请再试一次', { type: 'error' });
+      return;
+    }
+    if (st.disposed) return;
     if (st.avatar) {
       dropUrl(st.avatar.url);
       dropUrl(st.avatar.favUrl);
     }
-    st.avatar = { ...result, url: objectUrl(result.blob), favUrl: objectUrl(result.favBlob) };
+    st.avatar = makeAvatar(buf, favBuf);
     refreshImages();
     update();
+  }
+
+  /** 待发布的新头像。buf / favBuf 是 JPEG 字节（本机自动保存直接存它们）；favVer = 图标地址里的版本号。 */
+  function makeAvatar(buf, favBuf) {
+    const blob = new Blob([buf], { type: 'image/jpeg' });
+    const favBlob = new Blob([favBuf], { type: 'image/jpeg' });
+    return { blob, favBlob, buf, favBuf, favVer: shortHash(new Uint8Array(favBuf)), url: objectUrl(blob), favUrl: objectUrl(favBlob) };
   }
 
   // ---------- 名字与简介 ----------
@@ -1042,7 +1289,170 @@ export default async function mount(container, params, ctx) {
     }
     refreshOverridePlaceholders();
     refreshPreview();
+    scheduleLocal();
     return { n, errors };
+  }
+
+  // ---------- 本机自动保存 ----------
+  function currentShas() {
+    const out = {};
+    for (const k of ['params', 'languages', 'hugo']) out[st.files[k].path] = st.files[k].sha || null;
+    for (const [p, sha] of Object.entries(st.imageShas)) out[p] = sha || null;
+    return out;
+  }
+
+  function localRecord(withOrig = true) {
+    return {
+      v: LOCAL_VERSION,
+      updatedAt: Date.now(),
+      shas: currentShas(),
+      overrideLangs: [...st.overrideLangs],
+      base: serModel(st.base, { withOrig }),
+      form: serModel(st.form, { withOrig }),
+      useFavicon: st.useFavicon,
+      avatar: st.avatar ? { buf: st.avatar.buf, favBuf: st.avatar.favBuf, favVer: st.avatar.favVer } : null,
+    };
+  }
+
+  function scheduleLocal() {
+    const L = st.local;
+    if (!L.ready) {
+      if (L.pending && !L.warned && isDirty()) {
+        L.warned = true;
+        toast('请先在上方选择「恢复」或「丢弃」本机保存的修改，之后的修改才会自动保存', { type: 'warning', timeout: 7000 });
+      }
+      return;
+    }
+    clearTimeout(L.timer);
+    L.timer = setTimeout(flushLocal, 700);
+  }
+
+  /** 立刻把当前状态写到本机（没有修改 = 删除本机记录）。按顺序执行，后写的一定覆盖先写的。 */
+  function flushLocal() {
+    const L = st.local;
+    clearTimeout(L.timer);
+    L.timer = 0;
+    if (!L.ready || !st.base || !st.form) return L.chain;
+    if (!isDirty()) {
+      if (!L.stored) return L.chain;
+      L.stored = false;
+      L.chain = L.chain.then(() => localDelete());
+      return L.chain;
+    }
+    let rec;
+    try { rec = localRecord(); } catch (err) { console.warn('[profile] local record failed', err); return L.chain; }
+    L.stored = true;
+    L.chain = L.chain.then(async () => {
+      // 原始 TOML 对象偶尔可能无法存入（极少见）：去掉它们再试一次
+      let ok = await localPut(rec);
+      if (!ok) ok = await localPut({ ...rec, base: serModel(st.base, { withOrig: false }), form: serModel(st.form, { withOrig: false }) });
+      L.ok = ok;
+    }).catch(() => { L.ok = false; });
+    return L.chain;
+  }
+
+  /** 打开视图时：本机有上次没发布的修改 → 显示「恢复 / 丢弃」。 */
+  function checkLocal(rec) {
+    const L = st.local;
+    if (st.disposed) return;
+    const usable = rec && rec.v === LOCAL_VERSION && plainObj(rec.form) && plainObj(rec.base);
+    if (usable) {
+      let restored = null;
+      try { restored = restoredState(rec); } catch (err) { console.warn('[profile] local record unreadable', err); }
+      const changes = restored && (restored.avatar || Object.values(changedSections(restored.base, restored.form)).some(Boolean));
+      if (changes) {
+        L.pending = rec;
+        L.stored = true;
+        renderRestoreBanner();
+        return;
+      }
+    }
+    if (rec) localDelete();
+    L.ready = true;
+    if (isDirty()) scheduleLocal();
+  }
+
+  /** 由本机记录算出恢复后的 base / form / 头像（不改 st）。 */
+  function restoredState(rec) {
+    const langs = computeOverrideLangs(st.cfg);
+    for (const l of Array.isArray(rec.overrideLangs) ? rec.overrideLangs : []) {
+      if (!langs.includes(l) && ctx.langs.includes(l)) langs.push(l);
+    }
+    const base = modelFrom(st.cfg, langs);
+    const savedBase = fitOverrides(deserModel(rec.base, base), langs, null);
+    const savedForm = fitOverrides(deserModel(rec.form, base), langs, savedBase);
+    const form = mergeKeep(savedForm, savedBase, base);
+    const a = plainObj(rec.avatar);
+    const avatar = a && a.buf && a.favBuf ? a : null;
+    const now = currentShas();
+    const then = plainObj(rec.shas) || {};
+    const remoteChanged = [...new Set([...Object.keys(now), ...Object.keys(then)])].some((p) => (now[p] || null) !== (then[p] || null));
+    return { langs, base, form, avatar, remoteChanged };
+  }
+
+  function renderRestoreBanner() {
+    if (!ui.restoreHost) return;
+    const rec = st.local.pending;
+    if (!rec) { clear(ui.restoreHost); return; }
+    let info = null;
+    try { info = restoredState(rec); } catch { /* 按没有远端变化处理 */ }
+    const when = rec.updatedAt ? formatDate(new Date(rec.updatedAt)) : '';
+    const text = `发现本机未发布的首页修改（${when}）${info && info.avatar ? '，包括一张新头像' : ''}。` +
+      (info && info.remoteChanged ? '注意：在那之后网站上的设置又被修改过（可能是在别的设备上）；恢复后，你没改过的地方会用最新的设置，请检查后再发布。' : '');
+    render(ui.restoreHost, h('div', { class: 'banner banner-warning pf-restore', role: 'status', dataset: { testid: 'profile-restore' } },
+      svgIcon('clock'),
+      h('span', {}, text),
+      h('div', { class: 'banner-actions' },
+        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', dataset: { testid: 'profile-restore-discard' }, on: { click: discardLocal } }, '丢弃'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-primary', dataset: { testid: 'profile-restore-apply' }, on: { click: applyLocal } }, '恢复'))));
+  }
+
+  function applyLocal() {
+    const L = st.local;
+    const rec = L.pending;
+    if (!rec || st.disposed) return;
+    let r;
+    try {
+      r = restoredState(rec);
+    } catch (err) {
+      console.error('[profile] restore failed', err);
+      toast(`恢复失败：${errorMessage(err)}`, { type: 'error', timeout: 8000 });
+      return;
+    }
+    if (st.avatar) { dropUrl(st.avatar.url); dropUrl(st.avatar.favUrl); }
+    st.overrideLangs = r.langs;
+    st.base = r.base;
+    st.form = r.form;
+    st.avatar = r.avatar ? makeAvatar(r.avatar.buf, r.avatar.favBuf) : null;
+    st.useFavicon = rec.useFavicon !== false;
+    st.showRequired = false;
+    L.pending = null;
+    L.ready = true;
+    buildUi();
+    refreshImages();
+    flushLocal();
+    toast(r.remoteChanged ? '已恢复本机保存的修改。网站上的设置在那之后被改过，请检查后再发布' : '已恢复本机保存的修改',
+      { type: r.remoteChanged ? 'warning' : 'success', timeout: r.remoteChanged ? 8000 : undefined });
+  }
+
+  async function discardLocal() {
+    const L = st.local;
+    if (!L.pending) return;
+    const ok = await confirmDialog({
+      title: '丢弃本机保存的修改？',
+      message: '这些在本机自动保存、还没有发布的首页修改（包括新头像）会被删除，不能恢复。',
+      okText: '丢弃', danger: true,
+    });
+    if (!ok || st.disposed || !L.pending) return;
+    L.pending = null;
+    L.stored = false;
+    L.chain = L.chain.then(() => localDelete());
+    await L.chain;
+    if (st.disposed) return;
+    L.ready = true;
+    renderRestoreBanner();
+    if (isDirty()) flushLocal();
+    toast('已丢弃本机保存的修改', { type: 'success' });
   }
 
   function isDirty() {
@@ -1061,14 +1471,25 @@ export default async function mount(container, params, ctx) {
     st.showRequired = false;
     buildUi();
     refreshImages();
+    flushLocal();
   }
 
   // ---------- 发布 ----------
   function buildPlan() {
     const target = st.avatar ? avatarTarget(st.base.imageUrl) : null;
+    // 新图标换一个地址（?v=版本号），否则浏览器会继续显示缓存里的旧图标
+    const assetHrefs = {};
+    if (st.avatar && st.useFavicon) {
+      const assets = plainObj(st.cfg.params.assets) || {};
+      for (const [key, v] of Object.entries(assets)) {
+        if (typeof v !== 'string') continue;
+        const next = versionedFaviconHref(v, st.avatar.favVer);
+        if (next) assetHrefs[key] = next;
+      }
+    }
     const texts = patchTexts(
       { params: st.files.params.text, languages: st.files.languages.text, hugo: st.files.hugo.text },
-      st.base, st.form, { avatarImageUrl: target ? target.imageUrl : null });
+      st.base, st.form, { avatarImageUrl: target ? target.imageUrl : null, assetHrefs });
     const changes = [];
     const files = [];
     for (const k of ['params', 'languages', 'hugo']) {
@@ -1087,7 +1508,7 @@ export default async function mount(container, params, ctx) {
       }
     }
     const lines = describeChanges(st.base, st.form, { avatar: !!st.avatar, favicon: !!st.avatar && st.useFavicon, siteLabel: ctx.siteLabel });
-    return { texts, changes, files, lines };
+    return { texts, changes, files, lines, avatarPath: target ? target.path : null };
   }
 
   function imageSha(path) {
@@ -1176,6 +1597,11 @@ export default async function mount(container, params, ctx) {
     } catch { /* 刚刚验证过，不会失败 */ }
     st.base = modelFrom(st.cfg, st.overrideLangs);
     st.form = mergeKeep(st.form, st.base, st.base);
+    if (st.avatar && plan.avatarPath) {
+      const rel = plan.avatarPath.replace(/^static\//, '');
+      refreshSiteCache({ url: ctx.siteUrl + rel.split('/').map(encodeURIComponent).join('/'), bytes: new Uint8Array(st.avatar.buf) },
+        [ctx.siteUrl, ...ctx.langs.filter((l) => l !== ctx.defaultLang).map((l) => `${ctx.siteUrl}${l}/`)]);
+    }
     if (st.avatar) {
       dropUrl(st.currentAvatarUrl);
       st.currentAvatarUrl = st.avatar.url;
@@ -1185,6 +1611,7 @@ export default async function mount(container, params, ctx) {
     st.showRequired = false;
     buildUi();
     refreshImages();
+    flushLocal(); // 已发布：立刻删掉本机记录（不等防抖）
   }
 
   /**
@@ -1430,15 +1857,23 @@ export default async function mount(container, params, ctx) {
     isDirty,
     async canLeave() {
       if (!isDirty()) return true;
+      // 本机保存成功过（并且不是在等用户选择恢复 / 丢弃）：离开也不会丢
+      const kept = st.local.ready && st.local.ok;
       return confirmDialog({
         title: '首页设置还没有发布',
-        message: '离开后，刚才的修改（包括新头像）会丢失。确定要离开吗？',
+        message: kept
+          ? '刚才的修改（包括新头像）还没有发布到网站。离开后它们会保存在这台设备上，下次打开「首页设置」时可以恢复。确定要离开吗？'
+          : '离开后，刚才的修改（包括新头像）会丢失。确定要离开吗？',
         okText: '仍然离开',
         cancelText: '留下来',
-        danger: true,
+        danger: !kept,
       });
     },
     unmount() {
+      // 登录失效时外壳会直接卸载视图（不问 canLeave）：先把最新的修改存到本机
+      flushLocal();
+      document.removeEventListener('visibilitychange', onHidden);
+      window.removeEventListener('pagehide', onHidden);
       st.disposed = true;
       for (const u of st.urls) URL.revokeObjectURL(u);
       st.urls.clear();

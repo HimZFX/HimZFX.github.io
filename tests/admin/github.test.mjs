@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { GitHubClient, GitHubError, encodeBase64, decodeBase64 } from '../../static/admin/js/github.js';
-import { Repo, ConflictError } from '../../static/admin/js/repo.js';
+import { Repo, ConflictError, gitBlobSha } from '../../static/admin/js/repo.js';
 
 const API = 'https://api.github.test';
 const TOKEN = 'ghp_testtoken123';
@@ -1017,6 +1017,101 @@ describe('Repo.commit', () => {
       { status: 0, message: '网络错误，无法连接 GitHub' });
     assert.equal(fake.ref, before);
     assert.ok(!repo.has('a.md'));
+  });
+
+  // --- lost ref-update response (commit landed, the phone never heard back) ---------------
+
+  /** PATCH applies on the server but the response is lost; then `refReadsDown` ref reads fail too. */
+  function loseRefResponse(fake, { refReadsDown = Infinity } = {}) {
+    const st = { down: 0, applied: false };
+    fake.intercept((req) => req.method === 'PATCH', async (req, f) => {
+      f.ref = req.body.sha;
+      st.applied = true;
+      st.down = refReadsDown;
+      throw new TypeError('fetch failed');
+    });
+    fake.intercept((req) => req.method === 'GET' && req.path.endsWith('/git/ref/heads/main'), async () => {
+      if (st.down > 0) { st.down--; throw new TypeError('fetch failed'); }
+      return undefined;
+    }, { once: false });
+    return st;
+  }
+
+  test('lost updateRef response + head unreadable → "uncertain" error, and retrying is idempotent (no false conflict, no second commit)', async () => {
+    const { fake, repo } = await loadedRepo();
+    const st = loseRefResponse(fake, { refReadsDown: 100 });
+    const changes = () => [
+      { path: 'content/posts/net-drop.md', content: '---\ntitle: x\n---\nbody', baseSha: null },
+      { path: 'static/documents/notes.pdf', content: new Uint8Array([37, 80, 68, 70, 1, 2]), baseSha: null },
+    ];
+    const err = await rejectsGitHub(() => repo.commit({ message: 'first', changes: changes() }), { status: 0 });
+    assert.equal(err.uncertain, true);
+    assert.match(err.message, /无法确认/);
+    assert.ok(st.applied);
+    const landed = fake.ref;
+    const count = fake.commitCount();
+    st.down = 0;   // network is back
+    const res = await repo.commit({ message: 'again', changes: changes() });
+    assert.equal(res.unchanged, true);
+    assert.equal(res.alreadyApplied, true);
+    assert.equal(res.commitSha, landed);
+    assert.equal(fake.commitCount(), count, 'no duplicate commit');
+    assert.equal(res.shas['content/posts/net-drop.md'], fake.shaOf('content/posts/net-drop.md'));
+    assert.ok(repo.has('content/posts/net-drop.md') && repo.has('static/documents/notes.pdf'));
+  });
+
+  test('after a possibly-landed commit, publishing NEWER content over our own write is not a conflict', async () => {
+    const { fake, repo } = await loadedRepo();
+    const st = loseRefResponse(fake, { refReadsDown: 100 });
+    await rejectsGitHub(() => repo.commit({ message: 'first', changes: [
+      { path: 'content/posts/new.md', content: 'date: 10:00:01', baseSha: null }] }), { status: 0 });
+    st.down = 0;
+    // editor regenerated the file (e.g. a new timestamp) and still believes the file is new
+    const res = await repo.commit({ message: 'second', changes: [
+      { path: 'content/posts/new.md', content: 'date: 10:00:42', baseSha: null }] });
+    assert.ok(!res.unchanged);
+    assert.equal(fake.readText('content/posts/new.md'), 'date: 10:00:42\n');
+    // but a genuinely foreign change is still a conflict
+    fake.setFile('content/posts/new.md', 'someone else\n');
+    await assert.rejects(() => repo.commit({ message: 'third', changes: [
+      { path: 'content/posts/new.md', content: 'mine', baseSha: res.shas['content/posts/new.md'] }] }), ConflictError);
+  });
+
+  test('lost updateRef response on an existing file: same content again → no false conflict', async () => {
+    const { fake, repo } = await loadedRepo();
+    const base = repo.entry('content/posts/hello.md').sha;
+    const st = loseRefResponse(fake, { refReadsDown: 100 });
+    await rejectsGitHub(() => repo.commit({ message: 'm', changes: [
+      { path: 'content/posts/hello.md', content: 'edited', baseSha: base }] }), { status: 0 });
+    st.down = 0;
+    const res = await repo.commit({ message: 'm', changes: [
+      { path: 'content/posts/hello.md', content: 'edited', baseSha: base }] });
+    assert.equal(res.alreadyApplied, true);
+    assert.equal(fake.readText('content/posts/hello.md'), 'edited\n');
+  });
+
+  test('lost updateRef response, head readable after a short outage → confirmed as success', async () => {
+    const { fake, repo } = await loadedRepo();
+    loseRefResponse(fake, { refReadsDown: 3 });   // first confirm attempt fails (GET retried once), later ones work
+    const res = await repo.commit({ message: 'm', changes: [{ path: 'a.md', content: 'a' }] });
+    assert.equal(res.commitSha, fake.ref);
+    assert.ok(repo.has('a.md'));
+  });
+
+  test('lost updateRef response, replica still shows the parent at first → keeps polling and confirms', async () => {
+    const { fake, repo } = await loadedRepo();
+    const parent = fake.ref;
+    fake.intercept((req) => req.method === 'PATCH', async (req, f) => { f.ref = req.body.sha; throw new TypeError('fetch failed'); });
+    fake.intercept((req) => req.method === 'GET' && req.path.endsWith('/git/ref/heads/main'),
+      () => json(200, { ref: 'refs/heads/main', object: { sha: parent, type: 'commit' } }));
+    const res = await repo.commit({ message: 'm', changes: [{ path: 'a.md', content: 'a' }] });
+    assert.equal(res.commitSha, fake.ref);
+  });
+
+  test('gitBlobSha matches git', async () => {
+    const bytes = new TextEncoder().encode('hello\n');
+    assert.equal(await gitBlobSha(bytes), createHash('sha1').update('blob 6\0hello\n').digest('hex'));
+    assert.equal(await gitBlobSha(new Uint8Array(0)), 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391');
   });
 
   test('at most 4 concurrent blob uploads', async () => {

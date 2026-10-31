@@ -349,6 +349,9 @@ describe('shadowWarnings', () => {
     assert.equal(isDraftFm({ draft: 'True' }), true);
     assert.equal(isDraftFm({ draft: 'false' }), false);
     assert.equal(isDraftFm({ draft: null }), false);
+    // YAML 1.1 truthy words: the pinned Hugo hides `draft: yes` / `on` / `y` pages
+    for (const v of ['yes', 'Yes', 'YES', 'y', 'Y', 'on', 'On']) assert.equal(isDraftFm({ draft: v }), true, v);
+    for (const v of ['no', 'off', 'n', 'false', '0']) assert.equal(isDraftFm({ draft: v }), false, v);
     assert.equal(isDraftFm(null), false);
   });
 });

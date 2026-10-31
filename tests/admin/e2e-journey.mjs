@@ -244,7 +244,9 @@ async function main() {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.waitForSelector('body[data-testid="login-ready"]', { state: 'attached' });
       await page.fill(tid('login-token'), mock.token);
-      assert.equal(await page.isChecked(tid('login-remember')), true);
+      // 「在此设备上记住」默认不勾选（安全评审）；这位用户在自己的电脑上，主动勾选
+      assert.equal(await page.isChecked(tid('login-remember')), false);
+      await page.check(tid('login-remember'));
       await page.click(tid('login-submit'));
       await page.waitForSelector('body[data-testid="app-ready"]', { state: 'attached', timeout: 45000 });
       await page.waitForSelector('body[data-view-ready="posts"]', { state: 'attached' });

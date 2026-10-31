@@ -80,7 +80,12 @@ async function gotoEdit(page, hash) {
 }
 
 async function waitEditor(page) {
-  await page.waitForSelector('body[data-view-ready="edit"]', { state: 'attached', timeout: 30000 });
+  try {
+    await page.waitForSelector('body[data-view-ready="edit"]', { state: 'attached', timeout: 30000 });
+  } catch (e) {
+    const modalText = await page.evaluate(() => [...document.querySelectorAll('.modal')].map((m) => m.textContent).join(' | ')).catch(() => '');
+    throw new Error(`${e.message.split('\n')[0]} (hash ${await page.evaluate(() => location.hash).catch(() => '?')}; open dialogs: ${modalText || 'none'})`);
+  }
   await page.waitForSelector('[data-testid="editor-body"] .vditor-wysiwyg', { timeout: 30000 });
 }
 
@@ -739,6 +744,470 @@ async function main() {
       await until(() => mock.commits.length > n2, { msg: 'delete-all commit' });
       assert.equal(mock.readFile('content/posts/draft-only.md'), undefined);
       await until(async () => (await page.evaluate(() => location.hash)).startsWith('#/posts'), { msg: 'back to the list' });
+    });
+
+    // -----------------------------------------------------------------------
+    // Regression tests from the review (security / integrity / robustness / phone UX)
+
+    /** Make the admin re-read the repository (after mock.setFile) and open a hash. */
+    async function reloadTo(p, hash) {
+      await p.evaluate((h) => { location.hash = h; }, hash);
+      await p.reload({ waitUntil: 'domcontentloaded' });
+      await p.waitForSelector('body[data-testid="app-ready"]', { state: 'attached' });
+      if (hash.startsWith('#/edit')) await waitEditor(p);
+    }
+    const draftOf = (p, key) => p.evaluate(async (k) => {
+      const d = await (await import('/admin/js/drafts.js')).loadDraft(k);
+      return d ? { markdown: d.markdown, title: d.title, writer: d.fields && d.fields.writer } : null;
+    }, key);
+    const deleteDraftIn = (p, key) => p.evaluate(async (k) => (await import('/admin/js/drafts.js')).deleteDraft(k), key);
+    const waitAutosaved = (p) => p.waitForFunction(() => /已自动保存到本机 · \d{2}:\d{2}/.test(document.querySelector('[data-testid="editor-autosave-status"]').textContent), null, { timeout: 10000 });
+    const fmOf = (title, extra = '') => `---\ntitle: "${title}"\ndate: 2025-12-06\ndraft: false\n${extra}---\n\n`;
+
+    const EMBED = 'content/posts/embed-probe.md';
+    await test('security: <iframe>/<object>/<embed> in a post never load inside the editor (token stays private)', async () => {
+      const probe = '<!doctype html><script>try{parent.__stolen=(parent.sessionStorage.getItem("admin.token")||parent.localStorage.getItem("admin.token")||"no-token")}catch(e){parent.__stolen="blocked:"+e.name}</script>probe';
+      fs.writeFileSync(path.join(SITE_DIR, 'probe.html'), probe);
+      fs.writeFileSync(path.join(SITE_DIR, 'probe2.html'), probe);
+      const body = '看看这个图：\n\n<iframe src="/probe.html" width="300" height="100"></iframe>\n\n行内 <iframe src="/probe2.html"></iframe> 嵌入。\n\n<div><object data="/probe.html"></object><embed src="/probe.html"></div>\n\n最后一段。\n';
+      mock.setFile(EMBED, fmOf('嵌入测试') + body);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(EMBED));
+      await sleep(1500);
+      const check = async (where) => {
+        assert.equal(await page.evaluate(() => window.__stolen), undefined, `${where}: an embedded same-origin page ran scripts in the admin`);
+        assert.equal(await page.locator('[data-testid="editor-body"] iframe, [data-testid="editor-body"] object, [data-testid="editor-body"] embed').count(), 0, `${where}: live embed in the editor DOM`);
+      };
+      await check('wysiwyg');
+      assert.ok(await page.locator('[data-testid="editor-body"] .ed-embed-blocked').count() >= 1, 'placeholder shown');
+      // the other editing modes are guarded too
+      for (const mode of ['ir', 'sv', 'wysiwyg']) {
+        await page.evaluate((m) => document.querySelector(`[data-testid="editor-body"] .vditor-toolbar [data-mode="${m}"]`).click(), mode);
+        await sleep(800);
+        await check(mode);
+      }
+      // nothing of the HTML is lost when the post is edited
+      await typeAtEnd(page, '补充。');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const saved = splitMd(mock.readFile(EMBED)).body;
+      assert.equal(saved, '\n' + body.replace('最后一段。', '最后一段。补充。'));
+      await check('after publish');
+    });
+
+    const TRICKY = 'content/posts/tricky-format.md';
+    const TRICKY_BODY = [
+      'Intro paragraph with trailing two spaces  ', 'next line after hard break.', '',
+      '## Heading with id {#custom-id}', '',
+      'Here is a reference-style [link][ref] and a footnote[^1].', '',
+      '[^1]: The footnote text.', '',
+      '[ref]: https://example.com "Example Title"', '',
+      '***', '',
+      'Line ending with backslash\\', 'next line.', '',
+      'Emoji shortcode :smile: and <https://x.example>.', '',
+      '| Col A | Col B |', '|-------|-------|', '| x | y |', '',
+      'Final line.', '',
+    ].join('\n');
+    await test('lossless: editing one line keeps hard breaks, {#id}, link titles, *** elsewhere byte-for-byte', async () => {
+      mock.setFile(TRICKY, fmOf('Tricky') + TRICKY_BODY);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(TRICKY));
+      await typeAtEnd(page, 'X');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.equal(mock.readFile(TRICKY), fmOf('Tricky') + TRICKY_BODY.replace('Final line.', 'Final line.X'));
+      // a second edit on the reopened file (new baseline) is just as careful
+      await typeAtEnd(page, 'Y');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.equal(mock.readFile(TRICKY), fmOf('Tricky') + TRICKY_BODY.replace('Final line.', 'Final line.XY'));
+      // editing the line right after a hard break keeps the break on the line before
+      const before = mock.readFile(TRICKY);
+      await page.evaluate(() => {
+        const p = document.querySelector('[data-testid="editor-body"] .vditor-wysiwyg .vditor-reset > p');
+        const r = document.createRange();
+        r.selectNodeContents(p);
+        r.collapse(false);
+        getSelection().removeAllRanges();
+        getSelection().addRange(r);
+      });
+      await page.keyboard.type('!', { delay: 5 });
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const after = mock.readFile(TRICKY);
+      assert.match(after, /^Intro paragraph with trailing two spaces {2}$/m, 'hard break kept');
+      assert.match(after, /^next line after hard break\.!$/m);
+      assert.equal(after.replace('hard break.!', 'hard break.'), before);
+    });
+
+    const TWIN = 'content/posts/two-variants.md';
+    const TWIN_EN = 'content/posts/two-variants.en.md';
+    await test('switching variant tabs does not make a post dirty; a title-only update keeps the body', async () => {
+      mock.setFiles({ [TWIN]: fmOf('两个版本') + TRICKY_BODY, [TWIN_EN]: fmOf('Two variants') + TRICKY_BODY.replace('Intro', 'English intro') });
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(TWIN));
+      for (const k of ['en', 'shared', 'en', 'shared']) {
+        await page.click(`[data-testid="editor-tab-${k}"]`);
+        await page.waitForSelector(`[data-testid="editor-tab-${k}"].active`);
+      }
+      await sleep(1200);
+      assert.equal(await page.locator('.ed-tabs .ed-dot').count(), 0, 'no unsaved dot after switching tabs');
+      assert.equal(await page.textContent('[data-testid="editor-autosave-status"]'), '已是网站上的最新内容');
+      await page.fill('[data-testid="editor-title"]', '两个版本（改了标题）');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.equal(mock.readFile(TWIN), fmOf('两个版本（改了标题）') + TRICKY_BODY);
+      assert.equal(mock.commits.at(-1).changes.length, 1);
+    });
+
+    await test('pending local draft: typing asks 恢复 / 丢弃; edits after 丢弃 are autosaved; restore works', async () => {
+      const key = 'file:' + TRICKY;
+      await gotoEdit(page, '#/edit?path=' + encodeURIComponent(TRICKY));
+      await typeAtEnd(page, ' FIRST-EDIT');
+      await waitAutosaved(page);
+      assert.match((await draftOf(page, key)).markdown, /FIRST-EDIT/);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(TRICKY));
+      await page.waitForSelector('[data-testid="editor-draft-banner"]');
+      // ignore the banner and start editing → asked before the first keystroke
+      await page.click('[data-testid="editor-body"] .vditor-reset');
+      await page.waitForSelector('[data-testid="editor-pending-discard"]', { timeout: 8000 });
+      assert.match(await page.textContent('.modal'), /新的修改不会自动保存/);
+      assert.equal(await page.locator('.modal [data-testid="modal-close"]').count(), 0, 'must choose');
+      await page.click('[data-testid="editor-pending-discard"]');
+      await page.waitForSelector('[data-testid="editor-draft-banner"]', { state: 'detached' });
+      await typeAtEnd(page, ' SECOND-EDIT');
+      await waitAutosaved(page);
+      let d = await draftOf(page, key);
+      assert.ok(/SECOND-EDIT/.test(d.markdown) && !/FIRST-EDIT/.test(d.markdown), 'new edits saved: ' + d.markdown.slice(-80));
+      // leave and come back → restore through the dialog
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(TRICKY));
+      await page.waitForSelector('[data-testid="editor-draft-banner"]');
+      await page.click('[data-testid="editor-description"]');
+      await page.waitForSelector('[data-testid="editor-pending-restore"]');
+      await page.click('[data-testid="editor-pending-restore"]');
+      await until(async () => (await vditor.get(page)).includes('SECOND-EDIT'), { msg: 'draft restored' });
+      // publishing with an untouched pending draft asks first (never silently deletes it)
+      d = await draftOf(page, key);
+      assert.ok(d, 'draft still there');
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(TRICKY));
+      await page.waitForSelector('[data-testid="editor-draft-banner"]');
+      await page.click('[data-testid="editor-save-draft"]');
+      await page.waitForSelector('[data-testid="editor-pending-discard"]');
+      await page.click('[data-testid="modal-close"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      assert.ok(await draftOf(page, key), 'draft kept when the dialog is dismissed');
+      await deleteDraftIn(page, key);
+    });
+
+    const twoDays = () => {
+      const d = new Date(Date.now() + 2 * 86400000);
+      const p2 = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T10:00`;
+    };
+    await test('future date: 发表 warns; 改为现在 publishes now; 仍按这个日期 shows 定时发表', async () => {
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Future Note');
+      await vditor.insert(page, '明天的讲座。\n');
+      await page.fill('[data-testid="editor-date"]', twoDays());
+      await page.dispatchEvent('[data-testid="editor-date"]', 'change');
+      const n = mock.commits.length;
+      await page.click('[data-testid="editor-publish"]');
+      await page.waitForSelector('[data-testid="editor-future-cancel"]');
+      await page.click('[data-testid="editor-future-cancel"]');
+      await sleep(300);
+      assert.equal(mock.commits.length, n, 'cancel → nothing published');
+      await page.click('[data-testid="editor-publish"]');
+      await page.waitForSelector('[data-testid="editor-future-keep"]');
+      await page.click('[data-testid="editor-future-keep"]');
+      await until(() => mock.commits.length > n, { msg: 'future commit' });
+      await page.waitForSelector('[data-testid="overlay"]', { state: 'detached' });
+      await waitEditor(page);
+      assert.match(mock.readFile('content/posts/future-note.md'), new RegExp(`^date: "${twoDays()}:00[+-]\\d\\d:\\d\\d"$`, 'm'));
+      await until(async () => (await page.textContent('[data-testid="editor-status"]')).includes('定时发表'), { msg: '定时发表 badge' });
+      // 改为现在并发表
+      await typeAtEnd(page, '改期');
+      await page.click('[data-testid="editor-publish"]');
+      await page.waitForSelector('[data-testid="editor-future-now"]');
+      const n2 = mock.commits.length;
+      await page.click('[data-testid="editor-future-now"]');
+      await until(() => mock.commits.length > n2, { msg: 'commit with date = now' });
+      await page.waitForSelector('[data-testid="overlay"]', { state: 'detached' });
+      const date = /^date: "([^"]+)"$/m.exec(mock.readFile('content/posts/future-note.md'))[1];
+      assert.ok(Math.abs(Date.parse(date) - Date.now()) < 5 * 60000, 'date set to now: ' + date);
+      assert.equal((await page.textContent('[data-testid="editor-status"]')).trim(), '已发表');
+    });
+
+    await test('images: another post\'s image keeps its own path; repo-only images load from the repo after a reload', async () => {
+      const imgPath = `/images/posts/${SLUG}/${imgName1}`;
+      assert.ok(mock.readFile(`${IMGDIR}/${imgName1}`) !== undefined, 'image is in the repo');
+      assert.ok(!fs.existsSync(path.join(SITE_DIR, 'images', 'posts', SLUG, imgName1)), 'but not on the (old) site build');
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Reuse Image');
+      await vditor.insert(page, `复用图片：\n\n![fig](${imgPath})\n\n结尾。\n`);
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const B = 'content/posts/reuse-image.md';
+      assert.ok(mock.readFile(B).includes(`](${imgPath})`));
+      // fresh page load: no in-memory upload cache any more
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(B));
+      await until(() => page.evaluate(() => {
+        const img = document.querySelector('[data-testid="editor-body"] .vditor-reset img');
+        return img && img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0;
+      }), { msg: 'repo-only image shown from the repo (not a broken image)' });
+      await typeAtEnd(page, 'Y');
+      const commit = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(commit.changes.map((c) => c.path), [B]);
+      const body = splitMd(mock.readFile(B)).body;
+      assert.ok(body.includes(`![fig](${imgPath})`), 'image path unchanged: ' + body);
+      assert.ok(!body.includes('/images/posts/reuse-image/'));
+      // the phone preview shows it as well
+      await page.click('[data-testid="editor-preview"]');
+      const fr = await (await page.waitForSelector('[data-testid="preview-iframe"][data-state="ready"]', { timeout: 30000 })).contentFrame();
+      await until(() => fr.evaluate(() => { const i = document.querySelector('.post-content img'); return i && i.complete && i.naturalWidth > 0; }), { msg: 'preview image loads' });
+      await page.click('[data-testid="modal-close"]');
+    });
+
+    await test('资料 picker: names with spaces, # and % become working links (and the site still builds)', async () => {
+      mock.setFiles({
+        'static/documents/Lecture Notes (1).pdf': '%PDF-1.4 a\n',
+        'static/documents/量子 力学#2.pdf': '%PDF-1.4 b\n',
+        'static/documents/50%off.pdf': '%PDF-1.4 c\n',
+      });
+      await reloadTo(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Docs Links');
+      await vditor.insert(page, '资料：\n');
+      for (const q of ['Lecture', '力学', '50%']) {
+        await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+        await page.fill('[data-testid="editor-docs-search"]', q);
+        await page.click('[data-testid="editor-doc-item"]');
+        await page.waitForSelector('.modal', { state: 'detached' });
+        await page.keyboard.type(' ');
+      }
+      await until(async () => (await page.locator('[data-testid="editor-body"] .vditor-reset a').count()) === 3, { msg: '3 links in the editor' });
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const body = splitMd(mock.readFile('content/posts/docs-links.md')).body;
+      assert.ok(body.includes('](/documents/Lecture%20Notes%20%281%29.pdf)'), body);
+      assert.ok(body.includes('](/documents/量子%20力学%232.pdf)'), body);
+      assert.ok(body.includes('](/documents/50%25off.pdf)'), body);
+      const repoDir = mock.exportTo(path.join(OUT, 'export-docs'));
+      const out = path.join(OUT, 'build-docs');
+      await buildSite({ repoDir, outDir: out });
+      const html = fs.readFileSync(path.join(out, 'posts', 'docs-links', 'index.html'), 'utf8');
+      assert.match(html, /href="?\/documents\/Lecture%20Notes%20%281%29\.pdf/);
+      assert.match(html, /href="?\/documents\/50%25off\.pdf/);
+      // safety net: a hand-typed bad % link is refused before it can break the site build
+      await waitEditor(page);
+      await vditor.insert(page, '\n[坏链接](/documents/50%off.pdf)\n');
+      if (await page.locator('.modal').count()) throw new Error('unexpected dialog: ' + await page.textContent('.modal'));
+      const n = mock.commits.length;
+      await page.click('[data-testid="editor-publish"]');
+      await page.locator('[data-testid="toast-error"]', { hasText: '%' }).waitFor();
+      assert.equal(mock.commits.length, n);
+    });
+
+    await test('删除整个页面 on a section only offers the section\'s own images (not its child pages\')', async () => {
+      mock.setFiles({
+        'content/lectures/_index.md': fmOf('讲义'),
+        'content/lectures/optics.md': fmOf('光学'),
+        'static/images/pages/lectures/banner.png': 'png-a',
+        'static/images/pages/lectures/optics/fig1.png': 'png-b',
+      });
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent('content/lectures/_index.md'));
+      await page.click('[data-testid="editor-more"]');
+      await page.click('[data-testid="editor-delete-all"]');
+      await page.waitForSelector('[data-testid="editor-delete-images"]');
+      assert.match(await page.textContent('.modal'), /（1 个文件）/);
+      await page.check('[data-testid="editor-delete-images"]');
+      const n = mock.commits.length;
+      await page.click('[data-testid="confirm-ok"]');
+      await until(() => mock.commits.length > n, { msg: 'delete commit' });
+      assert.deepEqual(mock.commits.at(-1).changes.map((c) => c.path).sort(), ['content/lectures/_index.md', 'static/images/pages/lectures/banner.png']);
+      assert.equal(mock.readFile('static/images/pages/lectures/optics/fig1.png'), 'png-b', "child page's image kept");
+    });
+
+    await test('a new-post draft whose post is already published offers to open it (no duplicate post)', async () => {
+      await page.evaluate(async () => {
+        await (await import('/admin/js/drafts.js')).saveDraft('new:already-published', {
+          title: 'Hello Math World', markdown: '正文',
+          fields: { kind: 'post', slug: 'hello-math-world', slugTouched: false, newGroup: true, form: { title: 'Hello Math World', tags: [], categories: [] } },
+          images: {}, updatedAt: Date.now() - 60000,
+        });
+      });
+      await gotoEdit(page, '#/edit?draft=new%3Aalready-published');
+      await page.waitForSelector('[data-testid="editor-twin-banner"]');
+      assert.match(await page.textContent('[data-testid="editor-twin-banner"]'), /已经发表过了/);
+      await page.click('[data-testid="editor-twin-open"]');
+      await page.click('[data-testid="confirm-ok"]');
+      await until(async () => (await page.evaluate(() => location.hash)) === '#/edit?path=' + encodeURIComponent(POST), { msg: 'opened the published post' });
+      assert.equal(await draftOf(page, 'new:already-published'), null);
+      await waitEditor(page);
+    });
+
+    await test('Back during 发表 is refused; the published new post leaves no stale local draft', async () => {
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Back During Publish');
+      await vditor.insert(page, '发表的时候按了返回。\n');
+      await waitAutosaved(page);
+      mock.setApiDelay(1200);
+      try {
+        const n = mock.commits.length;
+        await page.click('[data-testid="editor-publish"]');
+        await page.waitForSelector('[data-testid="overlay"]');
+        await page.evaluate(() => { location.hash = '#/posts'; });
+        await page.locator('[data-testid="toast-warning"]', { hasText: '正在发表' }).waitFor();
+        await until(() => mock.commits.length > n, { msg: 'commit' });
+        await page.waitForSelector('[data-testid="overlay"]', { state: 'detached', timeout: 30000 });
+      } finally {
+        mock.setApiDelay(0);
+      }
+      await waitEditor(page);
+      assert.match(await page.evaluate(() => location.hash), /^#\/edit\?path=content%2Fposts%2Fback-during-publish\.md$/);
+      const left = await page.evaluate(async () => (await (await import('/admin/js/drafts.js')).listDrafts()).filter((d) => d.title === 'Back During Publish'));
+      assert.deepEqual(left, []);
+    });
+
+    await test('after 发表, "已上线 ✓" and the success toast open the new post (not the homepage)', async () => {
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Deploy Link Test');
+      await page.fill('[data-testid="editor-slug"]', 'deploy-link-test');
+      await vditor.insert(page, '部署完成之后，直接打开这篇文章。\n');
+      const commit = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(commit.changes.map((c) => c.path), ['content/posts/deploy-link-test.md']);
+      await page.waitForSelector('[data-testid="deploy-indicator"][data-state="success"]', { timeout: 30000 });
+      const want = mock.url + '/posts/deploy-link-test/?v=' + commit.sha.slice(0, 7);
+      assert.equal(await page.getAttribute('[data-testid="deploy-indicator"]', 'href'), want);
+      const link = page.locator('[data-testid="toast-link"]', { hasText: '查看文章' });
+      await link.waitFor();
+      assert.equal(await link.getAttribute('href'), want);
+    });
+
+    await test('a new post whose first 发表 silently landed: 发表 again points to the published post instead of «换个文件名»', async () => {
+      // same title + same file name as the post that is already on the site (e.g. the tab reloaded after a lost reply)
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Deploy Link Test');
+      await page.fill('[data-testid="editor-slug"]', 'deploy-link-test');
+      await vditor.insert(page, '部署完成之后，直接打开这篇文章。\n');
+      const n = mock.commits.length;
+      await page.click('[data-testid="editor-publish"]');
+      await page.locator('[data-testid="toast-warning"]', { hasText: '已经发表过了' }).waitFor();
+      await page.waitForSelector('[data-testid="editor-twin-banner"]');
+      assert.equal(mock.commits.length, n, 'nothing committed');
+      await page.click('[data-testid="editor-twin-open"]');
+      await page.click('[data-testid="confirm-ok"]');
+      await until(async () => (await page.evaluate(() => location.hash)) === '#/edit?path=' + encodeURIComponent('content/posts/deploy-link-test.md'), { msg: 'opened the published post' });
+      await waitEditor(page);
+    });
+
+    await test('two tabs on one post: publishing in tab A keeps tab B\'s unpublished work in its local draft', async () => {
+      const key = 'file:' + TRICKY;
+      await gotoEdit(page, '#/edit?path=' + encodeURIComponent(TRICKY));
+      const pb = await context.newPage();
+      pb.on('pageerror', (e) => pageErrors.push('tab B: ' + e.message));
+      pb.on('dialog', (d) => d.accept());
+      await openAdmin(pb, mock, { path: '/admin/#/edit?path=' + encodeURIComponent(TRICKY) });
+      await waitEditor(pb);
+      await typeAtEnd(pb, ' TAB-B-WORK');
+      await waitAutosaved(pb);
+      await typeAtEnd(page, ' TAB-A-FIX');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.match(mock.readFile(TRICKY), /TAB-A-FIX/);
+      await until(async () => { const d = await draftOf(page, key); return d && /TAB-B-WORK/.test(d.markdown); }, { msg: "tab B's draft survives (re-saved)" });
+      await pb.close();
+      const d = await draftOf(page, key);
+      assert.ok(d && /TAB-B-WORK/.test(d.markdown), "tab B's work is still in the local draft after closing it");
+      await deleteDraftIn(page, key);
+    });
+
+    await test('typing does not make the admin re-serialise the whole document (long posts stay responsive)', async () => {
+      const long = Array.from({ length: 120 }, (_, i) => `## 第 ${i + 1} 节\n\n正文 $a_${i}$ 和公式：\n\n$$\n\\int_0^{${i}} x^2\\,dx\n$$\n`).join('\n');
+      mock.setFile('content/posts/long-notes.md', fmOf('长笔记') + long);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent('content/posts/long-notes.md'));
+      await page.evaluate(() => {
+        const vd = document.querySelector('[data-testid="editor-body"]')._vditor;
+        const orig = vd.getValue.bind(vd);
+        window.__getValueCalls = 0;
+        vd.getValue = () => { window.__getValueCalls++; return orig(); };
+      });
+      await typeAtEnd(page, '这是新加的一句话。');
+      await waitAutosaved(page);
+      const calls = await page.evaluate(() => window.__getValueCalls);
+      assert.ok(calls <= 1, `admin called getValue ${calls} times while typing + autosaving`);
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.ok(mock.readFile('content/posts/long-notes.md').includes('这是新加的一句话。'));
+    });
+
+    await test('phone: image / formula / 资料 buttons visible and ≥ 40 px; labelled 存草稿 / 预览; add-variant tab on screen', async () => {
+      const mctx = await browser.newContext({ viewport: { width: 360, height: 740 }, isMobile: true, hasTouch: true });
+      const mp = await mctx.newPage();
+      mp.on('pageerror', (e) => pageErrors.push('mobile: ' + e.message));
+      await openAdmin(mp, mock, { path: '/admin/#/edit?path=' + encodeURIComponent(FIRST) });
+      await waitEditor(mp);
+      const info = await mp.evaluate(() => {
+        const box = (sel) => { const el = document.querySelector(sel); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, r: r.right, w: r.width, h: r.height }; };
+        const after = (sel) => getComputedStyle(document.querySelector(sel), '::after').content;
+        return {
+          vw: innerWidth,
+          upload: box('[data-testid="editor-body"] .vditor-toolbar [data-type="upload"]'),
+          formula: box('[data-testid="editor-body"] .vditor-toolbar [data-type="formula"]'),
+          docs: box('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]'),
+          bold: box('[data-testid="editor-body"] .vditor-toolbar [data-type="bold"]'),
+          addTab: box('[data-testid^="editor-add-"]'),
+          draftLabel: after('[data-testid="editor-save-draft"] .ed-btn-text'),
+          previewLabel: after('[data-testid="editor-preview"] .ed-btn-text'),
+          hint: document.querySelector('[data-testid="editor-body"]').classList.contains('ed-toolbar-more'),
+        };
+      });
+      for (const k of ['upload', 'formula', 'docs', 'bold']) {
+        assert.ok(info[k], `${k} button exists`);
+        assert.ok(info[k].r <= info.vw && info[k].x >= 0, `${k} on screen: ${JSON.stringify(info[k])}`);
+        assert.ok(info[k].w >= 40 && info[k].h >= 40, `${k} ≥ 40px: ${JSON.stringify(info[k])}`);
+      }
+      assert.ok(info.addTab && info.addTab.r <= info.vw, 'add-variant tab on screen: ' + JSON.stringify(info.addTab));
+      assert.equal(info.draftLabel, '"转草稿"');
+      assert.equal(info.previewLabel, '"预览"');
+      assert.equal(info.hint, true, 'scroll hint when more buttons are off to the right');
+      assert.ok(await noHScroll(mp));
+      await mp.screenshot({ path: path.join(SHOTS, 'phone-toolbar.png') });
+      // 全中文标题 → hint about the meaningless address, one tap to fix it
+      await gotoEdit(mp, '#/edit?new=post');
+      await mp.fill('[data-testid="editor-title"]', '量子力学笔记：谐振子');
+      await mp.waitForSelector('[data-testid="editor-slug-hint"]:not([hidden])');
+      assert.match(await mp.textContent('[data-testid="editor-slug-hint"]'), /post-\d{8}/);
+      await mp.click('[data-testid="editor-slug-hint-edit"]');
+      await until(() => mp.evaluate(() => document.activeElement && document.activeElement.dataset.testid === 'editor-slug'), { msg: 'slug input focused' });
+      await mp.fill('[data-testid="editor-slug"]', 'harmonic-oscillator');
+      await mp.waitForSelector('[data-testid="editor-slug-hint"][hidden]', { state: 'attached' });
+      await mp.screenshot({ path: path.join(SHOTS, 'phone-slug-hint.png') });
+      await mctx.close();
+    });
+
+    await test('layout tools: 多图并排 (gallery) + 带说明的图片 (figure) → preview + Hugo build', async () => {
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Layout Tools');
+      await vditor.insert(page, '排版测试。\n');
+      const png1 = await canvasImage(page, { w: 400, h: 300, label: '1' });
+      const png2 = await canvasImage(page, { w: 400, h: 300, label: '2' });
+      let chooser = page.waitForEvent('filechooser');
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="gallery"]');
+      await (await chooser).setFiles([{ name: 'g1.png', mimeType: 'image/png', buffer: png1 }, { name: 'g2.png', mimeType: 'image/png', buffer: png2 }]);
+      await until(async () => /\{\{< gallery "admin-pending:\/\/[^"]+g1\.(png|jpg)" "admin-pending:\/\/[^"]+g2\.(png|jpg)" >\}\}/.test(await vditor.get(page)), { msg: 'gallery inserted' });
+      chooser = page.waitForEvent('filechooser');
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="figure"]');
+      await (await chooser).setFiles([{ name: 'fig.png', mimeType: 'image/png', buffer: png1 }]);
+      await page.waitForSelector('.modal input');
+      await page.fill('.modal input', '图：谐振子的势能曲线');
+      await page.click('.modal .btn-primary');
+      await until(async () => /\{\{< figure src="admin-pending:\/\/[^"]+fig\.(png|jpg)" caption="图：谐振子的势能曲线" >\}\}/.test(await vditor.get(page)), { msg: 'figure inserted' });
+      // preview renders both with the pending images
+      await page.click('[data-testid="editor-preview"]');
+      const fr = await (await page.waitForSelector('[data-testid="preview-iframe"][data-state="ready"]', { timeout: 30000 })).contentFrame();
+      await until(() => fr.evaluate(() => [...document.querySelectorAll('.gallery img, figure img')].filter((i) => i.complete && i.naturalWidth > 0).length === 3), { msg: 'preview images' });
+      assert.equal(await fr.textContent('figcaption'), '图：谐振子的势能曲线');
+      await page.click('[data-testid="modal-close"]');
+      const commit = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const imgs = commit.changes.map((c) => c.path).filter((p) => p.startsWith('static/images/posts/layout-tools/'));
+      assert.equal(imgs.length, 3, 'three images uploaded: ' + imgs.join(', '));
+      const body = splitMd(mock.readFile('content/posts/layout-tools.md')).body;
+      assert.match(body, /\{\{< gallery "\/images\/posts\/layout-tools\/[^"]+" "\/images\/posts\/layout-tools\/[^"]+" >\}\}/);
+      assert.match(body, /\{\{< figure src="\/images\/posts\/layout-tools\/[^"]+" caption="图：谐振子的势能曲线" >\}\}/);
+      assert.ok(!/admin-pending|blob:/.test(body));
+      const repoDir = mock.exportTo(path.join(OUT, 'export-layout'));
+      const out = path.join(OUT, 'build-layout');
+      await buildSite({ repoDir, outDir: out });
+      const html = fs.readFileSync(path.join(out, 'posts', 'layout-tools', 'index.html'), 'utf8');
+      assert.match(html, /class="?gallery/);
+      assert.match(html, /<figcaption>[\s\S]*图：谐振子的势能曲线/);
     });
 
     await test('no page errors, no CSP violations, nothing fetched from other origins', async () => {

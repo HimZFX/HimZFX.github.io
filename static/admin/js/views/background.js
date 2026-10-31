@@ -21,7 +21,7 @@
 
 import {
   h, svgIcon, render, clear, toast, confirmDialog, withBusy, badge,
-  loadingState, errorState, errorMessage, debounce,
+  loadingState, errorState, errorMessage, debounce, timeAgo,
 } from '../ui.js';
 import { parseToml, setValue, getIn } from '../tomlpatch.js';
 import { PATHS, ADMIN_BASE } from '../config.js';
@@ -47,6 +47,14 @@ const MINI_SIZE = { w: 960, h: 540 };
 const READY_TIMEOUT_MS = 10000;
 const TUNE_DEBOUNCE_MS = 500;
 const PREF_KEY = 'admin.bg.preview';
+/**
+ * 本机自动保存未发布的修改（每次修改后立即同步写入）：手机切后台被回收、iOS 关标签页（不触发
+ * beforeunload）、令牌失效（外壳直接卸载视图）后，下次打开「背景动画」会提示恢复。
+ * 只存设置和参数输入框里的文字，没有任何敏感信息。用 localStorage 而不是 drafts.js 的草稿库：
+ * 那个库会被「文章 / 页面」列表当成文章草稿列出来。
+ */
+const LOCAL_KEY = 'admin.bg.unpublished';
+const LOCAL_VERSION = 1;
 const BOM = new RegExp('^' + String.fromCharCode(0xfeff));
 
 // ---------------------------------------------------------------------------
@@ -203,6 +211,25 @@ function writePrefs(p) {
   try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch { /* 隐私模式等 */ }
 }
 
+/** 读本机保存的未发布修改；没有 / 格式不对 → null。 */
+function readLocal() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null');
+    if (!v || typeof v !== 'object' || v.v !== LOCAL_VERSION) return null;
+    if (!v.form || typeof v.form !== 'object' || !v.base || typeof v.base !== 'object') return null;
+    if (v.values && typeof v.values !== 'object') return null;
+    return v;
+  } catch { return null; }
+}
+
+function writeLocal(v) {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(v)); return true; } catch { return false; }
+}
+
+function removeLocal() {
+  try { localStorage.removeItem(LOCAL_KEY); } catch { /* ignore */ }
+}
+
 // ---------------------------------------------------------------------------
 // 视图
 
@@ -233,6 +260,8 @@ export default async function mount(container, params, ctx) {
       : (typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches ? 'phone' : 'desktop'),
     previews: new Set(),
     io: null,
+    // 上次没发布就离开时本机保存的修改（等用户选「恢复」或「丢弃」；在那之前不覆盖它）
+    pendingLocal: null,
   };
   const ui = {};
 
@@ -262,6 +291,7 @@ export default async function mount(container, params, ctx) {
   st.base = backgroundSettings(st.data.config);
   st.form = { ...st.base };
   st.selected = pickInitialSelection();
+  st.pendingLocal = checkLocal();
   buildUi();
 
   // -------------------------------------------------------------------------
@@ -324,6 +354,124 @@ export default async function mount(container, params, ctx) {
     if (params && params.effect && names.includes(params.effect)) return params.effect;
     if (names.includes(st.form.effect)) return st.form.effect;
     return names[0] || null;
+  }
+
+  // -------------------------------------------------------------------------
+  // 本机自动保存
+
+  /**
+   * 把本机保存的修改套到当前的网站设置上（和冲突后 reloadKeepingEdits 的规则一样：
+   * 只套用当时改过的项；参数只保留现在的文件里还有、且和现在的值不同的）。
+   * @returns {{ form: object, values: Map }}
+   */
+  function applyLocal(saved) {
+    const form = { ...st.base };
+    for (const k of ['enabled', 'effect', 'autoplay']) {
+      const v = saved.form[k];
+      if (v === saved.base[k]) continue;
+      if (k === 'enabled' && typeof v !== 'boolean') continue;
+      if (k === 'effect' && (typeof v !== 'string' || !effectByName(v))) continue;
+      if (k === 'autoplay' && !AUTOPLAY_LABEL[v]) continue;
+      form[k] = v;
+    }
+    const values = new Map();
+    const savedValues = saved.values || {};
+    for (const eff of st.data.effects) {
+      const old = savedValues[eff.name];
+      if (!old || typeof old !== 'object') continue;
+      const keep = {};
+      for (const p of eff.params) {
+        if (!Object.prototype.hasOwnProperty.call(old, p.key)) continue;
+        const raw = String(old[p.key]);
+        if (parseNum(raw) !== p.value) keep[p.key] = raw;
+      }
+      if (Object.keys(keep).length) values.set(eff.name, keep);
+    }
+    return { form, values };
+  }
+
+  /** 打开页面时：有没有值得恢复的本机修改？没有实际差别的旧记录直接删掉。 */
+  function checkLocal() {
+    const saved = readLocal();
+    if (!saved) return null;
+    const { form, values } = applyLocal(saved);
+    const differs = ['enabled', 'effect', 'autoplay'].some((k) => form[k] !== st.base[k]) || values.size > 0;
+    if (!differs) { removeLocal(); return null; }
+    // 保存之后网站上的这些文件有没有被改过（例如在别的设备上发布过）
+    const shas = saved.shas || {};
+    let changed = shas.params !== st.data.params.sha;
+    for (const eff of st.data.effects) {
+      if (savedTouches(saved, eff.name) && (shas.effects || {})[eff.name] !== eff.sha) changed = true;
+    }
+    return { saved, siteChanged: changed };
+  }
+
+  function savedTouches(saved, name) {
+    const v = (saved.values || {})[name];
+    return !!(v && typeof v === 'object' && Object.keys(v).length);
+  }
+
+  /** 每次 refresh() 时调用：有未发布的修改就同步存一份，没有就删掉。 */
+  function persistLocal() {
+    if (st.disposed || st.pendingLocal || !st.data || !st.base) return;
+    if (!isDirty()) { removeLocal(); return; }
+    const values = {};
+    for (const [name, v] of st.values) if (v && Object.keys(v).length) values[name] = { ...v };
+    const effects = {};
+    for (const eff of st.data.effects) effects[eff.name] = eff.sha;
+    writeLocal({
+      v: LOCAL_VERSION,
+      at: Date.now(),
+      form: { ...st.form },
+      base: { ...st.base },
+      values,
+      shas: { params: st.data.params.sha, effects },
+    });
+  }
+
+  function restoreLocal() {
+    const pending = st.pendingLocal;
+    if (!pending || st.disposed) return;
+    const { form, values } = applyLocal(pending.saved);
+    st.pendingLocal = null;
+    st.form = form;
+    st.values = values;
+    if (form.effect !== st.base.effect && effectByName(form.effect)) st.selected = form.effect;
+    else {
+      const tuned = [...values.keys()];
+      if (tuned.length && !values.has(st.selected)) st.selected = tuned[0];
+    }
+    buildUi();   // 重建参数输入框和预览，refresh() 会把恢复后的状态重新存到本机
+    toast(pending.siteChanged
+      ? '已恢复上次没发布的修改。网站上的设置在那之后被改过，请检查一下再发布'
+      : '已恢复上次没发布的修改，检查后点「保存并发布」', { type: pending.siteChanged ? 'warning' : 'success', timeout: 7000 });
+  }
+
+  async function discardLocal() {
+    if (!st.pendingLocal || st.disposed) return;
+    const ok = await confirmDialog({
+      title: '丢弃本机保存的修改？',
+      message: '上次没发布的背景动画修改会被删除，不能恢复。',
+      okText: '丢弃',
+      danger: true,
+    });
+    if (!ok || st.disposed || !st.pendingLocal) return;
+    st.pendingLocal = null;
+    refresh();
+  }
+
+  function localBanner() {
+    const pending = st.pendingLocal;
+    const when = timeAgo(pending.saved.at);
+    const restore = h('button', { type: 'button', class: 'btn btn-primary btn-sm', dataset: { testid: 'bg-local-restore' } }, '恢复');
+    const drop = h('button', { type: 'button', class: 'btn btn-sm', dataset: { testid: 'bg-local-discard' } }, '丢弃');
+    restore.addEventListener('click', restoreLocal);
+    drop.addEventListener('click', discardLocal);
+    return h('div', { class: `banner ${pending.siteChanged ? 'banner-warning' : 'banner-info'}`, dataset: { testid: 'bg-local-draft' } },
+      svgIcon(pending.siteChanged ? 'warning' : 'info'),
+      h('span', {}, `发现本机未发布的背景动画修改${when ? `（${when}）` : ''}。`
+        + (pending.siteChanged ? '网站上的设置在那之后被改过（可能是在别的设备上），恢复后请检查一下再发布。' : '')),
+      h('div', { class: 'banner-actions' }, restore, drop));
   }
 
   // -------------------------------------------------------------------------
@@ -850,6 +998,7 @@ export default async function mount(container, params, ctx) {
 
     // 提示条
     clear(ui.banners);
+    if (st.pendingLocal) ui.banners.append(localBanner());
     if (!curExists && st.data.effects.length) {
       ui.banners.append(h('div', { class: 'banner banner-warning', dataset: { testid: 'bg-missing-effect' } }, svgIcon('warning'),
         h('span', {}, `配置里的效果「${f.effect}」在 ${PATHS.effects}/ 里不存在，网站构建会失败。请在下面选一个效果，点「用作网站背景」后发布。`)));
@@ -915,6 +1064,7 @@ export default async function mount(container, params, ctx) {
       ? `有 ${lines.length} 项修改未发布：${lines.join('；')}`
       : '没有未发布的修改';
     ui.saveText.title = dirty ? lines.join('\n') : '';
+    persistLocal();
   }
 
   // -------------------------------------------------------------------------
@@ -1085,13 +1235,16 @@ export default async function mount(container, params, ctx) {
     isDirty,
     async canLeave() {
       if (!isDirty()) return true;
-      return confirmDialog({
+      const ok = await confirmDialog({
         title: '背景动画的修改还没有发布',
         message: '离开后，刚才的修改会丢失。确定要离开吗？',
         okText: '仍然离开',
         cancelText: '留下来',
         danger: true,
       });
+      // 用户明确选了放弃：本机保存的那份也删掉（否则下次打开又会提示恢复）
+      if (ok && !st.pendingLocal) removeLocal();
+      return ok;
     },
     unmount: dispose,
   };

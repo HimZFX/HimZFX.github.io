@@ -509,6 +509,45 @@ async function main() {
       assert.ok(!fs.existsSync(path.join(site2, 'posts', 'shared-only', 'index.html')));
     });
 
+    await step('posts: a future-dated post shows 定时发表 (not 已发表); a new-post draft whose file exists says 可能已经发表过了', async () => {
+      const future = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+      mock.setFile('content/posts/lecture-later.md', `---\ntitle: "下周的讲义"\ndate: ${future}\ndraft: false\n---\n\n正文\n`);
+      await page.evaluate(async () => {
+        const d = await import('/admin/js/drafts.js');
+        await d.saveDraft('new:e2e-lists-landed', {
+          title: '下周的讲义', markdown: '正文', images: {}, updatedAt: Date.now(),
+          fields: { kind: 'post', slug: 'lecture-later', newGroup: true, form: { title: '下周的讲义', tags: [], categories: [] } },
+        });
+        await d.saveDraft('new:e2e-lists-fresh', {
+          title: '真的新文章', markdown: 'x', images: {}, updatedAt: Date.now() - 1000,
+          fields: { kind: 'post', slug: 'not-there-yet', newGroup: true, form: { title: '真的新文章', tags: [], categories: [] } },
+        });
+      });
+      try {
+        await page.reload();
+        await page.waitForSelector('body[data-testid="app-ready"]', { state: 'attached' });
+        await goto(page, '#/posts', 'posts');
+        const row = '[data-testid="post-row"][data-key="content/posts/lecture-later"]';
+        await page.waitForSelector(row);
+        const st = (await page.textContent(`${row} [data-testid="post-status"]`)).trim();
+        assert.equal(st, '定时发表');
+        assert.match(await page.getAttribute(`${row} [data-testid="post-status"] [data-state="future"]`, 'title'), /还没到/);
+        // the existing post is still plain 已发表
+        assert.equal((await page.textContent('[data-testid="post-row"][data-key="content/posts/first-physics-note"] [data-testid="post-status"]')).trim(), '已发表');
+        const landed = await rowText(page, 'new:e2e-lists-landed', 'draft-row');
+        assert.match(landed, /可能已经发表过了/);
+        const fresh = await rowText(page, 'new:e2e-lists-fresh', 'draft-row');
+        assert.match(fresh, /新文章，还没有发表过/);
+      } finally {
+        await page.evaluate(async () => {
+          const d = await import('/admin/js/drafts.js');
+          await d.deleteDraft('new:e2e-lists-landed');
+          await d.deleteDraft('new:e2e-lists-fresh');
+        });
+        mock.setFile('content/posts/lecture-later.md', null);
+      }
+    });
+
     await step('no page errors', async () => {
       assert.deepEqual(pageErrors, []);
     });

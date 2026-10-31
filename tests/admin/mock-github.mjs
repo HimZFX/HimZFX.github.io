@@ -333,6 +333,7 @@ export async function startMock({
     runDelayMs,
     apiDelayMs: 0,
     permissions: { admin: true, maintain: true, push: true, triage: true, pull: true },
+    contentsWrite: true,
     injections: [],
   };
   const runs = [];
@@ -780,6 +781,11 @@ export async function startMock({
     const rest = m[3] || '';
     let r;
     if (rest === '' && method === 'GET') return { status: 200, json: repoJson() };
+    // A fine-grained token with Contents: Read-only (or without this repo selected — the repo is public)
+    // still sees permissions.push = true on GET /repos (that is the USER's role), but every git write fails.
+    if (!state.contentsWrite && method !== 'GET' && rest.startsWith('/git/')) {
+      throw new HttpError(403, 'Resource not accessible by personal access token');
+    }
 
     // refs: GET /git/ref/heads/main, GET|PATCH /git/refs/heads/main
     if ((r = /^\/git\/refs?\/(heads\/.+)$/.exec(rest))) {
@@ -1218,7 +1224,14 @@ export async function startMock({
     setApiDelay(ms) {
       state.apiDelayMs = ms;
     },
-    /** Repo permissions returned by GET /repos/{o}/{r} (e.g. { push: false }). */
+    /**
+     * false → the token behaves like a real read-only fine-grained PAT: GET /repos still says push: true,
+     * but POST git/blobs|trees|commits and PATCH git/refs return 403 "Resource not accessible by personal access token".
+     */
+    setContentsWrite(ok) {
+      state.contentsWrite = !!ok;
+    },
+    /** Repo permissions returned by GET /repos/{o}/{r} (e.g. { push: false } — the USER's role, not the token's). */
     setPermissions(p) {
       Object.assign(state.permissions, p);
     },
