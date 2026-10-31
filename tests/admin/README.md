@@ -19,7 +19,14 @@ node --test tests/admin/mock.test.mjs
 node tests/admin/e2e-shell.mjs
 node tests/admin/e2e-editor.mjs
 # … e2e-lists / e2e-profile / e2e-background / e2e-files
+
+# 跨界面的完整使用流程（登录 → 写文章 + 英文版 → 上传资料并在文章里链接 → 换头像和简介 →
+# 换背景动画 → 调整菜单 → 删除草稿 → Hugo 构建后检查两种语言的网站）
+node tests/admin/e2e-journey.mjs
 ```
+
+每个 e2e 脚本都会把 Hugo 构建结果和截图放进自己的目录（默认在系统临时目录下），可以用环境变量指定：
+`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`JOURNEY_E2E_DIR`。
 
 > 说明：Node 22 的 `node --test <目录>` 并不会去目录里找测试文件，而是把目录当成模块运行，
 > 所以这里放了一个 `index.js`，由它依次加载本目录的全部 `*.test.mjs`。

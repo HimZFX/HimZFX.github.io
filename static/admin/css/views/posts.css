@@ -1,0 +1,206 @@
+/* ==========================================================================
+   posts.css — 「文章」与「页面」列表（views/posts.js、views/pages.js，LISTS 维护）
+   只写这两个视图特有的样式；通用组件（.card .list .badge .tabs …）来自 admin.css。
+   所有类名以 .lists- 开头，避免和其他视图冲突。
+   ========================================================================== */
+
+.lists-view { gap: 20px; }
+
+/* ---------- 工具栏：筛选 + 搜索 ---------- */
+.lists-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+.lists-toolbar .tabs { flex: none; }
+.lists-tab-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--gray-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+}
+.tab.active .lists-tab-count { background: rgba(7, 193, 96, 0.14); color: var(--primary-text); }
+
+.lists-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 280px;
+  min-width: 0;
+}
+.lists-search > .icon {
+  position: absolute;
+  left: 11px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.lists-search .input { width: 100%; padding-left: 34px; background: var(--card); }
+
+.lists-count { padding: 2px 4px; text-align: right; }
+
+/* ---------- 列表行 ---------- */
+.lists-list { min-height: 60px; }
+.lists-row { padding-top: 16px; padding-bottom: 16px; }
+.lists-row .list-item-title { font-size: 15.5px; }
+.lists-row .list-item-meta { gap: 6px 10px; }
+.lists-meta-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.lists-meta-item .icon { width: 13px; height: 13px; }
+.lists-badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.lists-row .badge .icon { margin-right: 3px; }
+.lists-row .list-item-actions .btn-ghost.btn-danger:not(:hover) { --btn-fg: var(--muted); }
+.lists-row .list-item-actions .btn-ghost.btn-danger:hover { --btn-fg: var(--danger); }
+
+.lists-no-match .empty { padding: 40px 16px; }
+
+/* 骨架行 */
+.lists-skeleton-row .list-item-main { gap: 10px; }
+.lists-skeleton-row:hover { background: transparent; }
+.lists-skeleton-btn { width: 64px; height: 30px; border-radius: 6px; }
+
+/* ---------- 本机草稿 ---------- */
+.lists-drafts { padding-top: 16px; padding-bottom: 6px; border-left: 3px solid var(--info); }
+.lists-drafts .card-header { margin-bottom: 8px; }
+.lists-drafts .card-title { font-size: 15px; }
+.lists-drafts .card-title .icon { color: var(--info); }
+.lists-drafts .list-item { padding-top: 12px; padding-bottom: 12px; }
+.lists-drafts .list-item-title { font-size: 14.5px; }
+.lists-drafts-host:empty { display: none; }
+
+/* ---------- 删除确认 ---------- */
+.lists-file-list {
+  margin: 0;
+  padding: 8px 12px 8px 28px;
+  border-radius: 8px;
+  background: var(--gray-soft);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.lists-file-list code { word-break: break-all; }
+.lists-delete .checkbox { align-items: flex-start; line-height: 1.6; }
+.lists-delete .checkbox span { word-break: break-all; }
+
+/* ---------- 页面：分组标题 ---------- */
+.lists-section-head { padding: 0 4px; }
+.lists-section-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+
+/* 各语言名称 */
+.lists-names { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13.5px; color: var(--text-2); }
+.lists-name { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.lists-name-lang {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--gray-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 18px;
+}
+.lists-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.lists-url { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--muted); word-break: break-all; }
+a.lists-url:hover { color: var(--primary-text); text-decoration: none; }
+.lists-url .icon { width: 12px; height: 12px; }
+
+/* 菜单顺序 */
+.lists-page-actions { gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.lists-order { display: inline-flex; align-items: center; gap: 2px; }
+.lists-order-label { margin-right: 6px; }
+.lists-weight { width: 76px; height: 32px; text-align: center; }
+.lists-weight.is-changed { border-color: var(--warning); background: var(--warning-soft); }
+.lists-weight-lg { max-width: 160px; }
+
+/* 保存条：有未保存修改时贴在底部 */
+.lists-savebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 14px 10px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.lists-savebar.is-dirty {
+  position: sticky;
+  bottom: calc(var(--bottom-nav-h, 0px) + 12px);
+  z-index: 5;
+  border-color: rgba(255, 136, 0, 0.45);
+  box-shadow: var(--shadow-md);
+}
+.lists-savebar.is-dirty .lists-save-hint { color: var(--warning-text); }
+
+/* 导航栏预览 */
+.lists-nav-preview { padding: 14px 20px; }
+.lists-nav-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13.5px; font-weight: 600; color: var(--text-2); }
+.lists-nav-head .icon { width: 15px; height: 15px; color: var(--muted); }
+.lists-nav-rows { display: flex; flex-direction: column; gap: 8px; }
+.lists-nav-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lists-nav-label { flex: none; width: 52px; color: var(--muted); font-size: 12.5px; }
+.lists-nav-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 4px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg);
+  flex: 1 1 auto;
+}
+.lists-nav-item {
+  padding: 2px 10px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+.lists-nav-item + .lists-nav-item { border-left: 1px solid var(--border); border-radius: 0 6px 6px 0; }
+
+/* 新建栏目 */
+.lists-new-form { gap: 16px; }
+.lists-url-preview { font-family: var(--mono); word-break: break-all; }
+
+/* ---------- 手机 ---------- */
+@media (max-width: 760px) {
+  .lists-view { gap: 16px; }
+  .lists-toolbar { flex-direction: column; align-items: stretch; }
+  .lists-toolbar .tabs { overflow-x: auto; }
+  .lists-search { flex: 1 1 auto; }
+  .lists-row { padding-top: 14px; padding-bottom: 12px; }
+  .lists-row .list-item-actions { width: 100%; justify-content: flex-end; margin-left: 0; }
+  .lists-page-actions { justify-content: space-between; }
+  .lists-drafts { border-left-width: 0; border-top: 3px solid var(--info); }
+  .lists-drafts .card-header .muted { display: none; }
+  .lists-nav-preview { padding: 12px 14px; }
+  .lists-nav-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .lists-nav-label { width: auto; }
+  /* 手机上菜单项可能折行：不用竖线分隔（折行后行首会多一条线），改成小胶囊 */
+  .lists-nav-items { gap: 6px; padding: 6px; }
+  .lists-nav-item, .lists-nav-item + .lists-nav-item { border-left: 0; border-radius: 6px; background: var(--card); }
+  .lists-savebar { padding: 10px 12px; }
+  .lists-savebar .row { margin-left: auto; }
+  .lists-count { text-align: center; }
+}
+
+@media (max-width: 380px) {
+  .lists-btn-text { display: none; }
+}
+
+/* 和其他页面一样：标题区下方只留一份间距（.stack 的 gap 已经有了，不再叠加 .page-header 的 margin）；
+   空的占位容器（本机草稿区、提示区还没有内容时）不占间距 */
+.lists-view > .page-header { margin-bottom: 0; }
+.lists-view :is(.lists-drafts-host, .lists-notice, div:not([class])):empty { display: none; }

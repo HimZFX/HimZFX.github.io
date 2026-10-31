@@ -329,6 +329,12 @@ async function main() {
       await page.goBack();
       await page.waitForFunction(() => location.hash.startsWith('#/edit') || location.hash === '#/does-not-exist');
       await page.waitForFunction(() => document.body.dataset.viewReady === 'edit' || document.body.dataset.viewReady === 'posts');
+      // a page opened from a local draft key highlights 页面, a post draft 文章
+      for (const [hash, nav] of [['#/edit?draft=' + encodeURIComponent('file:content/about.md'), 'nav-pages'],
+        ['#/edit?draft=' + encodeURIComponent('file:content/posts/first-physics-note.md'), 'nav-posts']]) {
+        await page.evaluate((h) => { location.hash = h; }, hash);
+        await page.waitForFunction((n) => document.querySelector(`[data-testid="${n}"]`)?.getAttribute('aria-current') === 'page', nav);
+      }
       assert.deepEqual(st.pageErrors, []);
       await context.close();
     });
@@ -557,7 +563,23 @@ async function main() {
         release(42);
         out.busyResult = [await p, await p2];
         out.after = [btn.disabled, btn.classList.contains('is-busy')];
+        // fn() setting button.disabled itself (e.g. "nothing left to save") wins over the restore
+        await ui.withBusy(btn, () => { btn.disabled = true; out.readInside = btn.disabled; });
+        out.keptDisabled = btn.disabled;
+        btn.disabled = true;
+        await ui.withBusy(btn, () => { btn.disabled = false; });
+        out.keptEnabled = btn.disabled === false && !Object.prototype.hasOwnProperty.call(btn, 'disabled');
         btn.remove();
+        // the same toast twice in a row shows once
+        ui.toast('同一条', { timeout: 0 });
+        ui.toast('同一条', { timeout: 0 });
+        ui.toast('同一条', { type: 'error', timeout: 0 });
+        out.dupToasts = document.querySelectorAll('.toast-stack .toast').length;
+        document.querySelectorAll('.toast').forEach((t) => t.remove());
+        // loadScript can give the element an id
+        const probe = ui.loadScript('/admin/__probe-missing.js', { id: 'probe-script' });
+        out.scriptId = document.getElementById('probe-script')?.tagName === 'SCRIPT';
+        await probe.catch(() => {});
         return out;
       });
       assert.equal(r.h.cls, 'a b');
@@ -575,6 +597,11 @@ async function main() {
       assert.deepEqual(r.busy, [true, true]);
       assert.deepEqual(r.busyResult, [42, 42]);
       assert.deepEqual(r.after, [false, false]);
+      assert.equal(r.readInside, true, 'still reads as disabled while busy');
+      assert.equal(r.keptDisabled, true, 'disabled set inside fn is kept');
+      assert.equal(r.keptEnabled, true, 'enabled set inside fn is kept, no own property left behind');
+      assert.equal(r.dupToasts, 2, 'identical toast replaces the previous one (different type stays)');
+      assert.equal(r.scriptId, true, 'loadScript({ id })');
 
       // confirm dialog: focus trapped, Esc → false, OK → true
       await page.evaluate(() => {

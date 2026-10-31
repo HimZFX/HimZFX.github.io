@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>背景动画预览</title>
+  <!--
+    背景动画的预览沙箱（ADMIN_SPEC §2 规则 4、§6.5）。
+    由管理后台以 <iframe sandbox="allow-scripts"> 加载（没有 allow-same-origin，
+    所以这里的代码拿不到后台的令牌和存储）。要运行的引擎 + 卡带代码通过 postMessage 传进来，
+    逻辑全部在 js/cassette-frame.js 里；本页面没有内联脚本。
+  -->
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    body { background: #fff; }
+    html[data-theme="dark"] body { background: rgb(29, 30, 32); }
+    /* 引擎自带的左下角开关按钮在预览里用不上 */
+    body > button { display: none !important; }
+  </style>
+  <script src="js/cassette-frame.js"></script>
+</head>
+<body></body>
+</html>

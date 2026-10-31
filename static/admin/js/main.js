@@ -799,7 +799,9 @@ function activeNavRoute(info) {
   if (info.route !== 'edit') return info.route;
   const p = info.params || {};
   if (p.new === 'page') return 'pages';
-  if (p.path) return p.path.startsWith(PATHS.posts + '/') && !/\/_index(\.[a-z-]+)?\.md$/.test(p.path) ? 'posts' : 'pages';
+  // 本机草稿：file:<path> 的草稿按文件路径判断；new:… 的新草稿看不出类型，归到「文章」
+  const path = p.path || (typeof p.draft === 'string' && p.draft.startsWith('file:') ? p.draft.slice(5) : '');
+  if (path) return path.startsWith(PATHS.posts + '/') && !/\/_index(\.[a-z-]+)?\.md$/.test(path) ? 'posts' : 'pages';
   return 'posts';
 }
 

@@ -317,17 +317,42 @@ const busyPromises = new WeakMap();
 /**
  * 运行 fn() 期间禁用按钮并显示转圈；返回 fn 的结果（异常会继续抛出）。
  * 按钮已经在忙时再次调用，直接返回正在进行的那个 Promise（防止连点重复提交）。
+ * 结束后按钮的 disabled 恢复为点击前的值；若 fn() 运行期间自己设置过 button.disabled，则以那个值为准。
  * @template T
  * @param {HTMLButtonElement|null} button
  * @param {() => T | Promise<T>} fn
  * @returns {Promise<T>}
  */
+function findPropDescriptor(obj, name) {
+  for (let o = obj; o; o = Object.getPrototypeOf(o)) {
+    const d = Object.getOwnPropertyDescriptor(o, name);
+    if (d) return d;
+  }
+  return undefined;
+}
+
 export async function withBusy(button, fn) {
   if (!button) return fn();
   const pending = busyPromises.get(button);
   if (pending) return pending;
-  const wasDisabled = button.disabled;
-  button.disabled = true;
+  // 忙碌期间按钮必须保持禁用；但如果 fn() 自己改了 button.disabled（例如发布成功后「没有改动 → 禁用」），
+  // 结束时要尊重这个新值，而不是把按钮恢复成点击前的状态。所以忙碌期间在实例上临时挡住 disabled 的读写。
+  let desired = button.disabled;
+  const proto = Object.getPrototypeOf(button);
+  const desc = findPropDescriptor(proto, 'disabled');
+  if (desc && desc.set) desc.set.call(button, true);
+  else button.disabled = true;
+  let shadowed = false;
+  if (desc && desc.get && desc.set) {
+    try {
+      Object.defineProperty(button, 'disabled', {
+        configurable: true,
+        get() { return true; },
+        set(v) { desired = !!v; },
+      });
+      shadowed = true;
+    } catch { shadowed = false; }
+  }
   button.classList.add('is-busy');
   button.setAttribute('aria-busy', 'true');
   const p = (async () => {
@@ -335,9 +360,10 @@ export async function withBusy(button, fn) {
       return await fn();
     } finally {
       busyPromises.delete(button);
+      if (shadowed) delete button.disabled;
       button.classList.remove('is-busy');
       button.removeAttribute('aria-busy');
-      button.disabled = wasDisabled;
+      button.disabled = desired;
     }
   })();
   busyPromises.set(button, p);
@@ -568,6 +594,10 @@ export function toast(message, { type = 'info', timeout } = {}) {
   const arm = () => { if (ms > 0) timer = setTimeout(close, ms); };
   el.addEventListener('mouseenter', () => clearTimeout(timer));
   el.addEventListener('mouseleave', () => { if (!closed) { clearTimeout(timer); arm(); } });
+  // 同一条提示（类型 + 文字都相同）还在显示时，先收起旧的，避免连续操作叠出好几条一样的提示
+  for (const t of stack.querySelectorAll('.toast:not(.is-leaving)')) {
+    if (t.classList.contains(`toast-${type}`) && t.querySelector('.toast-text')?.textContent === String(message ?? '')) t.remove();
+  }
   stack.appendChild(el);
   // 太多时移除最早的
   const live = [...stack.querySelectorAll('.toast:not(.is-leaving)')];
@@ -739,13 +769,15 @@ const styleCache = new Map();
 /**
  * 加载一个外部脚本（同一 src 只加载一次；失败后允许重试）。
  * @param {string} src
+ * @param {{ id?: string }} [opts] （扩展）id：给 <script> 元素设置 id（有的库靠固定 id 判断脚本是否已加载）
  * @returns {Promise<void>}
  */
-export function loadScript(src) {
+export function loadScript(src, { id } = {}) {
   const url = new URL(src, document.baseURI).href;
   if (scriptCache.has(url)) return scriptCache.get(url);
   const p = new Promise((resolve, reject) => {
     const el = document.createElement('script');
+    if (id) el.id = id;
     el.src = url;
     el.async = true;
     el.onload = () => resolve();
