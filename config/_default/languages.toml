@@ -1,0 +1,28 @@
+# ============================================================
+# 语言列表
+#
+# weight 决定语言切换按钮里的顺序。默认语言见 hugo.toml。
+#
+# 「全局一份，个别语言再覆盖」：
+# params.toml 里的参数对所有语言生效；某个语言需要不同的值时，
+# 在 [<语言>.params] 下只写要改的那几项，其余自动沿用 params.toml。
+# 例如想让英文首页的简介和中文不同：
+#
+#   [en.params.profileMode]
+#     subtitle = "Peking University | ..."
+#
+# 新增语言时，记得在 module.toml 里为它加一条挂载。
+# ============================================================
+
+[zh]
+  languageName = "中文"
+  languageCode = "zh-CN"
+  weight = 1
+
+[en]
+  languageName = "English"
+  languageCode = "en"
+  weight = 2
+
+  [en.params.giscus]
+    lang = "en"            # 英文站的评论区界面用英文

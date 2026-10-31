@@ -1,0 +1,14 @@
+# ============================================================
+# Markdown 渲染
+# ============================================================
+
+[goldmark.renderer]
+  unsafe = true   # 允许在 Markdown 里直接写 HTML（比如 iframe 视频）
+
+# 让 $...$ / $$...$$ 原样保留给 KaTeX 渲染，不被 Markdown 误处理
+# （KaTeX 的加载见 params.toml 的 math 开关）
+[goldmark.extensions.passthrough]
+  enable = true
+  [goldmark.extensions.passthrough.delimiters]
+    block = [['$$', '$$'], ['\[', '\]']]
+    inline = [['$', '$'], ['\(', '\)']]

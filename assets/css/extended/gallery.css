@@ -1,4 +1,5 @@
-/* 瀑布流画廊样式 */
+/* 图片画廊样式（配合 shortcodes/gallery.html）。
+   放在 assets/css/extended/ 下的 CSS 会被 PaperMod 自动打包进主样式表，无需手动引用。 */
 .gallery {
     display: flex;
     flex-wrap: wrap;

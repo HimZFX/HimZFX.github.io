@@ -1,5 +1,8 @@
 ---
 title: "Research"
+menu:
+  main:
+    weight: 20
 description: "My research projects and publications"
 hidemeta: true
 layout: "list"

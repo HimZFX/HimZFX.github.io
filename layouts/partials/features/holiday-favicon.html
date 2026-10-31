@@ -1,0 +1,42 @@
+{{- /*
+  节日图标：在特定日期把标签页图标换成 emoji。
+  规则（日期、emoji）全部在 params.toml 的 [holidayFavicon] 中配置，这里只有逻辑。
+*/ -}}
+{{- with site.Params.holidayFavicon }}
+{{- if and .enabled .rules }}
+<script>
+  (function (rules) {
+    var now = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    var today = pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+
+    var emoji = null;
+    for (var i = 0; i < rules.length && !emoji; i++) {
+      var from = rules[i].from, to = rules[i].to || from;
+      var hit = from <= to
+        ? today >= from && today <= to     // 普通区间
+        : today >= from || today <= to;    // 跨年区间，如 12-25 ~ 01-05
+      if (hit) emoji = rules[i].emoji;
+    }
+    if (!emoji) return;
+
+    var svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
+              "<text y='.9em' font-size='90'>" + emoji + "</text></svg>";
+    var href = "data:image/svg+xml," + encodeURIComponent(svg);
+
+    // PaperMod 会输出多个尺寸的 icon，全部替换，避免浏览器挑中原图
+    var links = document.querySelectorAll("link[rel~='icon']");
+    if (!links.length) {
+      var link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+      links = [link];
+    }
+    for (var j = 0; j < links.length; j++) {
+      links[j].type = "image/svg+xml";
+      links[j].href = href;
+    }
+  })({{ .rules | jsonify | safeJS }});
+</script>
+{{- end }}
+{{- end }}
