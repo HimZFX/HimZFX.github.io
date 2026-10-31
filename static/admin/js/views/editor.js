@@ -33,7 +33,7 @@ import {
 import { compressImage, timestampName, safeFileName, extOf } from '../images.js';
 import * as drafts from '../drafts.js';
 import { parseToml } from '../tomlpatch.js';
-import { renderPreview, ensureVditor, loadIconScript } from '../preview.js';
+import { renderPreview, ensureVditor, loadIconScript, VDITOR_MARKDOWN } from '../preview.js';
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -55,7 +55,184 @@ const ICON_DOCS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 const ICON_GALLERY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg>';
 const ICON_FIGURE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M3 13l5-4 4 3 3-2 6 4"/><path d="M7 20h10"/></svg>';
 
+// 荧光笔（高亮）
+const ICON_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>';
+
 const pad2 = (n) => String(n).padStart(2, '0');
+
+// ---------------------------------------------------------------------------
+// 高亮（==文字==）：在编辑区 DOM 里放 <mark>（toggleMark / planMark 用）
+
+/** 高亮可以挪到它外面的行内格式（加粗、斜体、删除线、链接）。 */
+const MARK_LIFT = new Set(['STRONG', 'B', 'EM', 'I', 'S', 'DEL', 'A']);
+const MARK_WS = /[\s​]/;
+const MARK_PUNCT = /[\p{P}\p{S}]/u;
+
+/** node 在 top 里的位置（每一层的子节点序号）；node 不在 top 里时返回 null。 */
+function nodePath(node, top) {
+  const p = [];
+  for (let n = node; n !== top; n = n.parentNode) {
+    if (!n || !n.parentNode) return null;
+    p.unshift(Array.prototype.indexOf.call(n.parentNode.childNodes, n));
+  }
+  return p;
+}
+function nodeAt(top, path) {
+  let n = top;
+  for (const i of path) n = n.childNodes[i];
+  if (!n) throw new Error('node not found');
+  return n;
+}
+const blankText = (n) => n.nodeType === 3 && !n.data.replace(/​/g, '');
+
+/** 选区两头（文字节点里）符合 test 的字符不包进高亮。 */
+function trimRangeEdges(range, test) {
+  while (!range.collapsed && range.startContainer.nodeType === 3 && range.startOffset < range.startContainer.length &&
+    test(range.startContainer.data[range.startOffset])) range.setStart(range.startContainer, range.startOffset + 1);
+  while (!range.collapsed && range.endContainer.nodeType === 3 && range.endOffset > 0 &&
+    test(range.endContainer.data[range.endOffset - 1])) range.setEnd(range.endContainer, range.endOffset - 1);
+}
+
+/** 选区正好从加粗 / 链接……的开头开始（或在结尾结束）时，把选区扩到这个格式外面。 */
+function liftRange(range, top) {
+  for (;;) {
+    const c = range.startContainer;
+    const o = range.startOffset;
+    if (c.nodeType === 3) {
+      if (c.data.slice(0, o).replace(/​/g, '')) break;
+      range.setStartBefore(c);
+      continue;
+    }
+    if (![...c.childNodes].slice(0, o).every(blankText) || c === top || !MARK_LIFT.has(c.nodeName)) break;
+    range.setStartBefore(c);
+  }
+  for (;;) {
+    const c = range.endContainer;
+    const o = range.endOffset;
+    if (c.nodeType === 3) {
+      if (c.data.slice(o).replace(/​/g, '')) break;
+      range.setEndAfter(c);
+      continue;
+    }
+    if (![...c.childNodes].slice(o).every(blankText) || c === top || !MARK_LIFT.has(c.nodeName)) break;
+    range.setEndAfter(c);
+  }
+}
+
+/** top 里 node 前面（before = true）/ 后面紧挨着的一个字符（不算零宽空格）。 */
+function charBeside(node, top, before) {
+  const r = node.ownerDocument.createRange();
+  if (before) { r.setStart(top, 0); r.setEndBefore(node); } else { r.setStartAfter(node); r.setEnd(top, top.childNodes.length); }
+  const s = r.toString().replace(/​/g, '');
+  return before ? s.slice(-1) : s.slice(0, 1);
+}
+
+/**
+ * 源码 / 即时渲染模式：给选中的文字 text 加上 ==，按顺序列出几种写法（原样 → 两头的标点放到 == 外面 →
+ * 把选区两边的 ** / * / ~~ 也包进来 → 在需要的一侧加空格），由调用方用 Lute 挑第一种认得出的
+ * （原因见 Editor#planMark）。prev / next = 选区前后同一行的文字。
+ * 返回 [{ value, spaced, lift }]：lift = 选区两边各要多换掉几个字符（包进来的格式符号）。
+ */
+export function markTextCandidates(text, prev = '', next = '') {
+  const lead = /^\s*/.exec(text)[0];
+  const rest = text.slice(lead.length);
+  const tail = /\s*$/.exec(rest)[0];
+  const core0 = rest.slice(0, rest.length - tail.length);
+  if (!core0) return [];
+  // 标点（Markdown 的格式符号除外：** ` [ ] 这些是格式本身，不能挪到 == 外面）
+  const plainPunct = (c) => MARK_PUNCT.test(c) && !/[*_~=`$[\]()<>!#|\\]/.test(c);
+  const out = [];
+  // 选区正好在 **粗体** 里面：可以把两边的 ** 也包进来（==**粗体**==）
+  const run = !lead && !tail && /(\*{1,3}|_{1,3}|~~)$/.exec(prev);
+  const lifted = run && next.startsWith(run[1]) ? run[1] : '';
+  for (const [before, after] of [[false, false], [true, false], [false, true], [true, true]]) {
+    for (const [lift, trim] of [[false, false], [false, true], [true, false], [true, true]]) {
+      if (lift && !lifted) continue;
+      const w = lift ? lifted : '';
+      let core = [...core0];
+      let l = '';
+      let r = '';
+      if (trim) {
+        while (core.length > 1 && (plainPunct(core[0]) || /\s/.test(core[0]))) l += core.shift();
+        while (core.length > 1 && (plainPunct(core[core.length - 1]) || /\s/.test(core[core.length - 1]))) r = core.pop() + r;
+        if (!l && !r) continue;
+      }
+      const left = prev.slice(0, prev.length - w.length) + lead + l;
+      const right = r + tail + next.slice(w.length);
+      const padL = before && left && !/\s$/.test(left) ? ' ' : '';
+      const padR = after && right && !/^\s/.test(right) ? ' ' : '';
+      if ((before && !padL) || (after && !padR)) continue;
+      out.push({ value: `${lead}${l}${padL}==${w}${core.join('')}${w}==${padR}${r}${tail}`, spaced: !!(padL || padR), lift: w.length });
+    }
+  }
+  return out;
+}
+
+/** 把选区的两头各向外扩 n 个字符（按 root 里文字节点的顺序数）。 */
+function shiftRange(range, root, n) {
+  const doc = root.ownerDocument;
+  const offsetOf = (node, off) => { const r = doc.createRange(); r.setStart(root, 0); r.setEnd(node, off); return r.toString().length; };
+  const s = offsetOf(range.startContainer, range.startOffset) - n;
+  const e = offsetOf(range.endContainer, range.endOffset) + n;
+  const tw = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let pos = 0;
+  let gotStart = false;
+  for (let t; (t = tw.nextNode());) {
+    const len = t.data.length;
+    if (!gotStart && s <= pos + len) { range.setStart(t, Math.max(0, s - pos)); gotStart = true; }
+    if (gotStart && e <= pos + len) { range.setEnd(t, Math.max(0, e - pos)); return; }
+    pos += len;
+  }
+}
+
+/** 元素自己的 HTML（交给 Lute 转 Markdown；只读取，不往页面里写 HTML）。 */
+function htmlOf(el) {
+  return new XMLSerializer().serializeToString(el).replace(/^(<[\w-]+) xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/, '$1');
+}
+
+/**
+ * md 用 Lute 渲染后的「指纹」：<mark> 个数、全部文字、加粗 / 斜体 / 删除线 / 链接 / 代码 / 公式里的文字。
+ * HTML 在 DOMParser 的独立文档里解析（不显示、不加载图片、不执行脚本）。
+ */
+function markSignature(lute, md) {
+  const body = new DOMParser().parseFromString(`<body>${lute.Md2HTML(md)}</body>`, 'text/html').body;
+  const txt = (n) => n.textContent.replace(/[\s​]/g, '');
+  const by = (sel) => [...body.querySelectorAll(sel)].map(txt).join('');
+  return {
+    marks: body.querySelectorAll('mark').length,
+    text: txt(body),
+    fmt: ['strong, b', 'em, i', 's, del', 'a', 'code', '.language-math'].map(by).join('\u0001'),
+  };
+}
+/** after 比 before 正好多一个高亮，文字和其他格式都没变（没有露出 == / **，加粗也没丢）。 */
+const sameMarkSignature = (before, after) =>
+  after.marks === before.marks + 1 && after.text === before.text && after.fmt === before.fmt;
+
+/**
+ * 按 plan 把选区包成 <mark data-marker="==">（选区两头的空格总是不包进去：== 文字 == 不算高亮）。
+ * plan.trim = 两头的标点也不包；plan.lift = 挪到加粗 / 链接等格式外面；plan.before / after = 在这一侧
+ * 加一个空格（旁边是文字时）。实际加了空格时设 plan.spaced = true。返回 mark；没有可包的文字时返回 null。
+ */
+function applyMarkPlan(range, plan, top) {
+  const isWs = (c) => MARK_WS.test(c);
+  trimRangeEdges(range, isWs);
+  if (plan.trim) trimRangeEdges(range, (c) => isWs(c) || MARK_PUNCT.test(c));
+  if (plan.lift) liftRange(range, top);
+  if (range.collapsed || !range.toString().replace(/[\s​]/g, '')) return null;
+  const doc = top.ownerDocument;
+  const mark = doc.createElement('mark');
+  mark.setAttribute('data-marker', '==');
+  mark.appendChild(range.extractContents());
+  range.insertNode(mark);
+  for (const side of ['before', 'after']) {
+    if (!plan[side]) continue;
+    const c = charBeside(mark, top, side === 'before');
+    if (!c || isWs(c)) continue;
+    mark.parentNode.insertBefore(doc.createTextNode(' '), side === 'before' ? mark : mark.nextSibling);
+    plan.spaced = true;
+  }
+  return mark;
+}
 
 /** 短代码参数（"…" 里）不能有 " 和换行。 */
 const scArg = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/"/g, '“').trim();
@@ -1132,6 +1309,8 @@ class Editor {
           toolbar: this.toolbarItems(),
           preview: {
             math: { engine: 'KaTeX', inlineDigit: true },
+            // ==文字== = 高亮（和网站 markup.toml 里 goldmark 的 mark 扩展一致）
+            markdown: { ...VDITOR_MARKDOWN },
             hljs: { style: dark ? 'github-dark' : 'github', lineNumber: false },
             theme: { current: dark ? 'dark' : 'light', path: VDITOR_CDN + '/dist/css/content-theme' },
           },
@@ -1170,15 +1349,17 @@ class Editor {
     const docs = { name: 'documents', tip: '插入资料链接', tipPosition: 'n', icon: ICON_DOCS, click: () => this.openDocuments() };
     const gallery = { name: 'gallery', tip: '多图并排', tipPosition: 'n', icon: ICON_GALLERY, click: () => this.pickImages('gallery') };
     const figure = { name: 'figure', tip: '带说明的图片', tipPosition: 'n', icon: ICON_FIGURE, click: () => this.pickImages('figure') };
+    // 高亮 = ==文字==（Ctrl/⌘ + Shift + M；Vditor 会把快捷键自动写进提示里）
+    const mark = { name: 'mark', tip: '高亮', tipPosition: 'n', icon: ICON_MARK, hotkey: '⇧⌘M', click: () => this.toggleMark() };
     if (this.phone) {
       return [
-        { name: 'upload', tip: '插入图片', tipPosition: 'n' }, figure, gallery, formula, docs, 'headings', 'bold', 'quote', 'list',
+        { name: 'upload', tip: '插入图片', tipPosition: 'n' }, figure, gallery, formula, docs, 'headings', 'bold', mark, 'quote', 'list',
         'ordered-list', 'line', 'link', 'table', 'undo', 'redo',
         { name: 'more', tip: '更多', tipPosition: 'n', toolbar: ['italic', 'strike', 'check', 'code', 'inline-code', 'edit-mode', 'outline', 'fullscreen'] },
       ];
     }
     return [
-      'headings', 'bold', 'italic', 'strike', '|',
+      'headings', 'bold', mark, 'italic', 'strike', '|',
       'line', 'quote', 'list', 'ordered-list', 'check', '|',
       'code', 'inline-code', 'table', 'link', 'upload', figure, gallery,
       formula, docs,
@@ -1327,6 +1508,185 @@ class Editor {
       if (preview) preview.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     } catch (err) {
       console.warn('[editor] could not open the formula block', err);
+    }
+  }
+
+  /**
+   * 「高亮」按钮：把选中的文字包成 ==文字==（<mark>）；选区在已有的高亮里（或包含高亮）时取消高亮。
+   * 所见即所得模式下直接改编辑区的 DOM（保留选区里的加粗、链接等格式），再让 Vditor 按「输入」重新整理
+   * 这一段（和打字一样：会触发 input 回调、可以撤销）。源码 / 即时渲染模式下按文字处理。
+   */
+  toggleMark() {
+    const r = this.editRoot();
+    const range = this.saveCaret();
+    if (!r || !r.root || !range) { toast('先选中要高亮的文字', { type: 'info' }); return; }
+    if (r.mode !== 'wysiwyg') { this.toggleMarkText(r, range); return; }
+    const root = r.root;
+    const elOf = (n) => (n && n.nodeType === 1 ? n : n && n.parentElement);
+    const inRoot = (el) => el && el !== root && root.contains(el);
+    const markOf = (n) => { const m = elOf(n) && elOf(n).closest('mark'); return inRoot(m) ? m : null; };
+    // 代码、公式、HTML 里不能加高亮（Hugo 也不会把那里的 == 当成高亮）
+    const NO_MARK = 'code, pre:not(.vditor-reset), .vditor-wysiwyg__block, [data-type="html-inline"], [data-type="html-entity"], .ed-embed-blocked';
+    const blocked = (n) => { const b = elOf(n) && elOf(n).closest(NO_MARK); return inRoot(b); };
+    const BLOCK = 'p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, div';
+    const blockOf = (n) => { const b = elOf(n) && elOf(n).closest(BLOCK); return inRoot(b) ? b : null; };
+
+    // 取消：选区（或光标）碰到的高亮全部去掉
+    const block = blockOf(range.startContainer);
+    const hits = new Set([markOf(range.startContainer), markOf(range.endContainer)].filter(Boolean));
+    if (!range.collapsed && block) {
+      for (const m of block.querySelectorAll('mark')) if (range.intersectsNode(m)) hits.add(m);
+    }
+    if (hits.size) {
+      let last = null;
+      for (const m of hits) {
+        const parent = m.parentNode;
+        last = m.lastChild || last;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        m.remove();
+      }
+      this.afterMarkEdit(r, last);
+      return;
+    }
+
+    if (range.collapsed) { toast('先选中要高亮的文字', { type: 'info' }); return; }
+    if (blocked(range.startContainer) || blocked(range.endContainer) || blocked(range.commonAncestorContainer)) {
+      toast('代码和公式里不能加高亮', { type: 'info' });
+      return;
+    }
+    if (!block || block !== blockOf(range.endContainer)) {
+      toast('高亮只能用在同一段文字里，请分段选择', { type: 'info' });
+      return;
+    }
+    // 先在这一段的副本上试出一种网站认得出的放法（见 planMark），再改真正的编辑区
+    let top = block;
+    while (top.parentNode !== root) top = top.parentNode;
+    const plan = this.planMark(top, range);
+    if (plan === null) { toast('先选中要高亮的文字', { type: 'info' }); return; }
+    if (!plan) { toast('这里加不了高亮，请换一段文字选择', { type: 'info' }); return; }
+    const mark = applyMarkPlan(range, plan, top);
+    if (!mark) { toast('先选中要高亮的文字', { type: 'info' }); return; }
+    if (plan.spaced) toast('高亮紧挨着标点或加粗、链接等格式，已在旁边加了空格，网站才能认出高亮', { type: 'info' });
+    this.afterMarkEdit(r, mark);
+  }
+
+  /**
+   * 在 top（编辑区里的一个顶层块）的副本上依次试几种放 <mark> 的方法，返回第一种
+   * 「用 Lute 转成 Markdown 再解析回来，高亮还在、文字和加粗 / 斜体 / 链接 / 代码 / 公式都没变」的方法。
+   * 原因：== 和 ** 一样受 CommonMark 的左右侧规则限制——== 里侧紧挨标点（，“ 或 **、`、[ 等格式符号）
+   * 而外侧紧挨文字时不算高亮。中文里很常见：文字==**粗体**==文字、文字**==粗体==**文字 都会坏
+   * （网站和编辑器都把 ==、** 原样显示出来，加粗也丢了）。Lute 和网站的 goldmark 在这点上规则一致。
+   * 试的顺序：原样 → 去掉两头的标点 → 把高亮挪到加粗 / 斜体 / 链接外面 → 再在需要的一侧加空格。
+   * 返回 plan（交给 applyMarkPlan）；null = 没有可高亮的文字；false = 怎么放都不行。
+   */
+  planMark(top, range) {
+    const PLAIN = { lift: false, trim: false, before: false, after: false, spaced: false };
+    const lute = this.vd && this.vd.vditor && this.vd.vditor.lute;
+    if (!lute) return PLAIN;
+    const sig = (md) => markSignature(lute, md);
+    let base;
+    try { base = sig(lute.VditorDOM2Md(htmlOf(top))); } catch { return PLAIN; }
+    const sPath = nodePath(range.startContainer, top);
+    const ePath = nodePath(range.endContainer, top);
+    if (!sPath || !ePath) return PLAIN;
+    let empty = true;
+    for (const [before, after] of [[false, false], [true, false], [false, true], [true, true]]) {
+      for (const [lift, trim] of [[false, false], [false, true], [true, false], [true, true]]) {
+        const plan = { lift, trim, before, after, spaced: false };
+        const copy = top.cloneNode(true);
+        const rr = document.createRange();
+        try {
+          rr.setStart(nodeAt(copy, sPath), range.startOffset);
+          rr.setEnd(nodeAt(copy, ePath), range.endOffset);
+        } catch { return PLAIN; }
+        if (!applyMarkPlan(rr, plan, copy)) continue;
+        empty = false;
+        if ((before || after) && !plan.spaced) continue; // 旁边本来就是空格 / 段首段尾：和前面试过的一样
+        let s;
+        try { s = sig(lute.VditorDOM2Md(htmlOf(copy))); } catch { continue; }
+        if (sameMarkSignature(base, s)) return plan;
+      }
+    }
+    return empty ? null : false;
+  }
+
+  /** 高亮的 DOM 改完之后：光标放到 node 后面，让 Vditor 重新整理这一段（和用户打字一样）。 */
+  afterMarkEdit(r, node) {
+    try {
+      const range = document.createRange();
+      if (node && r.root.contains(node)) range.setStartAfter(node);
+      else { range.selectNodeContents(r.root); range.collapse(false); }
+      range.collapse(true);
+      this.restoreCaret(range);
+      this.vd.insertValue(''); // 插入空内容 = 只触发 Vditor 的 input 处理（重新渲染这一段 + 撤销记录 + input 回调）
+    } catch (err) {
+      console.error('[editor] highlight failed', err);
+      toast('高亮失败，请重试', { type: 'error' });
+    }
+  }
+
+  /** 源码 / 即时渲染模式：按文字给选区加上或去掉两边的 ==。 */
+  toggleMarkText(r, range) {
+    // 选区（或光标）在已有的高亮里：把两边的 == 也选进来，下面就会去掉高亮
+    const el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const ir = el && el.closest('.vditor-ir__node[data-type="mark"]');
+    const sv = el && el.closest('.vditor-sv .mark:not(.vditor-sv__marker)');
+    if (ir && r.root.contains(ir) && ir.contains(range.endContainer)) range.selectNodeContents(ir);
+    else if (sv && r.root.contains(sv) && sv.contains(range.endContainer)) {
+      const prev = sv.previousElementSibling;
+      const next = sv.nextElementSibling;
+      if (prev && next && prev.textContent === '==' && next.textContent === '==') {
+        range.setStartBefore(prev);
+        range.setEndAfter(next);
+      }
+    }
+    const text = range.toString();
+    if (!text.trim()) { toast('先选中要高亮的文字', { type: 'info' }); return; }
+    const m = /^==([\s\S]+)==$/.exec(text.trim());
+    const lead = /^\s*/.exec(text)[0];
+    const tail = /\s*$/.exec(text)[0];
+    let next = m ? lead + m[1] + tail : null;
+    let spaced = false;
+    if (!m) {
+      if (/\n[ \t]*\n/.test(text.trim())) { toast('高亮只能用在同一段文字里，请分段选择', { type: 'info' }); return; }
+      // 选区前后同一行的文字：用 Lute 检查加上 == 之后这一行还认不认得出高亮（见 planMark）
+      const beside = (before) => {
+        try {
+          const el = (before ? range.startContainer : range.endContainer);
+          const blk = (el.nodeType === 1 ? el : el.parentElement).closest('[data-block="0"]');
+          const top = blk && r.root.contains(blk) ? blk : r.root;
+          const rr = document.createRange();
+          if (before) { rr.setStart(top, 0); rr.setEnd(range.startContainer, range.startOffset); } else { rr.setStart(range.endContainer, range.endOffset); rr.setEnd(top, top.childNodes.length); }
+          const s = rr.toString();
+          return before ? s.slice(s.lastIndexOf('\n') + 1) : s.split('\n')[0];
+        } catch { return ''; }
+      };
+      const prevText = beside(true);
+      const nextText = beside(false);
+      const lute = this.vd && this.vd.vditor && this.vd.vditor.lute;
+      const cands = markTextCandidates(text, prevText, nextText);
+      let pick = cands[0];
+      if (lute) {
+        try {
+          const base = markSignature(lute, prevText + text + nextText);
+          pick = cands.find((c) => sameMarkSignature(base,
+            markSignature(lute, prevText.slice(0, prevText.length - c.lift) + c.value + nextText.slice(c.lift))));
+        } catch { /* 检查不了就按原样加 */ }
+      }
+      if (!pick) { toast('这里加不了高亮：选区紧挨着加粗等格式时，请把格式的符号（如 **）也选进来', { type: 'info' }); return; }
+      next = pick.value;
+      spaced = pick.spaced;
+      if (pick.lift) shiftRange(range, r.root, pick.lift);
+    }
+    try {
+      this.restoreCaret(range);
+      range.deleteContents();
+      const esc = next.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      this.vd.insertValue(esc); // insertValue 把参数当 HTML 插入，所以先转义
+      if (spaced) toast('高亮紧挨着标点或加粗、链接等格式，已在旁边加了空格，网站才能认出高亮', { type: 'info' });
+    } catch (err) {
+      console.error('[editor] highlight failed', err);
+      toast('高亮失败，请重试', { type: 'error' });
     }
   }
 

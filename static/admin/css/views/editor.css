@@ -425,11 +425,26 @@
   .ed-phone-loading { background: rgba(30, 31, 34, 0.85); }
 }
 
-/* 自定义工具栏按钮（公式 / 资料 / 排版）的图标是描边风格 */
+/* 自定义工具栏按钮（公式 / 资料 / 排版 / 高亮）的图标是描边风格 */
+.ed-vditor .vditor-toolbar__item [data-type="mark"] svg,
 .ed-vditor .vditor-toolbar__item [data-type="formula"] svg,
 .ed-vditor .vditor-toolbar__item [data-type="documents"] svg,
 .ed-vditor .vditor-toolbar__item [data-type="gallery"] svg,
 .ed-vditor .vditor-toolbar__item [data-type="figure"] svg { fill: none; stroke: currentColor; stroke-width: 2; }
+
+/* 高亮（==文字==）：和网站的 assets/css/extended/mark.css 同一个样式 */
+.ed-vditor .vditor-reset mark {
+  background: rgba(255, 214, 10, 0.38);
+  color: inherit;
+  padding: 0.05em 0.2em;
+  margin: 0 0.05em;
+  border-radius: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+@media (prefers-color-scheme: dark) {
+  .ed-vditor .vditor-reset mark { background: rgba(250, 204, 21, 0.26); }
+}
 
 /* 文章里的 <iframe> 等嵌入内容在编辑器里不加载（安全），只显示一个占位框 */
 .ed-vditor .ed-embed-blocked {

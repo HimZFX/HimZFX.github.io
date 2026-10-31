@@ -229,6 +229,8 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 - 自动保存时 `blob:` 地址换成 `admin-pending://<图片名>` 占位，图片 Blob 一起存进 IndexedDB，恢复时再换回来。
 - 草稿记下保存时文件的 `baseSha`；恢复时如果 GitHub 上的文件已经变了，会提示"恢复后发表会覆盖那些修改"。
 - 发表成功后只删除本编辑器实例写的、或打开前就存在的草稿（另一个标签页里同一篇文章的自动保存不会被删掉）。
+- Markdown 扩展和网站保持一致：`preview.js` 导出 `VDITOR_MARKDOWN`（目前是 `{ mark: true }`），编辑器的 `preview.markdown` 和手机预览的 `md2html` 都用它；对应网站 `markup.toml` 的 `goldmark.extensions.extras.mark`（`==文字==` → `<mark>`，样式在 `assets/css/extended/mark.css`）。以后在一边开新扩展，另一边也要开。
+- 工具栏「高亮」（`toggleMark`，`Ctrl/⌘+Shift+M`）：所见即所得模式下直接把选区包进 `<mark data-marker="==">`（或拆掉已有的），再用 `vd.insertValue('')` 让 Vditor 按「输入」重新整理那一段（触发 input 回调、可撤销）；源码 / 即时渲染模式按文字加减 `==`。`==` 和 `**` 一样受 CommonMark 左右侧规则限制：里侧紧挨标点或格式符号（`，“`、`**`、`` ` ``、`[`）而外侧紧挨文字时不算高亮（中文里很常见，例如 `文字==**粗体**==文字`、`文字**==粗体==**文字` 都会坏，后者连加粗也丢了；Lute 和 goldmark 规则一致）。所以加高亮前先在副本上用 Lute 试（`planMark` / `markTextCandidates`）：原样 → 两头的标点放到 `==` 外面 → 挪到加粗 / 链接外面 → 在需要的一侧加一个空格（会提示），都不行就不加并提示。公式 / 代码里的 `==` 不受影响（Lute 先识别 `$…$` 和代码）；`\(…\)`、`\[…\]` 在 Vditor 里只是普通文字，里面成对的 `==` 在编辑区会显示成高亮，但保存时原样写回，网站上仍是公式。
 
 ---
 
@@ -259,10 +261,10 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 
 ```bash
 # 在仓库根目录
-node --test tests/admin/            # 单元测试：content / formats / github / mock（index.js 负责加载全部 *.test.mjs）
+node --test tests/admin/            # 单元测试：content / formats / github / mark / mock（index.js 负责加载全部 *.test.mjs）
 
 node tests/admin/e2e-shell.mjs       # 登录、导航、退出、401、CSP、手机布局
-node tests/admin/e2e-editor.mjs      # 编辑器：发表 / 更新、英文版、自动保存与恢复、冲突、手机预览
+node tests/admin/e2e-editor.mjs      # 编辑器：发表 / 更新、英文版、自动保存与恢复、冲突、手机预览、高亮
 node tests/admin/e2e-lists.mjs       # 文章列表、页面与菜单排序、新建栏目
 node tests/admin/e2e-profile.mjs     # 首页设置、头像裁剪
 node tests/admin/e2e-background.mjs  # 背景动画预览与参数

@@ -1,7 +1,8 @@
 // tests/admin/e2e-editor.mjs — Playwright end-to-end test for the post/page editor
 // (views/editor.js + preview.js): new post with math + images → 发表, reopen → 更新,
 // English variant, autosave + restore, conflicts, lossless update of an existing post,
-// page fields with comment-preserving front matter, phone preview (KaTeX), Hugo build checks.
+// page fields with comment-preserving front matter, phone preview (KaTeX), Hugo build checks,
+// 高亮 (==mark==) tool + its no-change regression for == inside math / code.
 //
 // Run from the repo root:   node tests/admin/e2e-editor.mjs
 // Env:
@@ -178,6 +179,34 @@ function texOf(body) {
 }
 
 const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+
+/** Select the first occurrence of `text` inside one text node of the WYSIWYG area (or put the caret at `caret` in it). */
+const selectInEditor = (page, text, caret = null) => page.evaluate(({ text, caret }) => {
+  const root = document.querySelector('[data-testid="editor-body"] .vditor-wysiwyg .vditor-reset');
+  root.focus();
+  const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n; (n = tw.nextNode());) {
+    const i = n.data.indexOf(text);
+    if (i < 0) continue;
+    const r = document.createRange();
+    if (caret === null) { r.setStart(n, i); r.setEnd(n, i + text.length); } else { r.setStart(n, i + caret); r.collapse(true); }
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+    return true;
+  }
+  throw new Error(`"${text}" not found in the editor`);
+}, { text, caret });
+
+/** Every content/**\/*.md of the repository (paths relative to the repo root). */
+function contentFiles(dir = 'content') {
+  const out = [];
+  for (const ent of fs.readdirSync(path.join(REPO_ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${ent.name}`;
+    if (ent.isDirectory()) out.push(...contentFiles(rel));
+    else if (ent.name.endsWith('.md')) out.push(rel);
+  }
+  return out.sort();
+}
 
 // ---------------------------------------------------------------------------
 
@@ -1142,6 +1171,7 @@ async function main() {
           formula: box('[data-testid="editor-body"] .vditor-toolbar [data-type="formula"]'),
           docs: box('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]'),
           bold: box('[data-testid="editor-body"] .vditor-toolbar [data-type="bold"]'),
+          mark: box('[data-testid="editor-body"] .vditor-toolbar [data-type="mark"]'),
           addTab: box('[data-testid^="editor-add-"]'),
           draftLabel: after('[data-testid="editor-save-draft"] .ed-btn-text'),
           previewLabel: after('[data-testid="editor-preview"] .ed-btn-text'),
@@ -1153,6 +1183,9 @@ async function main() {
         assert.ok(info[k].r <= info.vw && info[k].x >= 0, `${k} on screen: ${JSON.stringify(info[k])}`);
         assert.ok(info[k].w >= 40 && info[k].h >= 40, `${k} ≥ 40px: ${JSON.stringify(info[k])}`);
       }
+      // 高亮 right after 加粗, same touch size (it may sit just past the edge: the toolbar scrolls)
+      assert.ok(info.mark && info.mark.w >= 40 && info.mark.h >= 40, `mark ≥ 40px: ${JSON.stringify(info.mark)}`);
+      assert.ok(Math.abs(info.mark.x - info.bold.r) < 2, `mark follows bold: ${JSON.stringify([info.bold, info.mark])}`);
       assert.ok(info.addTab && info.addTab.r <= info.vw, 'add-variant tab on screen: ' + JSON.stringify(info.addTab));
       assert.equal(info.draftLabel, '"转草稿"');
       assert.equal(info.previewLabel, '"预览"');
@@ -1208,6 +1241,211 @@ async function main() {
       const html = fs.readFileSync(path.join(out, 'posts', 'layout-tools', 'index.html'), 'utf8');
       assert.match(html, /class="?gallery/);
       assert.match(html, /<figcaption>[\s\S]*图：谐振子的势能曲线/);
+    });
+
+    const MARK_SLUG = 'highlight-tool';
+    const MARK_BTN = '[data-testid="editor-body"] .vditor-toolbar [data-type="mark"]';
+    // the 高亮 tests also run on their own (ONLY=高亮): log in first if no earlier test did
+    const ensureAdmin = async () => {
+      if (!(await page.evaluate(() => document.body && document.body.dataset.testid === 'app-ready').catch(() => false))) {
+        ({ blocked } = await openAdmin(page, mock, { path: '/admin/#/posts' }));
+      }
+    };
+    await test('高亮: select a word → 高亮 → ==word== in the file; preview + Hugo (zh + en) render <mark>; click / Ctrl+Shift+M toggles', async () => {
+      await ensureAdmin();
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Highlight Tool');
+      assert.equal(await page.inputValue('[data-testid="editor-slug"]'), MARK_SLUG);
+      // the button sits right after 加粗 (bold)
+      assert.equal(await page.evaluate(() => {
+        const b = document.querySelector('[data-testid="editor-body"] .vditor-toolbar [data-type="bold"]').closest('.vditor-toolbar__item');
+        return b.nextElementSibling && !!b.nextElementSibling.querySelector('[data-type="mark"]');
+      }), true);
+      assert.match(await page.getAttribute(MARK_BTN, 'aria-label'), /^高亮 <Ctrl\+Shift\+M>$/);
+      await vditor.insert(page, '公众号风格的排版。\n');
+      await typeAtEnd(page, '请记住 KEYWORD 这个词，还有 SECOND 也是。');
+      const md = () => vditor.get(page);
+
+      await selectInEditor(page, 'KEYWORD');
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('请记住 ==KEYWORD== 这个词'), { msg: '==KEYWORD== in the editor' });
+      assert.equal(await page.textContent('[data-testid="editor-body"] .vditor-wysiwyg mark'), 'KEYWORD');
+      // caret inside the highlight + 高亮 → removed; selecting it again → back
+      await selectInEditor(page, 'KEYWORD', 3);
+      await page.click(MARK_BTN);
+      await until(async () => !(await md()).includes('=='), { msg: 'highlight removed' });
+      assert.equal(await page.locator('[data-testid="editor-body"] .vditor-wysiwyg mark').count(), 0);
+      await selectInEditor(page, 'KEYWORD');
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('==KEYWORD=='), { msg: 'highlight re-applied' });
+      // keyboard shortcut: on, then off again
+      await selectInEditor(page, 'SECOND');
+      await page.keyboard.press('Control+Shift+M');
+      await until(async () => (await md()).includes('==SECOND=='), { msg: 'Ctrl+Shift+M highlights' });
+      await selectInEditor(page, 'SECOND');
+      await page.keyboard.press('Control+Shift+M');
+      await until(async () => !(await md()).includes('==SECOND=='), { msg: 'Ctrl+Shift+M removes the highlight' });
+      // nothing selected → a hint, nothing changes
+      const before = await md();
+      await selectInEditor(page, '公众号', 1);
+      await page.click(MARK_BTN);
+      await page.locator('[data-testid="toast-info"]', { hasText: '先选中' }).waitFor();
+      assert.equal(await md(), before);
+      assert.equal((before.match(/==/g) || []).length, 2, before);
+
+      // phone preview shows a styled <mark> (the site's mark.css, not the browser's default yellow)
+      await page.click('[data-testid="editor-preview"]');
+      const fr = await (await page.waitForSelector('[data-testid="preview-iframe"][data-state="ready"]', { timeout: 30000 })).contentFrame();
+      await fr.waitForSelector('.post-content mark', { state: 'attached' });
+      assert.equal(await fr.textContent('.post-content mark'), 'KEYWORD');
+      const bg = await fr.evaluate(() => getComputedStyle(document.querySelector('.post-content mark')).backgroundColor);
+      assert.match(bg, /^rgba\(25\d, 2\d\d, \d+, 0\.(38|26)\)$/, 'mark background from the site stylesheet: ' + bg);
+      await page.screenshot({ path: path.join(SHOTS, 'highlight-preview.png') });
+      await page.click('[data-testid="modal-close"]');
+
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const body = splitMd(mock.readFile(`content/posts/${MARK_SLUG}.md`)).body;
+      assert.match(body, /请记住 ==KEYWORD== 这个词，还有 SECOND 也是。$/m);
+      assert.equal((body.match(/==/g) || []).length, 2, body);
+      const repoDir = mock.exportTo(path.join(OUT, 'export-mark'));
+      const out = path.join(OUT, 'build-mark');
+      await buildSite({ repoDir, outDir: out });
+      for (const parts of [['posts', MARK_SLUG], ['en', 'posts', MARK_SLUG]]) {
+        const html = fs.readFileSync(path.join(out, ...parts, 'index.html'), 'utf8');
+        assert.match(html, /请记住 <mark>KEYWORD<\/mark> 这个词/, `/${parts.join('/')}/ renders the highlight`);
+        assert.equal((html.match(/<mark>/g) || []).length, 1);
+      }
+      const css = fs.readdirSync(path.join(out, 'assets', 'css')).filter((f) => /^stylesheet\..*\.css$/.test(f));
+      assert.equal(css.length, 1);
+      assert.match(fs.readFileSync(path.join(out, 'assets', 'css', css[0]), 'utf8'), /\[data-theme=dark\] mark/);
+    });
+
+    await test('高亮 in Chinese text: next to bold / punctuation the == still works on the site (no broken **==粗体==**)', async () => {
+      // CommonMark's flanking rules: 文字**==粗体==**文字 loses the bold and the highlight, 这是==重点，==内容 shows ==
+      await ensureAdmin();
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Highlight CJK');
+      await vditor.insert(page, '文字**粗体**文字，这是重点，内容。\n');
+      await typeAtEnd(page, '这是“引用”后面，还有 plain word 和[链接](https://example.com/)。');
+      const md = () => vditor.get(page);
+      await selectInEditor(page, '粗体'); // inside <strong>
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('文字 ==**粗体**== 文字'), { msg: 'bold highlighted with spaces: ' });
+      await page.locator('[data-testid="toast-info"]', { hasText: '加了空格' }).waitFor();
+      await selectInEditor(page, '重点，');
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('这是==重点==，内容'), { msg: 'trailing ， left outside' });
+      await selectInEditor(page, '“引用”');
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('这是“==引用==”后面'), { msg: 'quotes left outside' });
+      await selectInEditor(page, 'word');
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('plain ==word== 和'), { msg: 'plain word, no spaces added' });
+      await selectInEditor(page, '链接'); // inside the link: [==链接==](…) is fine as it is
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('和[==链接==](https://example.com/)。'), { msg: 'link text highlighted' });
+      // the editor itself shows every highlight (no literal == / ** left over)
+      assert.equal(await page.locator('[data-testid="editor-body"] .vditor-wysiwyg mark').count(), 5);
+      assert.doesNotMatch(await page.textContent('[data-testid="editor-body"] .vditor-wysiwyg .vditor-reset'), /==|\*\*/);
+      // source mode: selecting the text inside **…** also lifts the ** into the highlight
+      await page.evaluate(() => document.querySelector('[data-testid="editor-body"] .vditor-toolbar [data-mode="sv"]').click());
+      await page.waitForSelector('[data-testid="editor-body"] .vditor-sv', { state: 'visible' });
+      await page.evaluate(() => {
+        const v = document.querySelector('[data-testid="editor-body"]')._vditor;
+        v.setValue(v.getValue() + '\n再一段**加粗**结尾\n');
+      });
+      await page.evaluate(() => {
+        const root = document.querySelector('[data-testid="editor-body"] .vditor-sv');
+        root.focus();
+        const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n; (n = tw.nextNode());) {
+          const i = n.data.indexOf('加粗');
+          if (i < 0) continue;
+          const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + 2);
+          getSelection().removeAllRanges(); getSelection().addRange(r);
+          return;
+        }
+        throw new Error('加粗 not found');
+      });
+      await page.click(MARK_BTN);
+      await until(async () => (await md()).includes('再一段 ==**加粗**== 结尾'), { msg: 'sv: ** lifted into the highlight' });
+      await page.evaluate(() => document.querySelector('[data-testid="editor-body"] .vditor-toolbar [data-mode="wysiwyg"]').click());
+      await page.waitForSelector('[data-testid="editor-body"] .vditor-wysiwyg', { state: 'visible' });
+
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const body = splitMd(mock.readFile('content/posts/highlight-cjk.md')).body;
+      const repoDir = mock.exportTo(path.join(OUT, 'export-mark-cjk'));
+      const out = path.join(OUT, 'build-mark-cjk');
+      await buildSite({ repoDir, outDir: out });
+      const html = fs.readFileSync(path.join(out, 'posts', 'highlight-cjk', 'index.html'), 'utf8');
+      const content = html.slice(html.search(/class="?post-content/), html.indexOf('</article>'));
+      assert.ok(content.length > 50, 'post content found');
+      assert.deepEqual(content.match(/<mark>.*?<\/mark>/g), [
+        '<mark><strong>粗体</strong></mark>', '<mark>重点</mark>', '<mark>引用</mark>', '<mark>word</mark>', '<mark>链接</mark>',
+        '<mark><strong>加粗</strong></mark>',
+      ], body);
+      assert.doesNotMatch(content.replace(/<[^>]+>/g, ''), /==|\*\*/, 'no literal == or ** on the site');
+    });
+
+    const MATH_EQ = 'content/posts/math-equals.md';
+    const MATH_EQ_BODY = [
+      '比较一下 `a == b` 和 a==b。', '',
+      '$$', 'x == y == z', '$$', '',
+      '\\[', 'p==q==r', '\\]', '',
+      '```python', 'if a == b == c:', '    print("a==b==c")', '```', '',
+      '| 式子 | 说明 |', '|---|---|', '| $m==n==o$ | `u==v==w` |', '',
+      '行内公式 $a==b$、\\(c==d==e\\)、$x==y==z$ 和代码 `p==q==r`，普通比较 a == b。', '',
+    ].join('\n');
+    await test('高亮 regression: == in math / code never becomes a highlight; every content file round-trips exactly as with mark off', async () => {
+      // 1. Lute with mark on vs off: identical Markdown for every content/**/*.md and the tricky cases
+      const items = contentFiles().map((f) => [f, fs.readFileSync(path.join(REPO_ROOT, f), 'utf8').replace(/^(---|\+\+\+)\n[\s\S]*?\n\1\n/, '')]);
+      assert.ok(items.length >= 8, 'content files found');
+      await ensureAdmin();
+      items.push(['MATH_EQ_BODY', MATH_EQ_BODY], ['inline', '$a==b$ \\(c==d==e\\) `x==y` a==b and c==d ==ok=='], ['TRICKY', TRICKY_BODY]);
+      await gotoEdit(page, '#/edit?new=post');
+      const res = await page.evaluate((items) => {
+        const lute = document.querySelector('[data-testid="editor-body"]')._vditor.vditor.lute;
+        const markOn = /<mark\b/.test(lute.Md2VditorDOM('==x==\n'));
+        const rt = (md, on) => {
+          lute.SetMark(on);
+          try { return lute.VditorDOM2Md(lute.Md2VditorDOM(md)); } finally { lute.SetMark(true); }
+        };
+        const diffs = items.filter(([, md]) => rt(md, true) !== rt(md, false)).map(([name, md]) => ({ name, on: rt(md, true), off: rt(md, false) }));
+        return { markOn, diffs };
+      }, items);
+      assert.equal(res.markOn, true, 'the editor has mark enabled');
+      assert.deepEqual(res.diffs, [], 'enabling mark changes the round trip of: ' + JSON.stringify(res.diffs).slice(0, 2000));
+
+      // 2. the real editor: open → no highlight inside math / code; no-op 更新; edit the math line → only it changes
+      mock.setFile(MATH_EQ, fmOf('Math equals') + MATH_EQ_BODY);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(MATH_EQ));
+      // (the editing area itself is a <pre class="vditor-reset">; \(…\) / \[…\] are plain text for Vditor, not math)
+      assert.equal(await page.locator('[data-testid="editor-body"] .vditor-wysiwyg :is(code, pre:not(.vditor-reset), .vditor-wysiwyg__block) mark').count(), 0, 'no <mark> inside code / math');
+      const n = mock.commits.length;
+      await page.click('[data-testid="editor-publish"]');
+      await page.locator('[data-testid="toast-info"]', { hasText: '一样' }).waitFor();
+      assert.equal(mock.commits.length, n, 'no commit without edits');
+      await typeAtEnd(page, 'X');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      const expected1 = fmOf('Math equals') + MATH_EQ_BODY.replace('普通比较 a == b。', '普通比较 a == b。X');
+      assert.equal(mock.readFile(MATH_EQ), expected1);
+      // highlight a word on that same line: only those two == are added, the math / code keep theirs
+      await selectInEditor(page, '普通比较');
+      await page.click(MARK_BTN);
+      await until(async () => (await vditor.get(page)).includes('==普通比较=='), { msg: 'highlight in the math line' });
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.equal(mock.readFile(MATH_EQ), expected1.replace('，普通比较 a', '，==普通比较== a'));
+      // Hugo: exactly one <mark>; the formulas are passed through verbatim for KaTeX, code is code
+      const repoDir = mock.exportTo(path.join(OUT, 'export-math-eq'));
+      const out = path.join(OUT, 'build-math-eq');
+      await buildSite({ repoDir, outDir: out });
+      const html = fs.readFileSync(path.join(out, 'posts', 'math-equals', 'index.html'), 'utf8');
+      assert.deepEqual(html.match(/<mark>[^<]*<\/mark>/g), ['<mark>普通比较</mark>']);
+      for (const tex of ['$a==b$', '\\(c==d==e\\)', '$x==y==z$', '$m==n==o$', '$$\nx == y == z\n$$', '\\[\np==q==r\n\\]']) {
+        assert.ok(html.includes(tex), `formula ${tex} passed through`);
+      }
+      assert.match(html, /<code>p==q==r<\/code>/);
+      assert.match(html, /<code>u==v==w<\/code>/);
     });
 
     await test('no page errors, no CSP violations, nothing fetched from other origins', async () => {

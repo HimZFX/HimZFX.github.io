@@ -1,0 +1,25 @@
+/* 高亮（==文字== → <mark>，见 config/_default/markup.toml 的 mark 扩展）。
+   像公众号排版里的荧光笔：浅色模式淡黄底，深色模式降低亮度、文字保持原色，换行时每行都有圆角。
+   放在 assets/css/extended/ 下的 CSS 会被 PaperMod 自动打包进主样式表（后台的手机预览也用这份样式表）。 */
+mark {
+    background: rgba(255, 214, 10, 0.38);
+    color: inherit;
+    padding: 0.05em 0.2em;
+    margin: 0 0.05em;
+    border-radius: 3px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+
+[data-theme="dark"] mark,
+body.dark mark {
+    background: rgba(250, 204, 21, 0.26);
+    color: inherit;
+}
+
+/* 浏览器禁用了 JavaScript 时 PaperMod 不会设置 data-theme，深色系统下靠 <noscript> 里的媒体查询变暗：这里跟着变暗 */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]):not([data-theme="dark"]) mark {
+        background: rgba(250, 204, 21, 0.26);
+    }
+}

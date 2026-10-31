@@ -20,6 +20,15 @@ import { VDITOR_CDN } from './config.js';
 import { loadScript, loadStyle } from './ui.js';
 
 // ---------------------------------------------------------------------------
+// Vditor 的 Markdown 选项（编辑器和预览共用）
+
+/**
+ * 和网站（config/_default/markup.toml）保持一致的 Markdown 扩展：
+ * mark = ==文字== 高亮（goldmark 的 extras.mark → <mark>）。其余选项用 Vditor 的默认值。
+ */
+export const VDITOR_MARKDOWN = Object.freeze({ mark: true });
+
+// ---------------------------------------------------------------------------
 // Vditor 加载（编辑器也用这个函数，保证只加载一次）
 
 let vditorPromise = null;
@@ -234,6 +243,8 @@ body{margin:0;background:var(--theme);color:var(--content);font-family:-apple-sy
 .post-content blockquote{margin:0;padding:0 14px;border-left:3px solid var(--tertiary);color:var(--secondary)}
 .post-content table{border-collapse:collapse;display:block;overflow:auto}
 .post-content th,.post-content td{border:1px solid var(--tertiary);padding:4px 10px}
+mark{background:rgba(255,214,10,.38);color:inherit;padding:.05em .2em;margin:0 .05em;border-radius:3px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+:root[data-theme=dark] mark{background:rgba(250,204,21,.26)}
 a{color:inherit}
 `;
 
@@ -293,7 +304,7 @@ export async function renderPreview(iframe, {
   const mathOpts = { engine: 'KaTeX', inlineDigit: true };
   const hljsStyle = dark ? 'github-dark' : 'github';
   const [html, stylesheet] = await Promise.all([
-    md.trim() ? Vditor.md2html(md, { cdn: VDITOR_CDN, math: mathOpts }) : Promise.resolve(''),
+    md.trim() ? Vditor.md2html(md, { cdn: VDITOR_CDN, math: mathOpts, markdown: { ...VDITOR_MARKDOWN } }) : Promise.resolve(''),
     discoverStylesheet(site),
   ]);
 
