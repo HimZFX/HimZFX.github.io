@@ -1,5 +1,9 @@
 ---
 title: "关于我"
+linkTitle: "关于"   # 菜单里显示的名字
+menu:
+  main:
+    weight: 10    # 菜单顺序，数字越小越靠左
 layout: "about"   # 告诉 Hugo 这是一个特殊页面
 summary: "about"
 hidemeta: true    # 隐藏发布日期、字数统计等博客才有的信息

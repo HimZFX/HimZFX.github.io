@@ -1,0 +1,22 @@
+# ============================================================
+# 站点基础配置
+#
+# 配置按用途拆成了同目录下的几个文件，Hugo 会自动合并它们：
+#   hugo.toml       ← 本文件：网址、标题、主题、默认语言
+#   languages.toml  ← 语言列表（中 / 英）及各语言的差异项
+#   module.toml     ← ★ 双语共享机制（一般不需要改）
+#   params.toml     ← 首页、社交链接、背景动画、评论等功能参数
+#   markup.toml     ← Markdown 与数学公式渲染
+#
+# 导航菜单不在配置里，而是写在各页面的 front matter 中，
+# 详见 SITE_GUIDE.md「导航菜单」。
+# ============================================================
+
+baseURL = "https://HimZFX.github.io/"
+title = "HimZFX's Lab"
+theme = "PaperMod"
+
+# 默认语言：中文在根路径 /，其他语言在 /<语言代码>/（如 /en/）
+defaultContentLanguage = "zh"
+
+enableEmoji = true

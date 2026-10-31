@@ -1,51 +1,8 @@
-<!-- Gallery CSS -->
-<link rel="stylesheet" href="/css/gallery.css">
-
-<!-- KaTeX -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" crossorigin="anonymous"
-    onload="renderMathInElement(document.body, {
-      delimiters: [
-        {left: '$$', right: '$$', display: true},
-        {left: '$', right: '$', display: false},
-        {left: '\\(', right: '\\)', display: false},
-        {left: '\\[', right: '\\]', display: true}
-      ],
-      throwOnError : false
-    });"></script>
-
-<!-- Holiday Favicon -->
-<script>
-    (function() {
-        var defaultIcon = "/favicon.jpg";
-        var emojiIcon = null;
-        var date = new Date();
-        var month = date.getMonth() + 1;
-        var day = date.getDate();
-
-        if (month === 12 && day >= 20) {
-            emojiIcon = "🎄";
-        } else if ((month === 1 && day > 22) || (month === 2 && day <= 15)) {
-            emojiIcon = "🏮";
-        } else if (month === 10 && day >= 25) {
-            emojiIcon = "🎃";
-        } else if (month === 1 && day === 22) {
-            emojiIcon = "🎂";
-        }
-
-        var link = document.querySelector("link[rel~='icon']");
-        if (!link) {
-            link = document.createElement('link');
-            link.rel = 'icon';
-            document.head.appendChild(link);
-        }
-
-        if (emojiIcon) {
-            var svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>${emojiIcon}</text></svg>`;
-            link.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
-        } else {
-            link.href = defaultIcon;
-        }
-    })();
-</script>
+{{- /*
+  PaperMod 钩子：插入到每个页面 <head> 的末尾（逐页渲染）。
+  这里只负责"接线"，各功能的实现与开关见 layouts/partials/features/ 和 params.toml。
+  新增功能：在 features/ 下新建 partial，再在这里加一行。
+*/ -}}
+{{- partial "features/math.html" . -}}
+{{- partial "features/holiday-favicon.html" . -}}
+{{- partial "features/background.html" . -}}

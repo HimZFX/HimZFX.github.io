@@ -1,0 +1,35 @@
+{{- /*
+  背景动画。
+  引擎：assets/js/background/core.js（画布、循环、深浅色、开关按钮）
+  效果：assets/js/background/effects/<名字>.js（"卡带"，只管怎么动、怎么画）
+  构建时把引擎和选中的那一个效果打包成一个 JS 文件，未选中的效果不会被加载。
+  在 <head> 里以 defer 方式引入（画布由引擎自己创建）；不放在页脚，
+  因为 PaperMod 会缓存页脚，页面级的覆盖会串页（见 extend_footer.html）。
+
+  配置：params.toml 的 [background]；页面可在 front matter 里覆盖，如
+    background:
+      effect: lorenz      # 换一个效果
+      enabled: false      # 或者本页关闭
+*/ -}}
+{{- if .Param "background.enabled" }}
+  {{- $effect := .Param "background.effect" | default "three-body" }}
+  {{- $effectJS := resources.Get (printf "js/background/effects/%s.js" $effect) }}
+  {{- if not $effectJS }}
+    {{- $available := slice }}
+    {{- range resources.Match "js/background/effects/*.js" }}
+      {{- $available = $available | append (path.BaseName .Name) }}
+    {{- end }}
+    {{- errorf "背景动画效果 %q 不存在（页面：%s）。可选：%s" $effect .RelPermalink (delimit $available "、") }}
+  {{- end }}
+
+  {{- $js := slice (resources.Get "js/background/core.js") $effectJS
+            | resources.Concat (printf "js/background-%s.js" $effect) }}
+  {{- if hugo.IsProduction }}
+    {{- $js = $js | minify | fingerprint }}
+  {{- end }}
+
+  {{- $autoplay := .Param "background.autoplay" | default "home" }}
+  {{- $autoStart := or (eq $autoplay "all") (and (eq $autoplay "home") .IsHome) }}
+<script defer src="{{ $js.RelPermalink }}" data-autoplay="{{ $autoStart }}"
+  {{- with $js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
+{{- end }}

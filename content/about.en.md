@@ -1,5 +1,9 @@
 ---
 title: "About Me"
+linkTitle: "About"
+menu:
+  main:
+    weight: 10
 layout: "about"
 summary: "about"
 hidemeta: true

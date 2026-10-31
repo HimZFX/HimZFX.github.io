@@ -1,0 +1,25 @@
+{{- /*
+  KaTeX 数学公式渲染。
+  开关：params.toml 的 math（全站默认），页面 front matter 的 math 可覆盖。
+  公式分隔符需与 markup.toml 的 passthrough 设置保持一致。
+*/ -}}
+{{- if .Param "math" }}
+{{- $katex := "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist" }}
+<link rel="stylesheet" href="{{ $katex }}/katex.min.css" crossorigin="anonymous">
+<script defer src="{{ $katex }}/katex.min.js" crossorigin="anonymous"></script>
+<script defer src="{{ $katex }}/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    if (typeof renderMathInElement !== "function") return;   // CDN 加载失败时静默跳过
+    renderMathInElement(document.body, {
+      delimiters: [
+        { left: "$$", right: "$$", display: true },
+        { left: "$", right: "$", display: false },
+        { left: "\\(", right: "\\)", display: false },
+        { left: "\\[", right: "\\]", display: true }
+      ],
+      throwOnError: false
+    });
+  });
+</script>
+{{- end }}

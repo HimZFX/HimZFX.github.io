@@ -1,0 +1,103 @@
+# ============================================================
+# 主题与功能参数
+#
+# 这里的参数对所有语言生效。某个语言要不一样时，
+# 到 languages.toml 的 [<语言>.params] 下覆盖对应项即可。
+# 带「页面可覆盖」标记的开关，也可以在单个页面的 front matter 里改写。
+# ============================================================
+
+# ---------- 全局开关 ----------
+# 注意 TOML 语法：写在某个 [表头] 之后的键都属于那张表，
+# 所以这些顶层开关必须放在第一个 [表头] 之前。
+env = "production"       # PaperMod：允许搜索引擎收录
+defaultTheme = "auto"    # 深浅色跟随系统
+
+# 数学公式（KaTeX）：全站默认开启。          页面可覆盖：math: false
+# 某页确定没有公式时写 math: false，可少加载 KaTeX。
+math = true
+
+# 评论区（giscus）：全站默认关闭。            页面可覆盖：comments: true
+# 在需要评论的文章里写 comments: true 开启；评论区的设置见下方 [giscus]。
+comments = false
+
+
+# ---------- 首页（Profile 模式） ----------
+[profileMode]
+  enabled = true
+  title = "Zhong Fangxiong"
+  subtitle = "Peking University | Physics & Astrophysics | Quant Trading"
+  imageUrl = "avatar.jpg"          # 对应 static/avatar.jpg
+  imageWidth = 150
+  imageHeight = 150
+  imageTitle = "Zhong Fangxiong"
+
+  # 站内链接写成「不以 / 开头」的相对路径（如 "research/"）：
+  # 中文首页会跳到 /research/，英文首页自动跳到 /en/research/。
+  [[profileMode.buttons]]
+    name = "My Research"
+    url = "research/"
+  [[profileMode.buttons]]
+    name = "Email Me"
+    url = "mailto:himzfx@stu.pku.edu.cn"
+
+
+# ---------- 社交图标（首页头像下方） ----------
+[[socialIcons]]
+  name = "github"
+  url = "https://github.com/HimZFX"
+[[socialIcons]]
+  name = "email"
+  url = "mailto:himzfx@stu.pku.edu.cn"
+
+
+# ---------- 网站图标 ----------
+[assets]
+  favicon = "/favicon.jpg"
+  favicon16x16 = "/favicon.jpg"
+  favicon32x32 = "/favicon.jpg"
+  disableHLJS = false
+
+
+# ============================================================
+# 以下为自定义功能模块，实现位于 layouts/partials/features/
+# ============================================================
+
+# ---------- 评论区（giscus） ----------
+[giscus]
+  repo = "HimZFX/HimZFX.github.io"
+  repoId = "R_kgDOQjBi1A"
+  category = "General"
+  categoryId = "DIC_kwDOQjBi1M4Czb7I"
+  mapping = "pathname"
+  theme = "preferred_color_scheme"
+  lang = "zh-CN"           # 英文站在 languages.toml 中覆盖为 "en"
+  # true：同一篇文章的中英文页面共用一个评论区（推荐，与双语共享机制一致）
+  # false：按网址区分，中英文页面各自独立的评论区
+  sharedThread = true
+
+
+# ---------- 背景动画 ----------
+# 页面可覆盖，如 background: { effect: lorenz } 或 background: { enabled: false }
+[background]
+  enabled = true
+  # 可选效果，对应 assets/js/background/effects/ 下的文件名：
+  #   three-body   三体运动（星体 + 渐变拖尾）
+  #   lorenz       洛伦兹吸引子
+  #   flow-field   流场粒子
+  effect = "three-body"
+  # 自动播放范围："home" 仅首页 | "all" 所有页面 | "none" 不自动播放
+  # 无论哪种，左下角按钮都可以随时手动开关。
+  autoplay = "home"
+
+
+# ---------- 节日图标 ----------
+# 在指定日期把浏览器标签页图标换成 emoji。日期格式 MM-DD，首尾都包含；
+# from 晚于 to 表示跨年（如 12-25 到 01-05）。按顺序匹配，第一条命中的生效。
+[holidayFavicon]
+  enabled = true
+  rules = [
+    { emoji = "🎂", from = "01-22", to = "01-22" },   # 生日
+    { emoji = "🏮", from = "01-23", to = "02-15" },   # 春节（近似）
+    { emoji = "🎃", from = "10-25", to = "10-31" },   # 万圣节
+    { emoji = "🎄", from = "12-20", to = "12-31" },   # 圣诞
+  ]

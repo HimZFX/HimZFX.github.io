@@ -1,5 +1,8 @@
 ---
 title: "课程资料"
+menu:
+  main:
+    weight: 40
 description: "这里存放我的本科课程笔记、大作业与复习资料，供学弟学妹参考。"
 hidemeta: true  # 列表页隐藏日期等信息
 layout: "list"  # 使用列表布局

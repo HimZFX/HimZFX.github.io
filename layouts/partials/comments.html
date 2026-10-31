@@ -1,20 +1,5 @@
-{{- /* 只有当文章显式设置了 comments: true 时才显示 */ -}}
-{{- if eq .Params.comments true -}}
-<div class="comments">
-    <script src="https://giscus.app/client.js"
-        data-repo="HimZFX/HimZFX.github.io"
-        data-repo-id="R_kgDOQjBi1A"
-        data-category="General"
-        data-category-id="DIC_kwDOQjBi1M4Czb7I"
-        data-mapping="pathname"
-        data-strict="0"
-        data-reactions-enabled="1"
-        data-emit-metadata="0"
-        data-input-position="bottom"
-        data-theme="preferred_color_scheme"
-        data-lang="zh-CN"
-        crossorigin="anonymous"
-        async>
-    </script>
-</div>
-{{- end -}}
+{{- /*
+  PaperMod 钩子：文章页在 comments 参数为 true 时调用
+  （全站默认值见 params.toml，单篇文章可在 front matter 写 comments: true）。
+*/ -}}
+{{- partial "features/giscus.html" . -}}
