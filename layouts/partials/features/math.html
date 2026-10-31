@@ -2,12 +2,16 @@
   KaTeX 数学公式渲染。
   开关：params.toml 的 math（全站默认），页面 front matter 的 math 可覆盖。
   公式分隔符需与 markup.toml 的 passthrough 设置保持一致。
+  integrity 是 KaTeX 0.16.9 官方文件的哈希：CDN 上的文件被篡改时浏览器会拒绝执行
+  （本站同源页面上可能保存着管理后台的令牌）。升级版本时必须同时更新这三个哈希，
+  可从 KaTeX 官方 README 复制，或下载 npm 包后用
+  openssl dgst -sha384 -binary <文件> | openssl base64 -A 计算。
 */ -}}
 {{- if .Param "math" }}
 {{- $katex := "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist" }}
-<link rel="stylesheet" href="{{ $katex }}/katex.min.css" crossorigin="anonymous">
-<script defer src="{{ $katex }}/katex.min.js" crossorigin="anonymous"></script>
-<script defer src="{{ $katex }}/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="{{ $katex }}/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+<script defer src="{{ $katex }}/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
+<script defer src="{{ $katex }}/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
 <script>
   document.addEventListener("DOMContentLoaded", function () {
     if (typeof renderMathInElement !== "function") return;   // CDN 加载失败时静默跳过
