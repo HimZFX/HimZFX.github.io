@@ -21,6 +21,7 @@ import {
 import { splitDocument, parseFrontMatter, setFields, FrontMatterError } from '../frontmatter.js';
 import { listDrafts } from '../drafts.js';
 import { PATHS } from '../config.js';
+import { isCourseDir, collectCourses } from '../courses.js';
 import {
   readFrontMatters, pagePath, pageUrl, editHash, draftsCard, draftIsPost, skeletonRows,
 } from './posts.js';
@@ -206,7 +207,8 @@ export default async function mount(container, params, ctx) {
 
   async function loadRows() {
     const seq = ++state.loadSeq;
-    const groups = groupPages(repo.list(PATHS.content + '/'), langs).filter((g) => !isPost(g));
+    // 课程单元页和子推文（content/courses/<课程>/…）在「课程」里管理，这里只列「课程资料」总页本身
+    const groups = groupPages(repo.list(PATHS.content + '/'), langs).filter((g) => !isPost(g) && !isCourseDir(g.dir));
     let fms;
     try {
       fms = await readFrontMatters(repo, groups.flatMap((g) => Object.values(g.variants)));
@@ -366,7 +368,12 @@ export default async function mount(container, params, ctx) {
       langBadge,
       r.perLang.some((x) => x.draft) ? badge(r.perLang.every((x) => x.draft) ? '草稿' : `${r.perLang.filter((x) => x.draft).map((x) => ctx.langName(x.lang)).join('、')}草稿`, 'gray') : null,
       r.mixedWeights ? (() => { const b = badge('各语言顺序不同', 'orange'); b.title = r.perLang.filter((x) => x.inMenu).map((x) => `${ctx.siteLabel(x.lang)}：${x.weight ?? '未设置'}`).join('\n') + '\n保存菜单顺序时会统一成同一个数字。'; return b; })() : null,
-      r.errors.length ? (() => { const b = badge('设置区有问题', 'red'); b.title = r.errors.map((e) => `${e.path}：${e.r.error}`).join('\n'); return b; })() : null);
+      r.errors.length ? (() => { const b = badge('设置区有问题', 'red'); b.title = r.errors.map((e) => `${e.path}：${e.r.error}`).join('\n'); return b; })() : null,
+      g.key === `${PATHS.content}/courses/_index` ? (() => {
+        const n = collectCourses(repo.list(PATHS.content + '/'), langs).length;
+        return h('a', { class: 'lists-meta-item', href: '#/courses', dataset: { testid: 'page-courses-link' } },
+          svgIcon('course'), n ? `${n} 门课程 · 在「课程」里管理` : '在「课程」里添加课程');
+      })() : null);
 
     let orderEl = null;
     if (r.inMenu) {

@@ -1,10 +1,13 @@
 // tests/admin/e2e-journey.mjs — one realistic user journey across ALL admin views on a single mock:
 //
 //   log in (real login form) → write + publish a shared post with math and an image → add its English
-//   version → upload a PDF in 资料 → link it from the post with the editor's 资料 button → change the avatar
-//   and the subtitle → switch the background cassette → reorder the menu → save a draft post and delete it
+//   version → upload a (real, 3-page) PDF in 资料 (copy its online-preview link) → link AND embed it in both
+//   versions of the post with the editor's 资料 button (插入链接 → /viewer/?file=…, 嵌入阅读器 → {{< pdf >}})
+//   → change the avatar and the subtitle → switch the background cassette → reorder the menu → save a draft post and delete it
 //   from the list → discard a local (browser) draft → export + Hugo build → check the BUILT site (both
-//   languages, served by the mock) reflects every change, and every original config comment survived.
+//   languages, served by the mock) reflects every change, and every original config comment survived →
+//   as a visitor on /posts/<slug>/ and /en/posts/<slug>/: the preview link opens the viewer, which renders the
+//   PDF, and the embedded reader renders it too (in the page's language), never touching the admin token.
 //
 // After every publish the mock's files are checked. Run from the repo root:
 //   node tests/admin/e2e-journey.mjs
@@ -42,9 +45,22 @@ const IMGDIR = `static/images/posts/${SLUG}`;
 const TITLE_ZH = '穿越时空的旅程';
 const TITLE_EN = 'A Journey Through Spacetime';
 const PDF_NAME = 'gr-lecture-notes.pdf';
-const PDF_BYTES = Buffer.from('%PDF-1.4\n% journey test\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n');
+const PDF_VIEWER = `/viewer/?file=%2Fdocuments%2F${PDF_NAME}`; // the online preview (works in WeChat / on Android)
+const PDF_EMBED = `{{< pdf "/documents/${PDF_NAME}" >}}`; // the embedded reader (layouts/shortcodes/pdf.html)
+const PDF_PAGES = 3;
+let PDF_BYTES; // a real PDF made by Chromium (see makePdf), so the built site's viewer can render it
 const SUBTITLE = '北京大学 · 物理与天体物理 · 旅程测试';
 const DRAFT_SLUG = 'throwaway-draft';
+// 课程：一门课 = 一个单元页，批量上传两份实验报告 → 两篇子推文（标题来自文件名，正文是 {{< pdf >}}）
+const COURSE = 'modern-physics-lab';
+const COURSE_ZH = '近代物理实验';
+const COURSE_EN = 'Modern Physics Lab';
+const COURSE_GROUP = '实验课';
+const REPORTS = [
+  { file: '实验1-光电效应.pdf', title: '实验1 光电效应', slug: 'item-1' },
+  { file: '实验2 弗兰克-赫兹实验.pdf', title: '实验2 弗兰克 赫兹实验', slug: 'item-2', saved: '实验2-弗兰克-赫兹实验.pdf' },
+];
+let REPORT_BYTES = [];
 
 // ---------------------------------------------------------------------------
 // tiny runner (steps depend on each other: stop at the first failure)
@@ -196,6 +212,64 @@ async function fetchSite(mock, p) {
   return { status: res.status, type: res.headers.get('content-type') || '', bytes: Buffer.from(await res.arrayBuffer()) };
 }
 
+/** A real 3-page PDF (Chinese text + a coloured bar per page) printed by Chromium. */
+async function makePdf(browser) {
+  const ctx = await browser.newContext();
+  const pg = await ctx.newPage();
+  const pages = Array.from({ length: PDF_PAGES }, (_, i) => `<section><h1>广义相对论讲义 · 第 ${i + 1} 页</h1>
+    <div style="height:40px;background:hsl(${120 * i} 75% 45%)"></div><p>${'时空弯曲告诉物质如何运动，物质告诉时空如何弯曲。'.repeat(8)}</p></section>`);
+  await pg.setContent(`<!doctype html><meta charset="utf-8"><style>section{page-break-after:always;padding:40px}h1{font-size:28px}p{font-size:17px;line-height:1.8}</style>${pages.join('')}`);
+  const pdf = await pg.pdf({ format: 'A4', printBackground: true });
+  await ctx.close();
+  return pdf;
+}
+
+/** Pixel stats of page n's canvas in a viewer frame (non-blank + the coloured bar). */
+const canvasStats = (frame, n) => frame.evaluate((n) => {
+  const c = document.querySelector(`.page[data-page-number="${n}"] canvas`);
+  if (!c) return null;
+  const s = document.createElement('canvas');
+  s.width = 100;
+  s.height = 140;
+  const g = s.getContext('2d');
+  g.drawImage(c, 0, 0, s.width, s.height);
+  const d = g.getImageData(0, 0, s.width, s.height).data;
+  let dark = 0;
+  let colored = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] + d[i + 1] + d[i + 2] < 384) dark++;
+    if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) colored++;
+  }
+  return { dark, colored };
+}, n);
+
+/** Wait until a viewer (page or iframe) is ready and page 1 is drawn; returns its state. */
+async function viewerRendered(frame) {
+  await frame.waitForFunction(() => document.documentElement.getAttribute('data-ready') === '1' || document.documentElement.hasAttribute('data-error'), null, { timeout: 30000 });
+  assert.equal(await frame.evaluate(() => document.documentElement.getAttribute('data-error')), null, 'the viewer reported an error');
+  await frame.waitForFunction(() => { const d = document.querySelector('.page[data-page-number="1"]'); return d && d.classList.contains('rendered') && d.querySelector('canvas'); }, null, { timeout: 30000 });
+  const stats = await canvasStats(frame, 1);
+  assert.ok(stats.dark > 20 && stats.colored > 100, 'page 1 is drawn (text + coloured bar): ' + JSON.stringify(stats));
+  return frame.evaluate(() => ({
+    pages: Number(document.documentElement.getAttribute('data-pages')),
+    lang: document.documentElement.lang,
+    embed: document.documentElement.classList.contains('embed'),
+    download: document.getElementById('download').getAttribute('href'),
+    downloadText: document.getElementById('download').textContent.trim(),
+  }));
+}
+
+/** Insert a PDF with the editor's 资料 button: how = 'link' | 'embed'. */
+async function insertPdf(page, how) {
+  await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+  await page.waitForSelector(tid('editor-docs-search'));
+  await page.fill(tid('editor-docs-search'), 'lecture');
+  const item = page.locator(tid('editor-doc-item'), { hasText: PDF_NAME });
+  await item.waitFor();
+  await item.click();
+  await page.click(tid(how === 'embed' ? 'editor-doc-insert-embed' : 'editor-doc-insert-link'));
+}
+
 const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 
 // ---------------------------------------------------------------------------
@@ -207,6 +281,8 @@ async function main() {
   console.log(`  initial site built in ${built.ms} ms\n`);
 
   const browser = await chromium.launch();
+  PDF_BYTES = await makePdf(browser);
+  REPORT_BYTES = [PDF_BYTES, await makePdf(browser)];
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   context.setDefaultTimeout(20000);
   const origin = new URL(mock.url).origin;
@@ -345,6 +421,9 @@ async function main() {
       assert.deepEqual(c.changes.map((x) => x.path), [`static/documents/${PDF_NAME}`]);
       assert.ok(Buffer.compare(mock.readBytes(`static/documents/${PDF_NAME}`), PDF_BYTES) === 0, 'PDF byte-exact');
       await page.waitForSelector(`${tid('files-row')}[data-path="static/documents/${PDF_NAME}"]`);
+      // the PDF's 「打开」 opens the online viewer; 「复制文件链接」 still gives the file itself
+      assert.equal(await page.getAttribute(`${tid('files-row')}[data-path="static/documents/${PDF_NAME}"] ${tid('files-open')}`, 'href'), mock.url + PDF_VIEWER);
+      assert.ok(await page.isVisible(`${tid('files-row')}[data-path="static/documents/${PDF_NAME}"] ${tid('files-copy-preview')}`));
       await page.screenshot({ path: path.join(SHOTS, '02-files.png') });
     });
 
@@ -356,22 +435,41 @@ async function main() {
       assert.equal(await page.inputValue(tid('editor-title')), TITLE_ZH, 'the zh (shared) version opens');
       await vditor.caretToEnd(page);
       await page.keyboard.type('讲义下载：', { delay: 5 });
-      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
-      await page.waitForSelector(tid('editor-docs-search'));
-      await page.fill(tid('editor-docs-search'), 'lecture');
-      const item = page.locator(tid('editor-doc-item'), { hasText: PDF_NAME });
-      await item.waitFor();
-      await item.click();
-      await until(async () => (await vditor.get(page)).includes(`(/documents/${PDF_NAME})`), { msg: 'PDF link inserted' });
+      await insertPdf(page, 'link');
+      await until(async () => (await vditor.get(page)).includes(`(${PDF_VIEWER})`), { msg: 'PDF link inserted' });
+      // …and embed the reader below it (its own paragraph)
+      await insertPdf(page, 'embed');
+      await until(async () => (await vditor.get(page)).includes(PDF_EMBED), { msg: 'PDF reader embedded' });
       const commit = await clickAndCommit(page, mock, tid('editor-publish'));
       // with two variants the editor names the one it updated
       assert.equal(commit.message, `admin: 更新《${TITLE_ZH}》（共用版本）`);
       assert.deepEqual(commit.changes.map((c) => c.path), [POST], 'the PDF is already in the repo → only the post');
       const { body } = splitMd(mock.readFile(POST));
-      assert.match(body, new RegExp(`\\[[^\\]]*\\]\\(/documents/${PDF_NAME.replace(/\./g, '\\.')}\\)`));
+      assert.ok(body.includes(`[${PDF_NAME}](${PDF_VIEWER})`), body);
+      assert.ok(body.includes(`\n\n${PDF_EMBED}\n`), 'the embed is its own paragraph:\n' + body);
       assert.match(body, /讲义下载/);
       assert.match(body, new RegExp(`/images/posts/${SLUG}/`), 'image link kept');
       assert.match(body, /\$\$\nds\^2/, 'math kept');
+    });
+
+    // -----------------------------------------------------------------------
+    await step('English version: link + embed the PDF too → 更新 (viewer link carries lang=en)', async () => {
+      await page.click(tid('editor-tab-en'));
+      await page.waitForSelector(`${tid('editor-tab-en')}.active`);
+      await until(async () => (await vditor.get(page)).includes('tie geometry to matter'), { msg: 'the English body is shown' });
+      await vditor.caretToEnd(page);
+      await page.keyboard.type(' Lecture notes:', { delay: 5 });
+      await insertPdf(page, 'link');
+      await until(async () => (await vditor.get(page)).includes(`(${PDF_VIEWER}&lang=en)`), { msg: 'English PDF link inserted' });
+      await insertPdf(page, 'embed');
+      await until(async () => (await vditor.get(page)).includes(PDF_EMBED), { msg: 'PDF reader embedded (en)' });
+      const commit = await clickAndCommit(page, mock, tid('editor-publish'));
+      assert.match(commit.message, /^admin: 更新《/);
+      assert.deepEqual(commit.changes.map((c) => c.path), [POST_EN], 'only the English file');
+      const { body } = splitMd(mock.readFile(POST_EN));
+      assert.ok(body.includes(`(${PDF_VIEWER}&lang=en)`), body);
+      assert.ok(body.includes(`\n\n${PDF_EMBED}\n`), body);
+      assert.ok(!splitMd(mock.readFile(POST)).body.includes('Lecture notes'), 'the shared version is untouched');
     });
 
     // -----------------------------------------------------------------------
@@ -499,8 +597,54 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
+    await step('课程: create 近代物理实验 (group 实验课, + English) → batch upload 2 reports → 2 sub-posts in ONE commit', async () => {
+      await nav(page, 'courses');
+      await page.waitForSelector('body[data-courses-ready="list"]', { state: 'attached' });
+      await page.click(tid('courses-new'));
+      await page.fill(tid('new-course-name-zh'), COURSE_ZH);
+      await page.fill(tid('new-course-name-en'), COURSE_EN);
+      assert.equal(await page.inputValue(tid('new-course-slug')), COURSE);
+      await page.fill(tid('new-course-group'), COURSE_GROUP);
+      await page.fill(tid('new-course-desc'), '大三上学期 · 每个实验一篇报告');
+      await page.fill(tid('new-course-desc-en'), 'One report per experiment');
+      const c1 = await clickAndCommit(page, mock, tid('new-course-ok'));
+      assert.deepEqual(c1.changes.map((x) => x.path).sort(), [`content/courses/${COURSE}/_index.en.md`, `content/courses/${COURSE}/_index.md`]);
+      // exactly the front matter the site layouts read: title / description / group / weight, no menu
+      assert.equal(mock.readFile(`content/courses/${COURSE}/_index.md`),
+        `---\ntitle: "${COURSE_ZH}"\ndescription: "大三上学期 · 每个实验一篇报告"\ngroup: "${COURSE_GROUP}"\nweight: 10\n---\n`);
+      assert.equal(mock.readFile(`content/courses/${COURSE}/_index.en.md`),
+        `---\ntitle: "${COURSE_EN}"\ndescription: "One report per experiment"\ngroup: "${COURSE_GROUP}"\nweight: 10\n---\n`);
+      await page.waitForSelector('body[data-courses-ready="detail"]', { state: 'attached' });
+      assert.equal(await page.evaluate(() => location.hash), `#/courses?course=${COURSE}`);
+
+      // batch upload: both reports become sub-posts (default), titles from the file names
+      await page.setInputFiles(tid('course-files-input'), REPORTS.map((r, i) => ({ name: r.file, mimeType: 'application/pdf', buffer: REPORT_BYTES[i] })));
+      await page.waitForSelector(tid('course-batch'));
+      const rows = await page.$$eval(tid('batch-row'), (els) => els.map((e) => [e.dataset.mode, e.querySelector('[data-testid="batch-title"]').value]));
+      assert.deepEqual(rows, REPORTS.map((r) => ['item', r.title]));
+      assert.match(await page.textContent(tid('batch-summary')), /将上传 2 个文件.*生成 2 篇子推文/);
+      const c2 = await clickAndCommit(page, mock, tid('batch-submit'));
+      const MAT = `static/documents/courses/${COURSE}`;
+      assert.deepEqual(c2.changes.map((x) => x.path).sort(), [
+        ...REPORTS.map((r) => `content/courses/${COURSE}/${r.slug}.md`),
+        ...REPORTS.map((r) => `${MAT}/${r.saved || r.file}`),
+      ].sort());
+      REPORTS.forEach((r, i) => {
+        assert.equal(Buffer.compare(mock.readBytes(`${MAT}/${r.saved || r.file}`), REPORT_BYTES[i]), 0, `${r.file} byte-exact`);
+        assert.equal(mock.readFile(`content/courses/${COURSE}/${r.slug}.md`),
+          `---\ntitle: "${r.title}"\nweight: ${(i + 1) * 10}\ndraft: false\n---\n\n{{< pdf "/documents/courses/${COURSE}/${r.saved || r.file}" >}}\n`);
+      });
+      await page.waitForSelector('body[data-courses-ready="detail"]', { state: 'attached' });
+      await until(async () => (await page.$$(tid('item-row'))).length === 2, { msg: 'two sub-posts listed' });
+      assert.deepEqual(await page.$$eval(`${tid('item-row')} ${tid('item-title')}`, (els) => els.map((e) => e.textContent)), REPORTS.map((r) => r.title));
+      assert.deepEqual(await page.$$eval(tid('material-name'), (els) => els.map((e) => e.textContent)), REPORTS.map((r) => r.saved || r.file).sort());
+      await until(async () => (await page.$$(tid('material-used'))).length === 2, { msg: '「用在」 links' });
+    });
+
+    // -----------------------------------------------------------------------
     await step('every view fits a phone (390x844 and 360x740) without horizontal scroll; screenshots', async () => {
       const views = [['#/posts', 'posts'], ['#/edit?path=' + encodeURIComponent(POST), 'edit'], ['#/pages', 'pages'],
+        ['#/courses', 'courses'], [`#/courses?course=${COURSE}`, 'courses'],
         ['#/profile', 'profile'], ['#/background', 'background'], ['#/files', 'files']];
       for (const [w, hgt, label] of [[1280, 800, 'desktop'], [390, 844, 'mobile'], [360, 740, 'mobile360']]) {
         const mp = await context.newPage();
@@ -511,6 +655,7 @@ async function main() {
         for (const [hash, route] of views) {
           await go(mp, hash, route);
           if (route === 'edit') await waitEditor(mp);
+          if (route === 'courses') await mp.waitForSelector(`body[data-courses-ready="${hash.includes('?') ? 'detail' : 'list'}"]`, { state: 'attached' });
           await sleep(400);
           assert.ok(await noHScroll(mp), `no horizontal scroll on ${hash} at ${w}px`);
           // nothing sticks out of the viewport on the right (clipped buttons etc.)
@@ -518,7 +663,7 @@ async function main() {
             .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right > window.innerWidth + 1 && !el.closest('.tabs, .vditor-toolbar, .ed-tabs, [data-scroll-x]'); })
             .map((el) => `${el.tagName}.${el.className} "${(el.textContent || el.value || '').trim().slice(0, 20)}"`));
           assert.deepEqual(wide, [], `elements past the right edge on ${hash} at ${w}px`);
-          await mp.screenshot({ path: path.join(SHOTS, `${label}-${route}.png`) });
+          await mp.screenshot({ path: path.join(SHOTS, `${label}-${route}${hash.includes('course=') ? '-detail' : ''}.png`) });
         }
         await mp.close();
       }
@@ -542,7 +687,14 @@ async function main() {
       assert.ok(zhHtml.includes(TITLE_ZH), 'zh post has the Chinese title');
       assert.ok(enHtml.includes(TITLE_EN), 'en post has the English title');
       assert.ok(!enHtml.includes(TITLE_ZH), 'en post does not use the shared title');
-      assert.ok(zhHtml.includes(`/documents/${PDF_NAME}`), 'zh post links the PDF');
+      assert.ok(zhHtml.includes(PDF_VIEWER), 'zh post links the PDF’s online preview');
+      assert.ok(enHtml.includes(`${PDF_VIEWER}&amp;lang=en`), 'en post links the English online preview');
+      for (const [html, lang] of [[zhHtml, 'zh'], [enHtml, 'en']]) {
+        // the shortcode became an <iframe> to the viewer in embed mode, in the page's language
+        const m = /<iframe class="?pdf-embed-frame"? src="?([^" >]+)/.exec(html);
+        assert.ok(m, `${lang} post has the embedded reader`);
+        assert.equal(m[1].replace(/&amp;/g, '&'), `/viewer/?file=%2Fdocuments%2F${PDF_NAME}&lang=${lang}&embed=1`);
+      }
       assert.ok(zhHtml.includes(`/images/posts/${SLUG}/`), 'zh post shows the image');
       assert.ok(zhHtml.includes('G_{\\mu\\nu} = 8\\pi G'), 'math source reaches the page untouched (KaTeX renders it client-side)');
       const img = await fetchSite(mock, `/images/posts/${SLUG}/${encodeURIComponent(imgName)}`);
@@ -555,6 +707,10 @@ async function main() {
       const pdf = await fetchSite(mock, `/documents/${PDF_NAME}`);
       assert.equal(pdf.status, 200);
       assert.equal(Buffer.compare(pdf.bytes, PDF_BYTES), 0, 'PDF served byte-exact');
+      // …and the online viewer the post links to is part of the site
+      if (fs.existsSync(path.join(REPO_ROOT, 'static', 'viewer', 'index.html'))) {
+        assert.equal((await fetchSite(mock, PDF_VIEWER)).status, 200, 'viewer page served');
+      }
 
       // avatar + favicon
       const av = await fetchSite(mock, '/avatar.jpg');
@@ -587,6 +743,151 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
+    await step('visitor: 课程资料 landing → 实验课 → 近代物理实验 (2 sub-posts + 资料) → sub-post viewer renders, prev/next in the course; en labels', async () => {
+      const externalBefore = external.length;
+      const vp = await context.newPage();
+      vp.on('pageerror', (e) => pageErrors.push(`course visitor: ${e.message}`));
+      vp.on('console', (m) => { if (/CSP-VIOLATION|Content Security Policy/.test(m.text())) cspErrors.push(m.text()); });
+      const LANDING_TEXT = { zh: '资料使用说明', en: 'How to Use' };
+      const L = {
+        zh: { contents: '内容', materials: '资料', used: '收录于', prev: '« 上一篇', next: '下一篇 »', crumbs: ['课程资料', COURSE_ZH], title: COURSE_ZH },
+        en: { contents: 'Contents', materials: 'Materials', used: 'Used in', prev: '« Previous', next: 'Next »', crumbs: ['Course Materials', COURSE_EN], title: COURSE_EN },
+      };
+      for (const [prefix, lang] of [['', 'zh'], ['/en', 'en']]) {
+        const l = L[lang];
+        // 1. landing: the user's intro text first, then the card under its group heading
+        await vp.goto(`${mock.url}${prefix}/courses/`, { waitUntil: 'domcontentloaded' });
+        const landing = await vp.evaluate(() => ({
+          intro: document.querySelector('.post-content') ? document.querySelector('.post-content').textContent : '',
+          groups: [...document.querySelectorAll('.course-group')].map((g) => [g.querySelector('.course-group-title').textContent.trim(),
+            [...g.querySelectorAll('.course-card-title a')].map((a) => [a.textContent.trim(), a.getAttribute('href')])]),
+          introBeforeCards: !!document.querySelector('.post-content') && !!document.querySelector('.course-index') &&
+            !!(document.querySelector('.post-content').compareDocumentPosition(document.querySelector('.course-index')) & Node.DOCUMENT_POSITION_FOLLOWING),
+        }));
+        assert.ok(landing.intro.includes(LANDING_TEXT[lang]), `${lang}: the existing landing text is kept`);
+        assert.ok(landing.introBeforeCards, `${lang}: intro above the cards`);
+        assert.deepEqual(landing.groups, [[COURSE_GROUP, [[l.title, `${prefix}/courses/${COURSE}/`]]]], `${lang}: the course sits under the 实验课 heading`);
+        // 2. click the card → the unit page
+        await Promise.all([vp.waitForURL(new RegExp(`${prefix}/courses/${COURSE}/$`)), vp.click('.course-card-title a')]);
+        const unit = await vp.evaluate(() => ({
+          crumbs: [...document.querySelectorAll('.course-breadcrumbs a, .course-breadcrumbs [aria-current]')].map((a) => a.textContent.trim()),
+          sections: [...document.querySelectorAll('.course-section-title')].map((x) => x.textContent.trim()),
+          posts: [...document.querySelectorAll('.course-post-title a')].map((a) => [a.textContent.trim(), a.getAttribute('href')]),
+          materials: [...document.querySelectorAll('.course-material')].map((m) => ({
+            name: m.querySelector('.course-material-name').textContent.trim(),
+            href: m.querySelector('.course-material-name').getAttribute('href'),
+            used: m.querySelector('.course-material-post') ? m.querySelector('.course-material-post').textContent.replace(/\s+/g, ' ').trim() : '',
+          })),
+          dates: document.querySelectorAll('main time, main .post-meta').length,
+        }));
+        assert.deepEqual(unit.crumbs, l.crumbs);
+        assert.deepEqual(unit.sections, [l.contents, l.materials]);
+        assert.deepEqual(unit.posts, REPORTS.map((r) => [r.title, `${prefix}/courses/${COURSE}/${r.slug}/`]));
+        const sorted = [...REPORTS].sort((a, b) => ((a.saved || a.file) < (b.saved || b.file) ? -1 : 1));
+        assert.deepEqual(unit.materials, sorted.map((r) => ({
+          name: r.saved || r.file,
+          href: `/viewer/?file=${encodeURIComponent(`/documents/courses/${COURSE}/${r.saved || r.file}`)}${lang === 'en' ? '&lang=en' : ''}`,
+          used: `${l.used} ${r.title}`,
+        })));
+        assert.equal(unit.dates, 0, 'no dates in courses');
+        // the materials list links work (viewer page + the file itself)
+        for (const m of unit.materials) assert.equal((await fetchSite(mock, m.href)).status, 200, m.href);
+        // 3. first sub-post: breadcrumbs, the embedded viewer renders the PDF, prev/next stay in the course
+        await Promise.all([vp.waitForURL(new RegExp(`/courses/${COURSE}/${REPORTS[0].slug}/$`)), vp.click('.course-post-title a >> nth=0')]);
+        const crumbs = await vp.$$eval('.course-breadcrumbs a, .course-breadcrumbs [aria-current]', (as) => as.map((a) => a.textContent.trim()));
+        assert.deepEqual(crumbs, [...l.crumbs, REPORTS[0].title]);
+        const handle = await vp.waitForSelector('figure.pdf-embed iframe');
+        await handle.scrollIntoViewIfNeeded();
+        const frame = await handle.contentFrame();
+        const emb = await viewerRendered(frame);
+        assert.equal(emb.pages, PDF_PAGES);
+        assert.equal(emb.lang, lang === 'en' ? 'en' : 'zh-CN');
+        assert.equal(emb.download, `/documents/courses/${COURSE}/${encodeURIComponent(REPORTS[0].file)}`);
+        const pager = () => vp.$$eval('.course-paginav a', (as) => as.map((a) => [a.className, a.querySelector('.title').textContent.trim(), a.querySelector('span:last-child').textContent.trim(), new URL(a.href).pathname]));
+        assert.deepEqual(await pager(), [['next', l.next, REPORTS[1].title, `${prefix}/courses/${COURSE}/${REPORTS[1].slug}/`]]);
+        assert.equal(await vp.$$eval('main time, main .post-meta', (x) => x.length), 0, 'no date on the sub-post');
+        await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-course-item.png`) });
+        await Promise.all([vp.waitForURL(new RegExp(`/courses/${COURSE}/${REPORTS[1].slug}/$`)), vp.click('.course-paginav a.next')]);
+        assert.deepEqual(await pager(), [['prev', l.prev, REPORTS[0].title, `${prefix}/courses/${COURSE}/${REPORTS[0].slug}/`]]);
+        await vp.waitForSelector('figure.pdf-embed iframe');
+      }
+      // the blog post is not touched by the course pager
+      await vp.goto(`${mock.url}/posts/${SLUG}/`, { waitUntil: 'domcontentloaded' });
+      assert.equal(await vp.$$eval('.course-paginav, .course-breadcrumbs', (x) => x.length), 0);
+      await vp.close();
+      // site pages load KaTeX from the CDN (math is on site-wide; blocked in this test) — nothing else may leave the site
+      const added = external.splice(externalBefore);
+      assert.deepEqual(added.filter((u) => !u.startsWith('https://cdn.jsdelivr.net/npm/katex@')), [], 'unexpected external requests');
+    });
+
+    // -----------------------------------------------------------------------
+    await step('visitor (zh + en): the preview link opens a viewer that renders the PDF; the embedded reader renders it', async () => {
+      const externalBefore = external.length;
+      const viewerExternal = [];
+      for (const [prefix, lang] of [['', 'zh'], ['/en', 'en']]) {
+        // same browser profile as the admin (the token is remembered in localStorage on this origin)
+        const vp = await context.newPage();
+        vp.on('pageerror', (e) => pageErrors.push(`${lang} visitor: ${e.message}`));
+        vp.on('console', (m) => { if (/CSP-VIOLATION|Content Security Policy/.test(m.text())) cspErrors.push(m.text()); });
+        vp.on('request', (req) => {
+          if (req.url().includes(mock.token)) tokenLeaks.push(`visitor url: ${req.url()}`);
+          let fromViewer = false;
+          try { fromViewer = new URL(req.frame().url()).pathname.startsWith('/viewer/'); } catch { /* detached frame */ }
+          if (fromViewer && !req.url().startsWith(mock.url + '/')) viewerExternal.push(req.url());
+          if (req.headers().authorization) tokenLeaks.push(`visitor auth header: ${req.url()}`);
+        });
+        await vp.addInitScript(() => {
+          // record every storage key the site's scripts touch (the viewer may only read pref-theme)
+          window.__storage = [];
+          const P = Storage.prototype;
+          for (const fn of ['getItem', 'setItem', 'removeItem', 'key', 'clear']) {
+            const orig = P[fn];
+            P[fn] = function (...a) { if (location.pathname.startsWith('/viewer/')) window.__storage.push(`${fn}:${a[0]}`); return orig.apply(this, a); };
+          }
+        });
+        await vp.goto(`${mock.url}${prefix}/posts/${SLUG}/`, { waitUntil: 'domcontentloaded' });
+        assert.equal(await vp.evaluate(() => localStorage.getItem('admin.token')), mock.token, 'precondition: token remembered on this origin');
+
+        // 1. the embedded reader
+        const handle = await vp.waitForSelector('figure.pdf-embed iframe');
+        await handle.scrollIntoViewIfNeeded();
+        const frame = await handle.contentFrame();
+        const emb = await viewerRendered(frame);
+        assert.equal(emb.pages, PDF_PAGES);
+        assert.equal(emb.embed, true);
+        assert.equal(emb.lang, lang === 'en' ? 'en' : 'zh-CN');
+        assert.equal(emb.download, `/documents/${PDF_NAME}`);
+        assert.equal(emb.downloadText, lang === 'en' ? 'Download' : '下载');
+        const caption = await vp.$$eval('figure.pdf-embed figcaption a', (as) => as.map((a) => [a.textContent.trim(), a.getAttribute('href')]));
+        assert.deepEqual(caption, [[lang === 'en' ? 'Open in new tab' : '在新页面打开', `/viewer/?file=%2Fdocuments%2F${PDF_NAME}&lang=${lang}`],
+          [lang === 'en' ? 'Download' : '下载', `/documents/${PDF_NAME}`]]);
+        assert.deepEqual(await frame.evaluate(() => window.__storage), ['getItem:pref-theme'], 'embedded viewer storage access');
+        await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-embed.png`) });
+
+        // 2. the preview link in the text → the viewer page (same tab), then back to the post
+        const link = vp.locator(`.post-content a[href^="/viewer/?file="]:not(figure a)`);
+        assert.equal(await link.count(), 1, 'one preview link in the text');
+        await link.scrollIntoViewIfNeeded();
+        await Promise.all([vp.waitForURL(/\/viewer\/\?file=/), link.click()]);
+        const v = await viewerRendered(vp);
+        assert.equal(v.pages, PDF_PAGES);
+        assert.equal(v.embed, false);
+        assert.equal(v.lang, lang === 'en' ? 'en' : 'zh-CN');
+        assert.equal(v.download, `/documents/${PDF_NAME}`);
+        assert.equal(await vp.title(), PDF_NAME);
+        assert.deepEqual(await vp.evaluate(() => window.__storage), ['getItem:pref-theme'], 'viewer storage access');
+        await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-viewer.png`) });
+        await vp.goBack();
+        assert.equal(new URL(vp.url()).pathname, `${prefix}/posts/${SLUG}/`, 'back returns to the post');
+        await vp.close();
+      }
+      assert.deepEqual(viewerExternal, [], 'the viewer requested nothing outside the site');
+      // the theme's own post page loads KaTeX from the CDN (blocked in this test) — that is not the viewer's doing
+      const added = external.splice(externalBefore);
+      assert.deepEqual(added.filter((u) => !u.startsWith('https://cdn.jsdelivr.net/npm/katex@')), [], 'unexpected external requests');
+    });
+
+    // -----------------------------------------------------------------------
     await step('every original comment in config/_default/*.toml is still there, in order', async () => {
       const exp = path.join(OUT, 'export');
       for (const p of CONFIG) {
@@ -606,8 +907,9 @@ async function main() {
       assert.deepEqual(cspErrors, []);
       assert.deepEqual(external, []);
       assert.deepEqual(tokenLeaks, []);
-      // one commit per publish: 2 post + 1 upload + 1 link + 1 profile + 1 background + 1 menu + 1 draft + 1 delete
-      assert.equal(mock.commits.length, 9, mock.commits.map((c) => c.message).join('\n'));
+      // one commit per publish: 2 post + 1 upload + 2 link/embed (zh, en) + 1 profile + 1 background + 1 menu + 1 draft + 1 delete
+      // + 1 new course + 1 batch upload
+      assert.equal(mock.commits.length, 12, mock.commits.map((c) => c.message).join('\n'));
     });
   } finally {
     await browser.close();

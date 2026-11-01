@@ -1,0 +1,74 @@
+{{- /*
+  一门课的单元页 /courses/<课程>/：面包屑、标题、简介 → 你写的介绍（_index.md 正文）
+  → 子推文卡片（按 weight、标题）→ 资料列表（构建时读取资料文件夹，见 courses/info.html）。
+  不显示日期。
+*/ -}}
+{{- $info := partialCached "courses/info.html" . .RelPermalink -}}
+<header class="page-header">
+  {{- partial "courses/breadcrumbs.html" . }}
+  <h1>{{ .Title }}</h1>
+  {{- if .Description }}
+  <div class="post-description">
+    {{ .Description | markdownify }}
+  </div>
+  {{- end }}
+</header>
+
+{{- if .Content }}
+<div class="post-content course-intro">
+  {{- if not (.Param "disableAnchoredHeadings") }}
+  {{- partial "anchored_headings.html" .Content -}}
+  {{- else }}{{ .Content }}{{ end }}
+</div>
+{{- end }}
+
+{{- with $info.posts }}
+<section class="course-section course-posts" aria-labelledby="course-posts-title">
+  <h2 class="course-section-title" id="course-posts-title">{{ i18n "courses_contents" }}</h2>
+  <ol class="course-post-list">
+    {{- range . }}
+    <li class="course-post">
+      <h3 class="course-post-title"><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>
+        {{- if .Draft }}<span class="course-draft">{{ i18n "courses_draft" }}</span>{{ end -}}
+      </h3>
+      {{- with .Description }}
+      <p class="course-post-desc">{{ . | markdownify }}</p>
+      {{- end }}
+    </li>
+    {{- end }}
+  </ol>
+</section>
+{{- end }}
+
+{{- with $info.files }}
+<section class="course-section course-materials" aria-labelledby="course-materials-title">
+  <h2 class="course-section-title" id="course-materials-title">{{ i18n "courses_materials" }}</h2>
+  <ul class="course-material-list">
+    {{- range . }}
+    <li class="course-material" data-ext="{{ .ext }}">
+      <span class="course-material-ext" aria-hidden="true">{{ upper (.ext | default "file") }}</span>
+      <span class="course-material-body">
+        {{- if .preview }}
+        <a class="course-material-name" href="{{ .href | safeURL }}" title="{{ printf "%s%s" (i18n "courses_preview") .name }}">{{ .name }}</a>
+        {{- else }}
+        <a class="course-material-name" href="{{ .href | safeURL }}" download="{{ .name }}">{{ .name }}</a>
+        {{- end }}
+        <span class="course-material-meta">
+          <span class="course-material-size">{{ partial "courses/size.html" .size }}</span>
+          {{- with .post }}
+          <span class="course-material-post">{{ i18n "courses_used_in" }} <a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></span>
+          {{- end }}
+          {{- if .preview }}
+          <a class="course-material-download" href="{{ .file | safeURL }}" download="{{ .name }}">{{ i18n "courses_download" }}</a>
+          {{- end }}
+        </span>
+      </span>
+    </li>
+    {{- end }}
+  </ul>
+</section>
+{{- end }}
+
+{{- if not (or .Content $info.posts $info.files) }}
+<p class="course-empty">{{ i18n "courses_empty" }}</p>
+{{- end }}

@@ -1,0 +1,35 @@
+# 网站界面文字（中文站）。这里只放本站自己加的条目；PaperMod 主题自带的条目
+# （上一页、目录、复制……）在 themes/PaperMod/i18n/zh.yaml，Hugo 会自动合并，同名时以这里为准。
+# 英文站的对应文字在 i18n/en.yaml。
+
+# ---------- 课程资料（layouts/courses/、layouts/partials/courses/） ----------
+- id: courses_contents
+  translation: "内容"
+- id: courses_materials
+  translation: "资料"
+- id: courses_other
+  translation: "其他"
+- id: courses_post_count
+  translation:
+    other: "{{ .Count }} 篇"
+- id: courses_file_count
+  translation:
+    other: "{{ .Count }} 份资料"
+- id: courses_used_in
+  translation: "收录于"
+- id: courses_preview
+  translation: "在线预览："
+- id: courses_download
+  translation: "下载"
+- id: courses_prev
+  translation: "上一篇"
+- id: courses_next
+  translation: "下一篇"
+- id: courses_pager
+  translation: "本课程的上一篇和下一篇"
+- id: courses_breadcrumbs
+  translation: "当前位置"
+- id: courses_empty
+  translation: "这门课的内容还在整理中。"
+- id: courses_draft
+  translation: "草稿"

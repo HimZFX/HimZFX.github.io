@@ -12,7 +12,8 @@ import path from 'node:path';
 import {
   parseContentPath, groupPages, resolveForLang, variantLabel, languageStatus, statusText,
   isPost, variantPath, slugify, suggestSlug, isValidSlug, imageDirFor, sitePathFor,
-  shadowWarnings, isDraftFm,
+  shadowWarnings, isDraftFm, viewerUrlFor, isPreviewable, isPdfPath, isViewerFilePath, referencesSitePath,
+  VIEWER_PATH,
 } from '../../static/admin/js/content.js';
 import { safeFileName, timestampName, extOf } from '../../static/admin/js/images.js';
 import * as drafts from '../../static/admin/js/drafts.js';
@@ -277,6 +278,109 @@ describe('labels and paths', () => {
     assert.equal(sitePathFor('static/avatar.jpg'), '/avatar.jpg');
     assert.equal(sitePathFor('/static/documents/a.pdf'), '/documents/a.pdf');
     assert.equal(sitePathFor('static'), '/');
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('online viewer links', () => {
+  test('viewerUrlFor: relative by default, file param fully encoded', () => {
+    assert.equal(VIEWER_PATH, '/viewer/');
+    assert.equal(viewerUrlFor('/documents/a.pdf'), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/讲义-第1章.pdf'),
+      '/viewer/?file=' + encodeURIComponent('/documents/讲义-第1章.pdf'));
+    assert.equal(viewerUrlFor('/documents/讲义-第1章.pdf'),
+      '/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89-%E7%AC%AC1%E7%AB%A0.pdf');
+    // characters that would break a Markdown link or the query string
+    assert.equal(viewerUrlFor('/documents/Lecture Notes (1).pdf'),
+      '/viewer/?file=%2Fdocuments%2FLecture%20Notes%20%281%29.pdf');
+    assert.equal(viewerUrlFor('/documents/量子 力学#2.pdf'),
+      '/viewer/?file=%2Fdocuments%2F%E9%87%8F%E5%AD%90%20%E5%8A%9B%E5%AD%A6%232.pdf');
+    assert.equal(viewerUrlFor('/documents/50%off&x=1?.pdf'),
+      '/viewer/?file=%2Fdocuments%2F50%25off%26x%3D1%3F.pdf');
+    assert.equal(viewerUrlFor("/documents/it's*!.pdf"), '/viewer/?file=%2Fdocuments%2Fit%27s%2A%21.pdf');
+    // the viewer gets back exactly the site path
+    for (const p of ['/documents/Lecture Notes (1).pdf', '/documents/量子 力学#2.pdf', '/documents/50%off&x=1?.pdf']) {
+      const u = new URL(viewerUrlFor(p), 'https://example.org/');
+      assert.equal(u.pathname, '/viewer/');
+      assert.equal(u.searchParams.get('file'), p);
+      assert.equal(u.hash, '');
+    }
+  });
+
+  test('viewerUrlFor: lang / embed / page / absolute', () => {
+    const site = 'https://himzfx.github.io/';
+    assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'zh' }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'en' }), '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'en', embed: true }), '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en&embed=1');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { embed: true, page: 3 }), '/viewer/?file=%2Fdocuments%2Fa.pdf&embed=1&page=3');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { page: 1 }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { page: 'x' }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true, siteUrl: site }),
+      'https://himzfx.github.io/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true, siteUrl: 'http://127.0.0.1:8080' }),
+      'http://127.0.0.1:8080/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true, siteUrl: site, lang: 'en' }),
+      'https://himzfx.github.io/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en');
+    // absolute without a site URL → still a usable relative link
+    assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+  });
+
+  test('viewerUrlFor / isViewerFilePath refuse paths the viewer would refuse', () => {
+    const bad = [
+      '', null, undefined, 'documents/a.pdf', '//evil.example/a.pdf', 'https://evil.example/a.pdf',
+      'javascript:alert(1)', '/documents\\a.pdf', '/documents/a\npdf', '/documents/a\u0000.pdf',
+      '/documents/../admin/index.html', '/documents/./a.pdf', '/..', '/documents/%2e%2e/admin/x',
+      '/admin/', '/admin', '/admin/js/main.js', '/ADMIN/x', '/viewer/', '/viewer/index.html',
+      // same rules as the site's static/viewer/path.js
+      '/documents//a.pdf', '/documents/', '/documents/a%2Fb.pdf', '/documents/%252e%252e/x.pdf', '/documents/a\u2028.pdf',
+      '/documents/a\u0085.pdf', '/%61dmin/x.pdf', '/x'.repeat(1100),
+    ];
+    for (const p of bad) {
+      assert.equal(isViewerFilePath(p), false, String(p));
+      assert.equal(viewerUrlFor(p), null, String(p));
+    }
+    for (const p of ['/documents/a.pdf', '/images/x.png', '/a.pdf', '/administration/a.pdf', '/documents/50%off.pdf', '/viewers/a.pdf']) {
+      assert.equal(isViewerFilePath(p), true, p);
+    }
+  });
+
+  test('isPreviewable / isPdfPath', () => {
+    for (const p of ['/documents/a.pdf', 'static/documents/B.PDF', '/images/x.png', 'x.jpg', 'x.JPEG', 'x.gif', 'x.webp', 'x.avif', 'x.svg', '/documents/量子 力学#2.pdf', '/documents/what?.pdf']) {
+      assert.equal(isPreviewable(p), true, p);
+    }
+    for (const p of ['/documents/a.docx', 'a.pptx', 'a.zip', 'pdf', 'a.pdf.zip', 'a.heic', 'a.bmp', '', null]) {
+      assert.equal(isPreviewable(p), false, String(p));
+    }
+    assert.equal(isPdfPath('/documents/讲义.PDF'), true);
+    assert.equal(isPdfPath('/images/a.png'), false);
+  });
+
+  test('referencesSitePath finds direct links, viewer links and the pdf shortcode', () => {
+    const p = '/documents/讲义 第1章 (2).pdf';
+    const yes = [
+      `见 [讲义](${p})`,
+      '见 [讲义](/documents/讲义%20第1章%20%282%29.pdf)',
+      `见 [讲义](${encodeURI(p)})`,
+      `[讲义](${viewerUrlFor(p)})`,
+      `[讲义](${viewerUrlFor(p, { absolute: true, siteUrl: 'https://himzfx.github.io/', lang: 'en' })})`,
+      `<a href="${viewerUrlFor(p, { embed: true }).replace('&', '&amp;')}">x</a>`,
+      `{{< pdf "${p}" >}}`,
+      `{{< pdf "${p}" height="80vh" >}}`,
+      `{{< pdf src="${p}" >}}`,
+      `{{% pdf file='${p}' %}}`,
+      `{{< pdf "/documents/讲义%20第1章%20(2).pdf" >}}`,
+    ];
+    for (const t of yes) assert.equal(referencesSitePath(`前文\n\n${t}\n\n后文`, p), true, t);
+    const no = [
+      '没有引用',
+      `[别的](${viewerUrlFor('/documents/讲义 第1章 (3).pdf')})`,
+      '{{< pdf "/documents/other.pdf" >}}',
+      `{{< pdf "/documents/other.pdf" title="${'讲义'}" >}}`,
+      '[x](/viewer/?file=%E0%A4%A)',
+    ];
+    for (const t of no) assert.equal(referencesSitePath(t, p), false, t);
+    assert.equal(referencesSitePath('', p), false);
+    assert.equal(referencesSitePath('x', ''), false);
   });
 });
 

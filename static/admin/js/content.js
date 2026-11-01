@@ -329,3 +329,143 @@ export function shadowWarnings(group, fmByPath, langs) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// 在线预览（网站的 /viewer/ 页面）
+//
+// 安卓手机、尤其是微信内置浏览器打不开 PDF（只能下载），所以资料的链接默认指向网站自己的
+// 阅读器页面：/viewer/?file=<encodeURIComponent(网站路径)>（PDF.js 渲染 PDF，图片可以放大，
+// 都带「下载」按钮）。可选参数：lang=en（英文界面，默认中文）、embed=1（嵌在文章里的精简样式）、
+// page=N（从第 N 页开始）。文章正文里也可以用 {{< pdf "/documents/x.pdf" >}} 直接嵌入阅读器。
+
+/** 阅读器页面在网站上的路径。 */
+export const VIEWER_PATH = '/viewer/';
+
+/** 阅读器能直接显示的图片格式（其余文件只给下载链接）。 */
+export const PREVIEW_IMAGE_EXTS = Object.freeze(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg']);
+
+/** 路径的扩展名（小写，不含点）。路径是未编码的文件路径，文件名里可以有 # 和 ?（不是网址的 query / hash）。 */
+function extOfPath(path) {
+  const p = String(path || '');
+  const name = p.slice(p.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+/** 是 PDF（看扩展名）。 */
+export function isPdfPath(path) {
+  return extOfPath(path) === 'pdf';
+}
+
+/** 阅读器能直接显示（PDF 或常见图片格式）。 */
+export function isPreviewable(path) {
+  const ext = extOfPath(path);
+  return ext === 'pdf' || PREVIEW_IMAGE_EXTS.includes(ext);
+}
+
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch { return null; }
+}
+
+/** 控制字符（含 C1）和 Unicode 行 / 段分隔符。 */
+const VIEWER_BAD_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/**
+ * 阅读器接受的文件路径（与网站 static/viewer/path.js 的规则一致）：同源、以 '/' 开头（不能是 '//'）、
+ * 没有反斜杠和控制字符、没有空的 / '.' / '..' 路径段（逐段按 %XX 解码后也不能有，例如 %2e%2e；
+ * 段里也不能解码出 '/' 或 '\'），也不能在 /admin/ 或 /viewer/ 下。
+ * @param {string} sitePath 网站路径（未编码），例如 '/documents/讲义-第1章.pdf'
+ */
+export function isViewerFilePath(sitePath) {
+  const p = sitePath;
+  if (typeof p !== 'string' || p.length > 2048 || !p.startsWith('/') || p.startsWith('//')) return false;
+  if (p.includes('\\') || VIEWER_BAD_CHARS.test(p)) return false;
+  const segs = p.slice(1).split('/');
+  for (let i = 0; i < segs.length; i++) {
+    let cur = segs[i];
+    for (let round = 0; round < 4; round++) {
+      if (cur === '' || cur.trim() === '.' || cur.trim() === '..') return false;
+      if (round > 0 && (cur.includes('/') || cur.includes('\\') || VIEWER_BAD_CHARS.test(cur))) return false;
+      const next = safeDecode(cur);
+      if (next === null || next === cur) break;
+      cur = next;
+    }
+    if (i === 0 && /^(admin|viewer)$/i.test(safeDecode(segs[0]) ?? segs[0])) return false;
+  }
+  return true;
+}
+
+/** encodeURIComponent 再把 ! ' ( ) * 也编码（括号会破坏 Markdown 链接）。 */
+function encodeQueryValue(s) {
+  return encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+/**
+ * 资料的在线预览地址。
+ *
+ * @param {string} sitePath 网站路径（未编码），例如 '/documents/讲义-第1章.pdf'（sitePathFor 的结果）
+ * @param {{ lang?: string, embed?: boolean, absolute?: boolean, siteUrl?: string, page?: number }} [opts]
+ *   lang：界面语言，'zh'（默认，不写进网址）或 'en' 等；embed：嵌入文章用的精简样式；
+ *   absolute：返回完整网址（需要 siteUrl，例如 ctx.siteUrl = 'https://himzfx.github.io/'）；
+ *   page：从第几页开始（> 1 时才写进网址）。
+ * @returns {string|null} 路径不合法时返回 null
+ * @example viewerUrlFor('/documents/a b.pdf')  // '/viewer/?file=%2Fdocuments%2Fa%20b.pdf'
+ * @example viewerUrlFor('/documents/a.pdf', { lang: 'en', embed: true, absolute: true, siteUrl: 'https://x.io/' })
+ *   // 'https://x.io/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en&embed=1'
+ */
+export function viewerUrlFor(sitePath, { lang, embed, absolute, siteUrl, page } = {}) {
+  if (!isViewerFilePath(sitePath)) return null;
+  let q = 'file=' + encodeQueryValue(sitePath);
+  if (lang && lang !== 'zh') q += '&lang=' + encodeQueryValue(String(lang));
+  if (embed) q += '&embed=1';
+  const n = Number(page);
+  if (Number.isInteger(n) && n > 1) q += '&page=' + n;
+  const rel = VIEWER_PATH + '?' + q;
+  if (!absolute || !siteUrl) return rel;
+  return String(siteUrl).replace(/\/?$/, '/') + rel.slice(1);
+}
+
+/**
+ * 正文是否引用了某个网站文件（删除资料前的提醒用）。认得这些写法：
+ *   原样或编码过的路径（[x](/documents/a%20b.pdf)、![](…)、<a href>…）、
+ *   阅读器链接（/viewer/?file=%2Fdocuments%2F…，file 参数解码后比较）、
+ *   {{< pdf "/documents/x.pdf" >}} 短代码（位置参数或 src= / file= 参数）。
+ * @param {string} text Markdown 原文
+ * @param {string} sitePath 网站路径（未编码）
+ */
+export function referencesSitePath(text, sitePath) {
+  const s = String(text || '');
+  const target = String(sitePath || '');
+  if (!target || !s) return false;
+  if (s.includes(target) || s.includes(encodeURI(target))) return true;
+  const same = (v) => {
+    if (!v) return false;
+    const val = v.replace(/&amp;/g, '&');
+    if (val === target) return true;
+    const d = safeDecode(val.split('#')[0].split('?')[0]);
+    return d === target;
+  };
+  // 阅读器链接的 file 参数
+  const fileRe = /[?&](?:amp;)?file=([^&#\s)"'<>\]]+)/g;
+  let m;
+  while ((m = fileRe.exec(s))) {
+    const d = safeDecode(m[1].replace(/\+/g, '%20'));
+    if (d === target || same(d)) return true;
+  }
+  // {{< pdf … >}} 短代码
+  const scRe = /\{\{[<%]\s*pdf\b([\s\S]*?)[>%]\}\}/g;
+  while ((m = scRe.exec(s))) {
+    const argRe = /(?:(\w+)\s*=\s*)?(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|`([^`]*)`|([^\s"'`=]+))/g;
+    let a;
+    while ((a = argRe.exec(m[1]))) {
+      const key = a[1] ? a[1].toLowerCase() : null;
+      if (key && key !== 'src' && key !== 'file') continue;
+      const v = a[2] != null ? a[2].replace(/\\(.)/g, '$1') : (a[3] ?? a[4] ?? a[5]);
+      if (same(v)) return true;
+    }
+  }
+  // Markdown 链接 / 图片地址（可能按段编码过，例如 %20 %28）
+  const linkRe = /\]\(\s*<?([^)\s>]+)|\b(?:href|src)\s*=\s*["']?([^"'\s>]+)/g;
+  while ((m = linkRe.exec(s))) if (same(m[1] ?? m[2])) return true;
+  return false;
+}

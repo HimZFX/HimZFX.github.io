@@ -1,0 +1,22 @@
+{{- /*
+  课程卡片（课程总页 /courses/ 用）：标题、一句话简介、子推文数 · 资料数。
+  传入 dict "page" 课程页 "info" courses/info.html 的结果 "level" 标题级别（2 或 3）。
+*/ -}}
+{{- $p := .page -}}
+{{- $info := .info -}}
+{{- $h := printf "h%d" (int (.level | default 2)) -}}
+{{- $meta := slice -}}
+{{- with len $info.posts -}}{{- $meta = $meta | append (i18n "courses_post_count" .) -}}{{- end -}}
+{{- with len $info.files -}}{{- $meta = $meta | append (i18n "courses_file_count" .) -}}{{- end -}}
+<li class="course-card">
+  {{ printf "<%s class=\"course-card-title\">" $h | safeHTML }}<a href="{{ $p.RelPermalink }}">{{ $p.LinkTitle }}</a>
+    {{- if $p.Draft }}<span class="course-draft">{{ i18n "courses_draft" }}</span>{{ end -}}
+  {{ printf "</%s>" $h | safeHTML }}
+  {{- with $p.Description }}
+  <p class="course-card-desc">{{ . | markdownify }}</p>
+  {{- end }}
+  {{- with $meta }}
+  <p class="course-card-meta">{{ delimit . " · " }}</p>
+  {{- end }}
+</li>
+{{- /**/ -}}

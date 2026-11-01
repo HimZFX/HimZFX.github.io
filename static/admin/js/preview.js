@@ -3,7 +3,9 @@
  *
  * 流程：Markdown → Vditor.md2html → 在一个「惰性」文档（document.implementation.createHTMLDocument，
  * 不加载图片、不执行脚本）里渲染公式（Vditor.mathRender / KaTeX）和代码高亮（Vditor.highlightRender），
- * 把 {{< gallery … >}} / {{< figure … >}} 短代码换成网站同款的结构，最后拼成完整 HTML 写进 iframe.srcdoc。
+ * 把 {{< gallery … >}} / {{< figure … >}} 短代码换成网站同款的结构，{{< pdf … >}}（嵌入的 PDF 阅读器）
+ * 换成一张占位卡片（预览里没有脚本，阅读器跑不起来），最后拼成完整 HTML 写进 iframe.srcdoc。
+ * 指向网站在线阅读器（/viewer/?file=…）的链接在预览里点了不会跳转。
  *
  * 安全（§2.3 例外 b、§2.4）：这是整个后台唯一把 HTML 字符串写进页面的地方，而且只写进
  * sandbox="allow-same-origin"（没有 allow-scripts）的预览 iframe —— 里面的任何脚本都不会运行。
@@ -212,6 +214,66 @@ function renderFigures(doc, root) {
   }
 }
 
+/** 短代码参数：位置参数和 key="value"（引号可能被换成了中文引号）。 */
+function shortcodeArgs(text) {
+  const named = {};
+  const positional = [];
+  const argRe = /(?:(\w+)\s*=\s*)?(?:"([^"]*)"|“([^”]*)”|'([^']*)'|`([^`]*)`|([^\s"'“”`=]+))/g;
+  let a;
+  while ((a = argRe.exec(text))) {
+    const v = a[2] ?? a[3] ?? a[4] ?? a[5] ?? a[6];
+    if (a[1]) named[a[1].toLowerCase()] = v;
+    else positional.push(v);
+  }
+  return { named, positional };
+}
+
+/**
+ * 把 {{< pdf "/documents/x.pdf" >}}（网站的 layouts/shortcodes/pdf.html，嵌入在线阅读器）段落换成一张
+ * 占位卡片：文件名 +「在线阅读器（发布后显示）」。预览 iframe 不能运行脚本，所以不嵌入真正的阅读器。
+ */
+function renderPdfEmbeds(doc, root) {
+  const re = /^\{\{[<%]\s*pdf\s+([\s\S]*?)\s*\/?[>%]\}\}$/;
+  for (const p of [...root.querySelectorAll('p')]) {
+    const m = re.exec((p.textContent || '').trim());
+    if (!m) continue;
+    const { named, positional } = shortcodeArgs(m[1]);
+    const src = String(named.src ?? named.file ?? positional[0] ?? '');
+    let name = src.slice(src.lastIndexOf('/') + 1); // 网站路径（未编码），文件名里可以有 # 和 ?
+    try { name = decodeURIComponent(name); } catch { /* 保持原样 */ }
+    const card = doc.createElement('div');
+    card.className = 'pdf-embed-placeholder';
+    card.setAttribute('data-src', src);
+    const icon = doc.createElement('div');
+    icon.className = 'pdf-embed-icon';
+    icon.textContent = 'PDF';
+    const text = doc.createElement('div');
+    text.className = 'pdf-embed-text';
+    const title = doc.createElement('div');
+    title.className = 'pdf-embed-name';
+    title.textContent = named.title || name || 'PDF';
+    const hint = doc.createElement('div');
+    hint.className = 'pdf-embed-hint';
+    hint.textContent = (named.title && name ? name + ' · ' : '') + '在线阅读器（发布后显示）';
+    text.append(title, hint);
+    card.append(icon, text);
+    p.replaceWith(card);
+  }
+}
+
+/** 指向网站在线阅读器的链接：预览里点了不跳转（只保留样子，提示发表后点开是在线预览）。 */
+function disarmViewerLinks(root, site) {
+  for (const a of root.querySelectorAll('a[href]')) {
+    let url;
+    try { url = new URL(a.getAttribute('href'), site); } catch { continue; }
+    if (url.origin !== new URL(site).origin || !/^\/viewer(?:\/|$)/.test(url.pathname)) continue;
+    a.removeAttribute('href');
+    a.removeAttribute('target');
+    a.classList.add('preview-viewer-link');
+    a.setAttribute('title', '在线预览链接：发表后在网站上点开');
+  }
+}
+
 /** 去掉预览里用不到 / 不该出现的东西（iframe 本身已禁止脚本，这里只是保持干净）。 */
 function scrub(root) {
   root.querySelectorAll('script, .vditor-copy').forEach((el) => el.remove());
@@ -267,6 +329,12 @@ body{min-height:100vh}
 .post-content figcaption{color:var(--secondary,#6c6c6c);font-size:.9em;text-align:center}
 .post-content figcaption p{margin:.3em 0}
 .preview-empty{color:#999;font-style:italic}
+.pdf-embed-placeholder{display:flex;align-items:center;gap:12px;margin:1em 0;padding:14px 16px;border:1px dashed var(--tertiary,#d6d6d6);border-radius:10px;background:var(--entry,#fff)}
+.pdf-embed-icon{flex:none;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#e5484d;color:#fff;font-size:12px;font-weight:700;letter-spacing:.5px}
+.pdf-embed-text{min-width:0}
+.pdf-embed-name{color:var(--primary,#1e1e1e);font-weight:600;overflow-wrap:anywhere;line-height:1.4}
+.pdf-embed-hint{color:var(--secondary,#6c6c6c);font-size:.85em;line-height:1.4}
+.preview-viewer-link{text-decoration:underline;cursor:default}
 `;
 
 // ---------------------------------------------------------------------------
@@ -316,6 +384,8 @@ export async function renderPreview(iframe, {
 
   renderGalleries(doc, root);
   renderFigures(doc, root);
+  renderPdfEmbeds(doc, root);
+  disarmViewerLinks(root, site);
 
   // 公式
   const mathEls = () => [...root.querySelectorAll('.language-math')];

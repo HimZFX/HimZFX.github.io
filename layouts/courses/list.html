@@ -1,0 +1,13 @@
+{{- /*
+  课程资料的列表页（覆盖 PaperMod 的 list.html，只作用于 content/courses/ 下）：
+    /courses/           课程总页：你的介绍 + 课程卡片（可选自定义分组）→ partials/courses/landing.html
+    /courses/<课程>/     一门课的单元页：介绍 + 子推文 + 资料列表   → partials/courses/unit.html
+  子推文本身用 layouts/courses/single.html。样式在 assets/css/extended/courses.css。
+*/ -}}
+{{- define "main" }}
+{{- if .Parent.IsHome }}
+{{- partial "courses/landing.html" . }}
+{{- else }}
+{{- partial "courses/unit.html" . }}
+{{- end }}
+{{- end }}{{- /* end main */ -}}

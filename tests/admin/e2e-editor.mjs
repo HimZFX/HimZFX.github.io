@@ -2,7 +2,8 @@
 // (views/editor.js + preview.js): new post with math + images → 发表, reopen → 更新,
 // English variant, autosave + restore, conflicts, lossless update of an existing post,
 // page fields with comment-preserving front matter, phone preview (KaTeX), Hugo build checks,
-// 高亮 (==mark==) tool + its no-change regression for == inside math / code.
+// 高亮 (==mark==) tool + its no-change regression for == inside math / code,
+// 资料 → PDF: 插入链接（在线预览 /viewer/?file=…）/ 嵌入阅读器（{{< pdf >}}）, round-trip, preview card.
 //
 // Run from the repo root:   node tests/admin/e2e-editor.mjs
 // Env:
@@ -19,6 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startMock, buildSite, openAdmin, REPO_ROOT } from './mock-github.mjs';
+import { viewerUrlFor } from '../../static/admin/js/content.js';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 
@@ -636,12 +638,13 @@ async function main() {
       const jpg = await canvasImage(page, { w: 1200, h: 630, type: 'image/jpeg', label: 'C' });
       await page.setInputFiles('[data-testid="editor-cover-input"]', { name: 'cover.jpg', mimeType: 'image/jpeg', buffer: jpg });
       await page.waitForSelector('.ed-cover-thumb img[src^="blob:"]');
-      // 资料 toolbar button → modal → upload a PDF → link inserted
+      // 资料 toolbar button → modal → upload a PDF → 插入链接（点开在线预览） → viewer link inserted
       await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
       await page.waitForSelector('[data-testid="editor-docs-search"]');
       await page.setInputFiles('[data-testid="editor-docs-upload"]', { name: '讲义 第1章.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% test\n') });
+      await page.click('[data-testid="editor-doc-insert-link"]');
       await page.waitForSelector('.modal', { state: 'detached' });
-      await until(async () => (await vditor.get(page)).includes('/documents/讲义-第1章.pdf'), { msg: 'document link inserted' });
+      await until(async () => (await vditor.get(page)).includes(viewerUrlFor('/documents/讲义-第1章.pdf')), { msg: 'document link inserted' });
       const commit = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
       const paths = commit.changes.map((c) => c.path);
       assert.ok(paths.includes(POST));
@@ -650,7 +653,7 @@ async function main() {
       assert.ok(cover, 'cover uploaded into the post image folder');
       const { fm, body } = splitMd(mock.readFile(POST));
       assert.match(fm, new RegExp(`^cover: \\{ image: "/images/posts/${SLUG}/\\d{8}-\\d{6}-cover\\.jpg" \\}$`, 'm'));
-      assert.match(body, /\[讲义 第1章\.pdf\]\(\/documents\/讲义-第1章\.pdf\)/);
+      assert.ok(body.includes('[讲义 第1章.pdf](/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89-%E7%AC%AC1%E7%AB%A0.pdf)'), body);
       assert.equal(mock.readFile('static/documents/讲义-第1章.pdf'), '%PDF-1.4\n% test\n');
       // the 资料 picker now lists the uploaded file
       await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
@@ -672,6 +675,42 @@ async function main() {
       const fm3 = splitMd(mock.readFile(POST)).fm;
       assert.match(fm3, /^math: true$/m);
       assert.ok(!/^background:/m.test(fm3), '跟随全站设置 removes the key');
+    });
+
+    await test('资料 button / cover / pasted files refuse .html / .svg / .js (same-origin scripts) with an explanation', async () => {
+      await gotoEdit(page, '#/edit?path=' + encodeURIComponent(POST));
+      await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+      const before = mock.commits.length;
+      // 资料 → 上传新资料… with a web page: refused, nothing inserted, nothing pending
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+      await page.waitForSelector('[data-testid="editor-docs-search"]');
+      await page.setInputFiles('[data-testid="editor-docs-upload"]', { name: '讲义.HTML', mimeType: 'text/html', buffer: Buffer.from('<script>1</script>') });
+      const t1 = page.locator('[data-testid="toast-error"]', { hasText: '讲义.HTML' });
+      await t1.waitFor();
+      assert.match(await t1.textContent(), /不能上传 \.html 文件.*登录令牌/);
+      await page.waitForSelector('.modal', { state: 'detached' }).catch(() => {});
+      if (await page.isVisible('[data-testid="modal-close"]')) await page.click('[data-testid="modal-close"]');
+      // cover image: an SVG is refused with the PNG suggestion
+      await page.setInputFiles('[data-testid="editor-cover-input"]', { name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
+      const t2 = page.locator('[data-testid="toast-error"]', { hasText: 'logo.svg' });
+      await t2.waitFor();
+      assert.match(await t2.textContent(), /SVG.*转换成 PNG/);
+      // dropped / pasted files go through the same check (Vditor upload handler)
+      await page.evaluate(() => {
+        const ed = document.querySelector('[data-testid="editor-body"]');
+        const dt = new DataTransfer();
+        dt.items.add(new File(['alert(1)'], 'tool.js', { type: 'text/javascript' }));
+        const target = ed.querySelector('.vditor-wysiwyg .vditor-reset');
+        target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      const t3 = page.locator('[data-testid="toast-error"]', { hasText: 'tool.js' });
+      await t3.waitFor({ timeout: 5000 }).catch(() => {}); // Vditor may filter by type before calling us; either way nothing is added
+      const md = await vditor.get(page);
+      assert.ok(!/讲义\.HTML|logo\.svg|tool\.js/i.test(md), 'nothing inserted: ' + md.slice(0, 200));
+      assert.equal(await page.$('.ed-cover-thumb img[src*="svg"]'), null);
+      // nothing to publish from these attempts
+      assert.equal(mock.commits.length, before);
+      for (const p of ['static/documents/讲义.html', 'static/documents/tool.js']) assert.equal(mock.readFile(p), undefined);
     });
 
     await test('new post autosaves locally; #/edit?draft=<key> restores it', async () => {
@@ -988,7 +1027,11 @@ async function main() {
     });
 
     await test('资料 picker: names with spaces, # and % become working links (and the site still builds)', async () => {
+      // non-PDF files get the file link itself; PDFs (插入链接) get the online viewer link
       mock.setFiles({
+        'static/documents/Lecture Notes (1).docx': 'docx a\n',
+        'static/documents/量子 力学#2.docx': 'docx b\n',
+        'static/documents/50%off.docx': 'docx c\n',
         'static/documents/Lecture Notes (1).pdf': '%PDF-1.4 a\n',
         'static/documents/量子 力学#2.pdf': '%PDF-1.4 b\n',
         'static/documents/50%off.pdf': '%PDF-1.4 c\n',
@@ -996,25 +1039,34 @@ async function main() {
       await reloadTo(page, '#/edit?new=post');
       await page.fill('[data-testid="editor-title"]', 'Docs Links');
       await vditor.insert(page, '资料：\n');
-      for (const q of ['Lecture', '力学', '50%']) {
+      for (const q of ['Lecture Notes (1).docx', '力学#2.docx', '50%off.docx', 'Lecture Notes (1).pdf', '力学#2.pdf', '50%off.pdf']) {
         await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
         await page.fill('[data-testid="editor-docs-search"]', q);
+        await until(async () => (await page.locator('[data-testid="editor-doc-item"]').count()) === 1, { msg: `one match for ${q}` });
         await page.click('[data-testid="editor-doc-item"]');
+        if (q.endsWith('.pdf')) await page.click('[data-testid="editor-doc-insert-link"]');
         await page.waitForSelector('.modal', { state: 'detached' });
         await page.keyboard.type(' ');
       }
-      await until(async () => (await page.locator('[data-testid="editor-body"] .vditor-reset a').count()) === 3, { msg: '3 links in the editor' });
+      await until(async () => (await page.locator('[data-testid="editor-body"] .vditor-reset a').count()) === 6, { msg: '6 links in the editor' });
       await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
       const body = splitMd(mock.readFile('content/posts/docs-links.md')).body;
-      assert.ok(body.includes('](/documents/Lecture%20Notes%20%281%29.pdf)'), body);
-      assert.ok(body.includes('](/documents/量子%20力学%232.pdf)'), body);
-      assert.ok(body.includes('](/documents/50%25off.pdf)'), body);
+      assert.ok(body.includes('](/documents/Lecture%20Notes%20%281%29.docx)'), body);
+      assert.ok(body.includes('](/documents/量子%20力学%232.docx)'), body);
+      assert.ok(body.includes('](/documents/50%25off.docx)'), body);
+      assert.ok(body.includes('[Lecture Notes (1).pdf](/viewer/?file=%2Fdocuments%2FLecture%20Notes%20%281%29.pdf)'), body);
+      assert.ok(body.includes('[量子 力学#2.pdf](/viewer/?file=%2Fdocuments%2F%E9%87%8F%E5%AD%90%20%E5%8A%9B%E5%AD%A6%232.pdf)'), body);
+      assert.ok(body.includes('[50%off.pdf](/viewer/?file=%2Fdocuments%2F50%25off.pdf)'), body);
       const repoDir = mock.exportTo(path.join(OUT, 'export-docs'));
       const out = path.join(OUT, 'build-docs');
       await buildSite({ repoDir, outDir: out });
       const html = fs.readFileSync(path.join(out, 'posts', 'docs-links', 'index.html'), 'utf8');
-      assert.match(html, /href="?\/documents\/Lecture%20Notes%20%281%29\.pdf/);
-      assert.match(html, /href="?\/documents\/50%25off\.pdf/);
+      assert.match(html, /href="?\/documents\/Lecture%20Notes%20%281%29\.docx/);
+      assert.match(html, /href="?\/documents\/50%25off\.docx/);
+      // the viewer links reach the site unchanged → the viewer gets back exactly the file's site path
+      assert.match(html, /href="?\/viewer\/\?file=%2Fdocuments%2FLecture%20Notes%20%281%29\.pdf/);
+      assert.match(html, /href="?\/viewer\/\?file=%2Fdocuments%2F50%25off\.pdf/);
+      assert.match(html, /href="?\/viewer\/\?file=%2Fdocuments%2F%E9%87%8F%E5%AD%90%20%E5%8A%9B%E5%AD%A6%232\.pdf/);
       // safety net: a hand-typed bad % link is refused before it can break the site build
       await waitEditor(page);
       await vditor.insert(page, '\n[坏链接](/documents/50%off.pdf)\n');
@@ -1446,6 +1498,140 @@ async function main() {
       }
       assert.match(html, /<code>p==q==r<\/code>/);
       assert.match(html, /<code>u==v==w<\/code>/);
+    });
+
+    const PDF_DOC = 'static/documents/讲义-第3章.pdf';
+    const PDF_SITE = '/documents/讲义-第3章.pdf';
+    const PDF_VIEWER = '/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89-%E7%AC%AC3%E7%AB%A0.pdf';
+    const PDF_POST = 'content/posts/pdf-reader.md';
+    const HAS_PDF_SHORTCODE = fs.existsSync(path.join(REPO_ROOT, 'layouts', 'shortcodes', 'pdf.html'));
+    const openDocsFor = async (q) => {
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+      await page.fill('[data-testid="editor-docs-search"]', q);
+      await until(async () => (await page.locator('[data-testid="editor-doc-item"]').count()) === 1, { msg: `one match for ${q}` });
+      await page.click('[data-testid="editor-doc-item"]');
+      await page.waitForSelector('[data-testid="editor-doc-choice"]');
+    };
+    await test('资料 → PDF: 插入链接 (viewer) / 嵌入阅读器 ({{< pdf >}}) — exact markdown, outside math, preview card, upload with the post, round-trip', async () => {
+      await ensureAdmin();
+      assert.equal(viewerUrlFor(PDF_SITE), PDF_VIEWER);
+      mock.setFiles({ [PDF_DOC]: '%PDF-1.4 chapter 3\n' });
+      await reloadTo(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'PDF Reader');
+      await vditor.insert(page, '第一段。\n');
+      // the dialog explains both choices; 取消 inserts nothing
+      await openDocsFor('第3章');
+      const choice = await page.textContent('[data-testid="editor-doc-choice"]');
+      assert.match(choice, /讲义-第3章\.pdf/);
+      assert.match(choice, /插入链接（点开在线预览）/);
+      assert.match(choice, /嵌入阅读器（正文里直接显示）/);
+      assert.match(choice, /安卓手机和微信里也能看/);
+      const beforeCancel = await vditor.get(page);
+      await page.click('[data-testid="editor-doc-insert-cancel"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      await sleep(300);
+      assert.equal(await vditor.get(page), beforeCancel, 'cancel inserts nothing');
+      // caret inside a $$ block → the reader is inserted after the block, never inside it
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="formula"]');
+      await page.keyboard.type('x^2');
+      await until(async () => /\$\$\nx\^2\n\$\$/.test(await vditor.get(page)), { msg: 'formula typed' });
+      await openDocsFor('第3章');
+      await page.click('[data-testid="editor-doc-insert-embed"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      await until(async () => (await vditor.get(page)).includes(`{{< pdf "${PDF_SITE}" >}}`), { msg: 'shortcode inserted' });
+      let md = await vditor.get(page);
+      assert.match(md, /\$\$\nx\^2\n\$\$\n\n\{\{< pdf "\/documents\/讲义-第3章\.pdf" >\}\}\n/, md);
+      // a link in a normal paragraph
+      await typeAtEnd(page, '讲义：');
+      await openDocsFor('第3章');
+      await page.click('[data-testid="editor-doc-insert-link"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      await until(async () => (await vditor.get(page)).includes(`](${PDF_VIEWER})`), { msg: 'viewer link inserted' });
+      // a new PDF uploaded from the dialog and embedded → uploaded together with the post
+      await typeAtEnd(page, '附录');
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+      await page.waitForSelector('[data-testid="editor-docs-search"]');
+      await page.setInputFiles('[data-testid="editor-docs-upload"]', { name: 'Week 4 习题.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 week 4\n') });
+      await page.waitForSelector('[data-testid="editor-doc-choice"]');
+      assert.match(await page.textContent('[data-testid="editor-doc-choice"]'), /Week-4-习题\.pdf/);
+      await page.click('[data-testid="editor-doc-insert-embed"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      await until(async () => (await vditor.get(page)).includes('{{< pdf "/documents/Week-4-习题.pdf" >}}'), { msg: 'uploaded PDF embedded' });
+      md = await vditor.get(page);
+      // in the editor the shortcode is plain text: nothing is embedded or loaded
+      assert.equal(await page.locator('[data-testid="editor-body"] iframe').count(), 0);
+
+      // phone preview: a placeholder card for each reader, the viewer link does not navigate
+      await page.click('[data-testid="editor-preview"]');
+      const fr = await (await page.waitForSelector('[data-testid="preview-iframe"][data-state="ready"]', { timeout: 30000 })).contentFrame();
+      const cards = await fr.$$eval('.pdf-embed-placeholder', (els) => els.map((e) => [e.querySelector('.pdf-embed-name').textContent, e.querySelector('.pdf-embed-hint').textContent]));
+      assert.deepEqual(cards, [['讲义-第3章.pdf', '在线阅读器（发布后显示）'], ['Week-4-习题.pdf', '在线阅读器（发布后显示）']]);
+      assert.equal(await fr.locator('iframe, object, embed').count(), 0, 'no live embed in the preview');
+      assert.equal(await fr.locator('.post-content p', { hasText: '{{<' }).count(), 0, 'no raw shortcode text left');
+      const link = fr.locator('a.preview-viewer-link');
+      assert.equal(await link.count(), 1);
+      assert.equal(await link.getAttribute('href'), null, 'viewer link disarmed');
+      assert.equal(await link.textContent(), '讲义-第3章.pdf');
+      await link.click();
+      await sleep(300);
+      assert.equal(fr.url(), 'about:srcdoc', 'clicking the viewer link in the preview does not navigate');
+      await page.screenshot({ path: path.join(SHOTS, 'preview-pdf-embed.png') });
+      await page.click('[data-testid="modal-close"]');
+
+      const commit = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(commit.changes.map((c) => c.path).sort(), [PDF_POST, 'static/documents/Week-4-习题.pdf'].sort(),
+        'the new PDF is uploaded with the post (referenced only through {{< pdf >}}); the existing one is not re-uploaded');
+      assert.equal(mock.readFile('static/documents/Week-4-习题.pdf'), '%PDF-1.4 week 4\n');
+      const body = splitMd(mock.readFile(PDF_POST)).body;
+      assert.equal(body, '\n' + [
+        '第一段。', '',
+        '$$', 'x^2', '$$', '',
+        `{{< pdf "${PDF_SITE}" >}}`, '',
+        `讲义：[讲义-第3章.pdf](${PDF_VIEWER})附录`, '',
+        '{{< pdf "/documents/Week-4-习题.pdf" >}}', '',
+      ].join('\n'), JSON.stringify(body));
+      assert.equal(md.trim(), body.trim(), 'what the editor shows is what is saved');
+
+      // reopen → 更新 without edits → no commit; the file is byte-identical
+      const saved = mock.readFile(PDF_POST);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(PDF_POST));
+      assert.equal((await vditor.get(page)).trim(), body.trim(), 'Vditor round-trips the shortcode and the viewer link verbatim');
+      const n = mock.commits.length;
+      await page.click('[data-testid="editor-publish"]');
+      await page.locator('.toast', { hasText: '不需要发表' }).waitFor();
+      assert.equal(mock.commits.length, n, 'no commit');
+      assert.equal(mock.readFile(PDF_POST), saved);
+
+      // hand-written forms (named params, &lang=en&page=3) survive an edit elsewhere byte-for-byte
+      const HAND = [
+        '手写的：', '',
+        `{{< pdf src="${PDF_SITE}" height="70vh" page="2" title="第 3 章" >}}`, '',
+        `[英文版](/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89-%E7%AC%AC3%E7%AB%A0.pdf&lang=en&page=3)`, '',
+        `{{% pdf "${PDF_SITE}" %}}`, '',
+        '最后一行', '',
+      ].join('\n');
+      mock.setFile(PDF_POST, fmOf('PDF Reader') + HAND);
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(PDF_POST));
+      await typeAtEnd(page, '。');
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.equal(mock.readFile(PDF_POST), fmOf('PDF Reader') + HAND.replace('最后一行', '最后一行。'));
+
+      if (HAS_PDF_SHORTCODE) {
+        mock.setFile(PDF_POST, saved);
+        const repoDir = mock.exportTo(path.join(OUT, 'export-pdf'));
+        const out = path.join(OUT, 'build-pdf');
+        await buildSite({ repoDir, outDir: out });
+        for (const [dir, lang] of [['posts', null], ['en/posts', 'en']]) {
+          const html = fs.readFileSync(path.join(out, ...dir.split('/'), 'pdf-reader', 'index.html'), 'utf8');
+          assert.match(html, /<iframe[^>]+\/viewer\/\?file=%2[Ff]documents%2[Ff]%E8%AE%B2%E4%B9%89-%E7%AC%AC3%E7%AB%A0\.pdf/, `${dir}: embedded viewer`);
+          assert.match(html, /embed=1/, `${dir}: embed=1`);
+          if (lang) assert.match(html, /lang=en/, `${dir}: English viewer`);
+          assert.ok(html.includes(`href=${PDF_VIEWER}`) || html.includes(`href="${PDF_VIEWER}"`), `${dir}: viewer link`);
+        }
+      } else {
+        console.log('      (layouts/shortcodes/pdf.html not present: skipped the {{< pdf >}} Hugo build check)');
+        mock.setFile(PDF_POST, null);
+      }
     });
 
     await test('no page errors, no CSP violations, nothing fetched from other origins', async () => {

@@ -1,0 +1,92 @@
+{{- /*
+  课程总页 /courses/：页首（标题、简介）→ content/courses/_index*.md 的正文 → 课程卡片。
+
+  课程按 weight、再按标题排序。分组是可选的：
+    - 没有一门课写 group → 一个简单列表，不显示分组标题；
+    - 有课程写了 group → 每个分组一个标题（原样显示 group 的文字），分组按组内最小的 weight 排序
+      （相同时按组名），组内按 weight、标题；没写 group 的课程放在最后的「其他」组。
+*/ -}}
+<header class="page-header">
+  <h1>{{ .Title }}</h1>
+  {{- if .Description }}
+  <div class="post-description">
+    {{ .Description | markdownify }}
+  </div>
+  {{- end }}
+</header>
+
+{{- if .Content }}
+<div class="post-content">
+  {{- if not (.Param "disableAnchoredHeadings") }}
+  {{- partial "anchored_headings.html" .Content -}}
+  {{- else }}{{ .Content }}{{ end }}
+</div>
+{{- end }}
+
+{{- $courses := slice -}}
+{{- range partial "courses/sort.html" (.Sections | append .RegularPages) -}}
+  {{- $courses = $courses | append (dict "page" . "info" (partialCached "courses/info.html" . .RelPermalink)) -}}
+{{- end -}}
+
+{{- if $courses -}}
+{{- $groups := slice -}}
+{{- $names := slice -}}
+{{- $ungrouped := slice -}}
+{{- range $i, $c := $courses -}}
+  {{- $g := $c.info.group -}}
+  {{- if not $g -}}
+    {{- $ungrouped = $ungrouped | append $c -}}
+  {{- else if not (in $names $g) -}}
+    {{- /* 课程已按 weight 排好，所以某个分组第一次出现时，就是它组内最小的 weight */ -}}
+    {{- $names = $names | append $g -}}
+    {{- $groups = $groups | append (dict "name" $g "w" (int (partial "courses/param.html" (dict "page" $c.page "key" "weight") | default 0))) -}}
+  {{- end -}}
+{{- end -}}
+
+<div class="course-index">
+{{- if not $groups }}
+  <ul class="course-list">
+    {{- range $courses }}
+    {{ partial "courses/card.html" (dict "page" .page "info" .info "level" 2) }}
+    {{- end }}
+  </ul>
+{{- else }}
+  {{- /* 同一个最小 weight 的分组按组名排序（"w" 相同，sort 保持组名顺序） */ -}}
+  {{- $ordered := slice -}}
+  {{- range $groups -}}
+    {{- $w := .w -}}{{- if eq $w 0 -}}{{- $w = 2147483647 -}}{{- end -}}
+    {{- $ordered = $ordered | append (dict "name" .name "w" $w) -}}
+  {{- end -}}
+  {{- /* 锚点 id：组名只差大小写（Labs / labs）或叫 other 时会撞车，撞了就加 -2、-3（「其他」组固定用 group-other） */ -}}
+  {{- $ids := slice "group-other" -}}
+  {{- range sort (sort $ordered "name") "w" }}
+  {{- $name := .name }}
+  {{- $id := printf "group-%s" (anchorize $name) }}
+  {{- if eq $id "group-" }}{{ $id = "group-g" }}{{ end }}
+  {{- $try := $id }}
+  {{- range seq 2 99 }}{{ if in $ids $try }}{{ $try = printf "%s-%d" $id . }}{{ end }}{{ end }}
+  {{- $ids = $ids | append $try }}
+  <section class="course-group">
+    <h2 class="course-group-title" id="{{ $try }}">{{ $name }}</h2>
+    <ul class="course-list">
+      {{- range $courses }}
+      {{- if eq .info.group $name }}
+      {{ partial "courses/card.html" (dict "page" .page "info" .info "level" 3) }}
+      {{- end }}
+      {{- end }}
+    </ul>
+  </section>
+  {{- end }}
+  {{- with $ungrouped }}
+  <section class="course-group course-group-other">
+    <h2 class="course-group-title" id="group-other">{{ i18n "courses_other" }}</h2>
+    <ul class="course-list">
+      {{- range . }}
+      {{ partial "courses/card.html" (dict "page" .page "info" .info "level" 3) }}
+      {{- end }}
+    </ul>
+  </section>
+  {{- end }}
+{{- end }}
+</div>
+{{- end -}}

@@ -5,6 +5,9 @@
  *   （永远不能是 static/admin/）。地址 #/files?dir=static/xxx。
  * - 列表：递归列出文件夹里的全部文件（按子文件夹分组），显示名称、大小、网址（/documents/x.pdf），
  *   操作：复制链接 · 打开 · 删除（确认；会提示哪些文章引用了它）。可按名称搜索。
+ *   PDF 的主要操作是「复制预览链接」：网站的在线阅读器 /viewer/?file=…（content.viewerUrlFor），
+ *   安卓手机和微信内置浏览器打不开 PDF 文件本身（只能下载），阅读器页面能直接看；
+ *   「打开」也打开阅读器；「复制文件链接」（文件本身的网址）作为次要操作保留。
  * - 上传：按钮 + 拖放（可多选）。提交前：
  *     压缩图片（勾选「压缩图片」时只处理 JPG / PNG）→ 大小检查（≥ 25 MB 提醒、≥ 95 MB 拒绝）
  *     → 同名文件（会被替换）、.gitignore 里的文件、HEIC 照片 → 合并成一个确认框 → 一次提交。
@@ -12,7 +15,8 @@
  *
  * 安全：界面全部用 h() / textContent 生成（§2 规则 3）；链接只由 ctx.siteUrl + 编码后的路径拼成。
  *
- * 额外导出 parseGitignore / createIgnoreMatcher / normalizeStaticDir 方便测试。
+ * 额外导出 parseGitignore / createIgnoreMatcher（实现在 uploads.js）/ normalizeStaticDir 方便测试。
+ * 不能上传的类型（.html / .svg / .js …，uploads.uploadBlockReason）在确认框里列为「不能上传」。
  *
  * @module views/files
  */
@@ -22,27 +26,27 @@ import {
   h, svgIcon, render, clear, toast, modal, confirmDialog, withBusy, formatBytes, emptyState,
   errorMessage, debounce, copyText,
 } from '../ui.js';
-import { safeFileName, extOf, compressImage } from '../images.js';
+import { safeFileName, extOf } from '../images.js';
 import { sitePathFor } from '../content.js';
+import {
+  MAX_BYTES, COMPRESSIBLE, isJunkFile, stemOf, baseNameOf, staticFileUrl as fullUrl, staticPreviewUrl as previewUrl, usesViewer,
+  prepareUpload, assignUniqueNames, checkUploads, needsReview, gitignoreMatcher, uploadReviewSections, refusedContent,
+  uploadBlockReason, deleteStaticFile,
+} from '../uploads.js';
+
+// 以前定义在这里，现在放在共用的 uploads.js（课程页和编辑器也用）；继续从这里导出，测试和旧代码不用改
+export { parseGitignore, createIgnoreMatcher } from '../uploads.js';
 
 // ---------------------------------------------------------------------------
 // 常量
 
 const MB = 1024 * 1024;
-const WARN_BYTES = LIMITS.warnFileMB * MB;
-const MAX_BYTES = LIMITS.maxFileMB * MB;
 
 /** 预设文件夹（顺序即标签顺序）。 */
 const PRESETS = [
   { key: 'documents', dir: PATHS.documents, label: '资料', icon: 'files' },
   { key: 'images', dir: PATHS.images, label: '图片', icon: 'image' },
 ];
-
-/** 系统自动生成、不该上传的文件。 */
-const JUNK_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
-
-/** 「压缩图片」只处理这些格式（GIF / SVG / WebP 原样上传）。 */
-const COMPRESSIBLE = new Set(['jpg', 'jpeg', 'png']);
 
 const IMAGE_MIME = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
@@ -61,114 +65,6 @@ const TYPE_KIND = {
 };
 
 const COMPRESS_PREF_KEY = 'admin.files.compress';
-
-// ---------------------------------------------------------------------------
-// .gitignore 匹配（只实现常用写法：精确路径、* / ** / ? / [abc] 通配、结尾 / 表示文件夹、# 注释、! 取反）
-
-/**
- * 把一条 gitignore 通配写法转成正则（不含开头的 / 和结尾的 /）。
- * @param {string} glob
- * @returns {string} 正则源码（不含 ^$）
- */
-function globToRegexSource(glob) {
-  let out = '';
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i];
-    if (c === '*') {
-      if (glob[i + 1] === '*') {
-        const atStart = i === 0 || glob[i - 1] === '/';
-        const atEnd = i + 2 === glob.length;
-        const slashAfter = glob[i + 2] === '/';
-        if (atStart && slashAfter) { out += '(?:.*/)?'; i += 3; continue; }   // **/ 或 a/**/b
-        if (atStart && atEnd) { out += '.*'; i += 2; continue; }              // a/** 或单独的 **
-        // 其他位置连续的 * 按普通 * 处理（与 git 一致）
-        while (glob[i] === '*') i++;
-        out += '[^/]*';
-        continue;
-      }
-      out += '[^/]*';
-      i++;
-    } else if (c === '?') {
-      out += '[^/]';
-      i++;
-    } else if (c === '[') {
-      const close = glob.indexOf(']', i + 2);
-      if (close < 0) { out += '\\['; i++; continue; }
-      let body = glob.slice(i + 1, close);
-      let neg = false;
-      if (body[0] === '!' || body[0] === '^') { neg = true; body = body.slice(1); }
-      body = body.replace(/[\\\]^]/g, (m) => '\\' + m);
-      out += `[${neg ? '^' : ''}${body}]`;
-      i = close + 1;
-    } else if (c === '\\' && i + 1 < glob.length) {
-      out += glob[i + 1].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-      i += 2;
-    } else {
-      out += c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-      i++;
-    }
-  }
-  return out;
-}
-
-/**
- * 解析 .gitignore 文本。
- * @param {string} text
- * @returns {Array<{ pattern: string, negate: boolean, dirOnly: boolean, re: RegExp }>}
- */
-export function parseGitignore(text) {
-  const rules = [];
-  const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/);
-  for (const raw of lines) {
-    let line = raw;
-    if (!line || line.startsWith('#')) continue;
-    // 结尾空格忽略（除非用 \ 转义）
-    while (/\s$/.test(line) && !/\\\s$/.test(line)) line = line.slice(0, -1);
-    if (!line) continue;
-    let negate = false;
-    if (line.startsWith('!')) { negate = true; line = line.slice(1); }
-    else if (line.startsWith('\\!') || line.startsWith('\\#')) line = line.slice(1);
-    let dirOnly = false;
-    if (line.endsWith('/') && !line.endsWith('\\/')) { dirOnly = true; line = line.replace(/\/+$/, ''); }
-    if (!line) continue;
-    // 中间或开头有 / → 相对仓库根目录；否则匹配任何一层的名字
-    const anchored = line.includes('/');
-    const glob = line.replace(/^\/+/, '');
-    if (!glob) continue;
-    const src = globToRegexSource(glob);
-    const re = new RegExp(anchored ? `^${src}$` : `^(?:.*/)?${src}$`);
-    rules.push({ pattern: raw.trim(), negate, dirOnly, re });
-  }
-  return rules;
-}
-
-/**
- * 生成匹配函数：path（仓库相对路径，文件）是否被 .gitignore 忽略。
- * 与 git 一样：上级文件夹被忽略时，里面的文件不能再用 ! 加回来。
- * @param {string} text .gitignore 内容
- * @returns {(path: string) => boolean}
- */
-export function createIgnoreMatcher(text) {
-  const rules = parseGitignore(text);
-  const test = (p, isDir) => {
-    let ignored = false;
-    for (const r of rules) {
-      if (r.dirOnly && !isDir) continue;
-      if (r.re.test(p)) ignored = !r.negate;
-    }
-    return ignored;
-  };
-  return (path) => {
-    const p = String(path || '').replace(/^\/+/, '');
-    if (!rules.length || !p) return false;
-    const parts = p.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      if (test(parts.slice(0, i).join('/'), true)) return true;
-    }
-    return test(p, false);
-  };
-}
 
 // ---------------------------------------------------------------------------
 // 路径工具
@@ -197,23 +93,6 @@ export function normalizeStaticDir(input) {
   return { dir: parts.join('/') };
 }
 
-/** 'static/documents/论文.pdf' → 'https://site/documents/%E8%AE%BA%E6%96%87.pdf' */
-function fullUrl(siteUrl, staticPath) {
-  const rel = sitePathFor(staticPath).replace(/^\/+/, '');
-  const base = String(siteUrl || '/').replace(/\/?$/, '/');
-  return base + rel.split('/').map((seg) => encodeURIComponent(seg)).join('/');
-}
-
-function baseNameOf(p) {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(i + 1) : p;
-}
-
-function stemOf(name) {
-  const ext = extOf(name);
-  return ext ? name.slice(0, name.length - ext.length - 1) : name;
-}
-
 function typeKind(ext) {
   if (IMAGE_MIME[ext] || ext === 'heic' || ext === 'heif') return 'image';
   return TYPE_KIND[ext] || 'other';
@@ -228,20 +107,6 @@ function readPref(key, fallback) {
 
 function writePref(key, on) {
   try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* 隐私模式等：忽略 */ }
-}
-
-/** 并发受限的 map。 */
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i], i);
-    }
-  });
-  await Promise.all(workers);
-  return out;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -309,7 +174,10 @@ export default async function mount(container, params, ctx) {
   const header = h('div', { class: 'page-header' },
     h('div', { class: 'files-heading' },
       h('h1', {}, '资料'),
-      h('p', { class: 'page-desc' }, '上传 PDF、课件、图片等文件，得到一个可以分享或写进文章的网址。')));
+      h('p', { class: 'page-desc' }, '上传 PDF、课件、图片等文件，得到一个可以分享或写进文章的网址。'),
+      h('p', { class: 'page-desc files-viewer-note', dataset: { testid: 'files-viewer-note' } },
+        svgIcon('info', { size: 14 }),
+        h('span', {}, 'PDF 会在网页里直接打开（安卓手机和微信里也能看），页面上带「下载」按钮；用「复制预览链接」分享。'))));
 
   // ---- 文件夹选择 ----
   const folderTabs = h('div', { class: 'tabs tabs-pill files-folders', role: 'tablist', 'aria-label': '选择文件夹' },
@@ -351,7 +219,7 @@ export default async function mount(container, params, ctx) {
         h('span', { class: 'hide-mobile' }, '把文件拖到这里上传'),
         h('span', { class: 'show-mobile' }, '上传文件到这个文件夹')),
       h('div', { class: 'files-drop-hint' },
-        `可以一次选多个文件。单个文件建议小于 ${LIMITS.warnFileMB} MB，最大 ${LIMITS.maxFileMB} MB。`)),
+        `可以一次选多个文件。单个文件建议小于 ${LIMITS.warnFileMB} MB，最大 ${LIMITS.maxFileMB} MB。出于安全考虑不能上传网页、脚本和 SVG 文件。`)),
     h('button', {
       type: 'button', class: 'btn btn-primary files-choose', dataset: { testid: 'files-choose' }, on: { click: pickFiles },
     }, svgIcon('upload'), '选择文件'),
@@ -601,6 +469,8 @@ export default async function mount(container, params, ctx) {
     const kind = typeKind(ext);
     const sitePath = sitePathFor(e.path);
     const url = fullUrl(ctx.siteUrl, e.path);
+    const viewer = usesViewer(e.path);
+    const openUrl = viewer ? previewUrl(ctx.siteUrl, e.path) : url;
 
     const thumb = h('div', { class: ['files-thumb', `files-type-${kind}`], 'aria-hidden': 'true' },
       kind === 'image' ? svgIcon('image') : h('span', { class: 'files-ext' }, (ext || '文件').slice(0, 4).toUpperCase()));
@@ -613,15 +483,29 @@ export default async function mount(container, params, ctx) {
       else queueThumb(thumb);
     }
 
+    // PDF：「复制预览链接」（在线阅读器）是主要操作，文件本身的链接是次要的
+    const previewBtn = viewer ? h('button', {
+      type: 'button', class: 'btn btn-ghost btn-primary btn-sm',
+      title: '复制在线预览的网址：点开直接在网页里看（安卓手机和微信里也能看），页面上可以下载',
+      'aria-label': `复制「${name}」的预览链接`,
+      dataset: { testid: 'files-copy-preview' },
+    }, svgIcon('eye'), h('span', { class: 'files-action-label' }, '复制预览链接')) : null;
+    if (previewBtn) previewBtn.addEventListener('click', () => copyLink(e.path, { preview: true }));
+
     const copyBtn = h('button', {
-      type: 'button', class: 'btn btn-ghost btn-sm', title: '复制完整网址', 'aria-label': `复制「${name}」的链接`,
+      type: 'button', class: ['btn btn-ghost btn-sm', viewer && 'files-copy-secondary'],
+      title: viewer ? '复制文件本身的网址（安卓手机和微信里点开通常只能下载）' : '复制完整网址',
+      'aria-label': viewer ? `复制「${name}」的文件链接` : `复制「${name}」的链接`,
       dataset: { testid: 'files-copy' },
-    }, svgIcon('link'), h('span', { class: 'files-action-label' }, '复制链接'));
+    }, svgIcon('link'), h('span', { class: 'files-action-label' }, viewer ? '复制文件链接' : '复制链接'));
     copyBtn.addEventListener('click', () => copyLink(e.path));
 
     const openLink = h('a', {
-      class: 'btn btn-ghost btn-sm', href: url, target: '_blank', rel: 'noopener noreferrer',
-      title: '在网站上打开（刚上传的文件需要等部署完成，约 1–2 分钟）', 'aria-label': `在网站上打开「${name}」`,
+      class: 'btn btn-ghost btn-sm', href: openUrl, target: '_blank', rel: 'noopener noreferrer',
+      title: viewer
+        ? '在网站的在线阅读器里打开（刚上传的文件需要等部署完成，约 1–2 分钟）'
+        : '在网站上打开（刚上传的文件需要等部署完成，约 1–2 分钟）',
+      'aria-label': viewer ? `在线预览「${name}」` : `在网站上打开「${name}」`,
       dataset: { testid: 'files-open' },
     }, svgIcon('external'), h('span', { class: 'files-action-label' }, '打开'));
 
@@ -646,14 +530,15 @@ export default async function mount(container, params, ctx) {
           h('span', { class: 'files-size' }, formatBytes(e.size)),
           h('code', { class: 'files-link', title: url, dataset: { testid: 'files-link' } }, sitePath))),
       h('div', { class: 'list-item-actions' },
-        h('div', { class: 'files-actions hide-mobile' }, copyBtn, openLink, delBtn),
+        h('div', { class: 'files-actions hide-mobile' }, previewBtn, copyBtn, openLink, delBtn),
         moreBtn));
   }
 
   /** 手机上的操作面板（底部抽屉样式的 modal）。 */
   function actionSheet(e, anchor) {
     const name = baseNameOf(e.path);
-    const url = fullUrl(ctx.siteUrl, e.path);
+    const viewer = usesViewer(e.path);
+    const url = viewer ? previewUrl(ctx.siteUrl, e.path) : fullUrl(ctx.siteUrl, e.path);
     let m = null;
     const item = (icon, text, testid, onClick, extra = {}) => h(extra.href ? 'a' : 'button', {
       type: extra.href ? undefined : 'button',
@@ -669,9 +554,11 @@ export default async function mount(container, params, ctx) {
         h('div', { class: 'files-sheet-meta muted small' },
           h('span', {}, formatBytes(e.size)),
           h('code', { class: 'files-code' }, sitePathFor(e.path))),
+        viewer ? h('p', { class: 'files-sheet-note muted small' }, '预览链接在网页里直接打开 PDF，安卓手机和微信里也能看。') : null,
         h('div', { class: 'files-sheet-list' },
-          item('link', '复制链接', 'files-sheet-copy', () => { m.close(); copyLink(e.path); }),
-          item('external', '在网站上打开', 'files-sheet-open', () => { m.close(); }, { href: url }),
+          viewer ? item('eye', '复制预览链接', 'files-sheet-copy-preview', () => { m.close(); copyLink(e.path, { preview: true }); }) : null,
+          item('link', viewer ? '复制文件链接' : '复制链接', 'files-sheet-copy', () => { m.close(); copyLink(e.path); }),
+          item('external', viewer ? '在线预览' : '在网站上打开', 'files-sheet-open', () => { m.close(); }, { href: url }),
           item('trash', '删除', 'files-sheet-delete', () => {
             m.close();
             withBusy(anchor, () => deleteFile(e)).catch(() => {});
@@ -714,65 +601,19 @@ export default async function mount(container, params, ctx) {
 
   // ---- 复制 / 删除 ----
 
-  async function copyLink(path) {
-    const url = fullUrl(ctx.siteUrl, path);
+  async function copyLink(path, { preview = false } = {}) {
+    const url = preview ? previewUrl(ctx.siteUrl, path) : fullUrl(ctx.siteUrl, path);
     try {
       await copyText(url);
-      toast(`已复制链接：${url}`, { type: 'success' });
+      toast(preview ? `已复制预览链接：${url}` : `已复制链接：${url}`, { type: 'success' });
     } catch (err) {
       toast(`${errorMessage(err)}：${url}`, { type: 'error', timeout: 9000 });
     }
   }
 
-  /** 找出正文里引用了这个文件的文章 / 页面（最多等 5 秒，失败就当没有）。 */
-  async function findReferences(sitePath) {
-    const mds = repo.list(PATHS.content + '/').filter((e) => e.path.endsWith('.md'));
-    if (!mds.length || mds.length > 400) return [];
-    const needles = [sitePath, encodeURI(sitePath)];
-    const work = mapLimit(mds, 6, async (e) => {
-      try {
-        const text = await repo.readText(e.path);
-        return needles.some((n) => text.includes(n)) ? e.path : null;
-      } catch { return null; }
-    }).then((r) => r.filter(Boolean));
-    return Promise.race([work, sleep(5000).then(() => [])]);
-  }
-
   async function deleteFile(e) {
-    if (ctx.isPublishing && ctx.isPublishing()) { toast('正在发布，请稍候', { type: 'warning' }); return; }
-    const name = baseNameOf(e.path);
-    const sitePath = sitePathFor(e.path);
-    const refs = await findReferences(sitePath);
-    if (disposed) return;
-    const message = h('div', { class: 'stack-sm files-confirm' },
-      h('p', {}, '删除后，网站上的这个链接会失效：'),
-      h('p', {}, h('code', { class: 'files-code' }, sitePath)),
-      refs.length
-        ? h('div', { class: 'banner banner-warning', dataset: { testid: 'files-delete-refs' } },
-          svgIcon('warning'),
-          h('div', { class: 'banner-text' },
-            h('div', {}, `有 ${refs.length} 篇文章或页面引用了它，删除后那里的链接或图片会打不开：`),
-            h('ul', { class: 'files-name-list' }, refs.slice(0, 8).map((p) => h('li', {}, h('code', {}, p)))),
-            refs.length > 8 ? h('div', { class: 'muted' }, `…等 ${refs.length} 个`) : null))
-        : null,
-      h('p', { class: 'muted small' }, '提示：GitHub 会保留历史版本，误删了也能找回。'));
-    const ok = await confirmDialog({ title: `删除「${name}」？`, message, okText: '删除', danger: true });
-    if (!ok || disposed) return;
-    let res;
-    try {
-      res = await ctx.publish({
-        message: `admin: 删除资料 ${name}`,
-        changes: [{ path: e.path, delete: true, baseSha: e.sha }],
-        summary: `删除 ${e.path}`,
-      });
-    } catch {
-      return; // 外壳已经提示了错误
-    }
-    if (res && res.conflict) {
-      if (res.reloaded) toast('文件列表已更新为最新版本，请确认后再删除', { type: 'info' });
-      return;
-    }
-    // 成功提示由外壳统一显示（已发布，正在部署…）；列表通过 repo.onChange 自动刷新
+    // 确认框（列出引用了它的文章 / 页面）+ 一次提交；共用 uploads.deleteStaticFile（课程页也用）
+    await deleteStaticFile(ctx, e, { isDisposed: () => disposed });
   }
 
   // -------------------------------------------------------------------------
@@ -792,8 +633,7 @@ export default async function mount(container, params, ctx) {
    */
   async function startUpload(rawFiles) {
     if (isBusy()) { toast('上一批文件还没有处理完，请稍候', { type: 'warning' }); return; }
-    const junk = rawFiles.filter((f) => JUNK_NAMES.has(String(f.name).toLowerCase()));
-    const files = rawFiles.filter((f) => !junk.includes(f));
+    const files = rawFiles.filter((f) => !isJunkFile(f.name));
     if (!files.length) return;
     batch = {
       dir,
@@ -815,34 +655,14 @@ export default async function mount(container, params, ctx) {
     };
     renderBatch();
 
-    // 1) 压缩图片（只处理 JPG / PNG）
+    // 1) 压缩图片（只处理 JPG / PNG）；不允许上传的类型（.html / .svg …）不处理，下面统一拒绝
     for (const it of batch.items) {
       if (disposed) return;
-      const ext = extOf(it.name);
-      if (compress && COMPRESSIBLE.has(ext) && it.file.size < MAX_BYTES) {
+      if (compress && !uploadBlockReason(it.origName, it.name) && COMPRESSIBLE.has(extOf(it.name)) && it.file.size < MAX_BYTES) {
         it.status = 'compressing';
         renderBatch();
-        try {
-          const r = await compressImage(it.file, { maxWidth: LIMITS.imageMaxWidth, quality: LIMITS.imageQuality });
-          if (r && r.changed && r.blob && r.blob.size > 0) {
-            it.blob = r.blob;
-            it.size = r.blob.size;
-            it.compressed = true;
-            const newExt = r.ext === 'jpeg' ? 'jpg' : r.ext;
-            const sameFamily = (ext === 'jpeg' || ext === 'jpg') && newExt === 'jpg';
-            if (newExt && newExt !== ext && !sameFamily) {
-              it.name = `${stemOf(it.name)}.${newExt}`;
-              it.note = `已压缩并转成 ${newExt.toUpperCase()}：${formatBytes(it.origSize)} → ${formatBytes(it.size)}`;
-            } else {
-              it.note = `已压缩：${formatBytes(it.origSize)} → ${formatBytes(it.size)}`;
-            }
-          } else {
-            it.note = '已经足够小，不用压缩';
-          }
-        } catch (err) {
-          console.warn('[files] compress failed', err);
-          it.note = '压缩失败，按原文件上传';
-        }
+        const r = await prepareUpload(it.file, it.name, { compress });
+        Object.assign(it, { blob: r.blob, name: r.name, size: r.size, compressed: r.compressed, note: r.note });
       }
       it.status = 'ready';
       renderBatch();
@@ -859,69 +679,39 @@ export default async function mount(container, params, ctx) {
     const bdir = batch.dir;
 
     // 2) 最终文件名：同一批里重名的自动加 -2、-3
-    const taken = new Set();
-    for (const it of batch.items) {
-      if (it.status === 'skipped' || it.status === 'done' || it.status === 'same') continue;
-      let name = it.name;
-      const stem = stemOf(name);
-      const ext = extOf(name);
-      for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${stem}-${n}${ext ? '.' + ext : ''}`;
-      if (name !== it.name) {
-        it.name = name;
-        it.note = [it.note, '和同一批里的文件重名，已自动改名'].filter(Boolean).join('；');
-      }
-      taken.add(name.toLowerCase());
-      it.path = `${bdir}/${name}`;
-      const ent = repo.entry(it.path);
-      it.existing = ent ? { sha: ent.sha, size: ent.size } : null;
+    const pending = batch.items.filter((it) => !(it.status === 'skipped' || it.status === 'done' || it.status === 'same'));
+    for (const it of assignUniqueNames(pending)) {
+      it.note = [it.note, '和同一批里的文件重名，已自动改名'].filter(Boolean).join('；');
+    }
+    for (const it of pending) {
+      it.path = `${bdir}/${it.name}`;
       it.status = 'ready';
     }
 
-    // 3) 大小检查 / 同名文件夹
-    const active = () => batch.items.filter((it) => it.status === 'ready');
-    const refused = [];
-    for (const it of active()) {
-      if (it.size >= MAX_BYTES) {
-        it.status = 'skipped';
-        it.note = `超过 ${LIMITS.maxFileMB} MB，GitHub 不允许上传这么大的文件`;
-        refused.push(it);
-      } else if (repo.list(it.path + '/').length) {
-        it.status = 'skipped';
-        it.note = '已经有一个同名的文件夹，请改个文件名再上传';
-        refused.push(it);
-      }
-    }
+    // 3) 不能上传的类型、大小检查、同名文件夹、.gitignore、替换、HEIC
+    const ignore = await gitignoreMatcher(repo);
+    if (disposed || !batch) return;
+    const review = checkUploads(repo, pending, ignore);
+    const { refused, ready } = review;
+    for (const it of refused) it.status = 'skipped';
     renderBatch();
 
-    const ready = active();
     if (!ready.length) {
       batch.phase = 'cancelled';
       batch.banner = { kind: 'error', text: '没有可以上传的文件。' };
       renderBatch();
-      await alertDialog('无法上传', refusedList(refused));
+      await alertDialog('无法上传', refusedContent(refused));
       return;
     }
 
-    let ignored = [];
-    try {
-      if (repo.has(PATHS.gitignore)) {
-        const matcher = createIgnoreMatcher(await repo.readText(PATHS.gitignore));
-        ignored = ready.filter((it) => matcher(it.path));
-      }
-    } catch (err) {
-      console.warn('[files] could not read .gitignore', err);
-    }
-    if (disposed) return;
-    const large = ready.filter((it) => it.size >= WARN_BYTES);
-    const overwrite = ready.filter((it) => it.existing);
-    const heic = ready.filter((it) => ['heic', 'heif'].includes(extOf(it.name)));
-
-    if (refused.length || large.length || overwrite.length || ignored.length || heic.length) {
+    if (needsReview(review)) {
       const ok = await confirmDialog({
-        title: ignored.length ? '确定要上传吗？' : '上传前请确认',
-        message: reviewContent({ refused, large, overwrite, ignored, heic, ready }),
-        okText: ignored.length || large.length ? '仍然上传' : overwrite.length ? '替换并上传' : '继续上传',
-        danger: ignored.length > 0,
+        title: review.ignored.length ? '确定要上传吗？' : '上传前请确认',
+        message: h('div', { class: 'stack-sm files-confirm', dataset: { testid: 'files-review' } },
+          uploadReviewSections(review),
+          h('p', { class: 'muted small' }, `将上传 ${ready.length} 个文件到 ${batch.dir}/。`)),
+        okText: review.ignored.length || review.large.length ? '仍然上传' : review.overwrite.length ? '替换并上传' : '继续上传',
+        danger: review.ignored.length > 0,
       });
       if (disposed) return;
       if (!ok) {
@@ -1010,49 +800,6 @@ export default async function mount(container, params, ctx) {
     });
   }
 
-  function nameList(items, render = (it) => it.name) {
-    const max = 6;
-    return h('ul', { class: 'files-name-list' },
-      items.slice(0, max).map((it) => h('li', {}, render(it))),
-      items.length > max ? h('li', { class: 'muted' }, `…等 ${items.length} 个`) : null);
-  }
-
-  function refusedList(refused) {
-    return h('div', { class: 'stack-sm' },
-      h('p', {}, '这些文件不能上传：'),
-      nameList(refused, (it) => [h('strong', {}, it.name), h('span', { class: 'muted' }, ` — ${it.note}`)]));
-  }
-
-  function reviewSection(kind, testid, title, items, renderItem) {
-    return h('div', { class: ['banner', `banner-${kind}`, 'files-review'], dataset: { testid } },
-      svgIcon('warning'),
-      h('div', { class: 'banner-text' },
-        h('div', { class: 'files-review-title' }, title),
-        nameList(items, renderItem)));
-  }
-
-  function reviewContent({ refused, large, overwrite, ignored, heic, ready }) {
-    return h('div', { class: 'stack-sm files-confirm', dataset: { testid: 'files-review' } },
-      ignored.length ? reviewSection('error', 'files-warn-gitignore',
-        ignored.length === 1
-          ? '这个文件在 .gitignore 里（你原本不打算公开它），确定要上传吗？上传后任何人都能在网站和 GitHub 上看到它。'
-          : `这 ${ignored.length} 个文件在 .gitignore 里（你原本不打算公开它们），确定要上传吗？上传后任何人都能在网站和 GitHub 上看到它们。`,
-        ignored, (it) => h('code', {}, it.path)) : null,
-      overwrite.length ? reviewSection('warning', 'files-warn-overwrite',
-        '这些文件已经存在，上传会替换掉网站上的旧文件（链接不变）：',
-        overwrite, (it) => [h('strong', {}, it.name), h('span', { class: 'muted' }, `（旧 ${formatBytes(it.existing.size)} → 新 ${formatBytes(it.size)}）`)]) : null,
-      large.length ? reviewSection('warning', 'files-warn-large',
-        `这些文件超过 ${LIMITS.warnFileMB} MB，上传会比较慢，也会让网站仓库变大。可以的话先压缩一下：`,
-        large, (it) => [h('strong', {}, it.name), h('span', { class: 'muted' }, `（${formatBytes(it.size)}）`)]) : null,
-      heic.length ? reviewSection('warning', 'files-warn-heic',
-        'HEIC 格式的照片在大多数浏览器里无法显示，建议先在手机或电脑上导出为 JPG 再上传：',
-        heic) : null,
-      refused.length ? reviewSection('error', 'files-warn-refused',
-        '这些文件不能上传，会被跳过：',
-        refused, (it) => [h('strong', {}, it.name), h('span', { class: 'muted' }, ` — ${it.note}`)]) : null,
-      h('p', { class: 'muted small' }, `将上传 ${ready.length} 个文件到 ${batch.dir}/。`));
-  }
-
   function renderBatch() {
     if (disposed) return;
     if (!batch) { batchCard.hidden = true; clear(batchCard); return; }
@@ -1093,10 +840,13 @@ export default async function mount(container, params, ctx) {
         st === 'compressing' || st === 'uploading' ? h('span', { class: 'spinner spinner-sm', 'aria-hidden': 'true' }) : null,
         done ? svgIcon('check', { size: 14 }) : null,
         STATUS_TEXT[st] || st);
+      const viewer = done && it.path && usesViewer(it.path);
       const copy = done && it.path ? h('button', {
-        type: 'button', class: 'btn btn-ghost btn-sm', dataset: { testid: 'files-batch-copy' },
-        'aria-label': `复制「${it.name}」的链接`, on: { click: () => copyLink(it.path) },
-      }, svgIcon('link'), h('span', { class: 'files-action-label' }, '复制链接')) : null;
+        type: 'button', class: ['btn btn-ghost btn-sm', viewer && 'btn-primary'], dataset: { testid: 'files-batch-copy' },
+        'aria-label': viewer ? `复制「${it.name}」的预览链接` : `复制「${it.name}」的链接`,
+        title: viewer ? '复制在线预览的网址（安卓手机和微信里也能看）' : undefined,
+        on: { click: () => copyLink(it.path, { preview: !!viewer }) },
+      }, svgIcon(viewer ? 'eye' : 'link'), h('span', { class: 'files-action-label' }, viewer ? '复制预览链接' : '复制链接')) : null;
       return h('li', { class: 'files-batch-item', dataset: { testid: 'files-batch-item', status: st, name: it.name } },
         h('div', { class: ['files-thumb', 'files-thumb-sm', `files-type-${kind}`], 'aria-hidden': 'true' },
           kind === 'image' ? svgIcon('image') : h('span', { class: 'files-ext' }, (extOf(it.name) || '文件').slice(0, 4).toUpperCase())),

@@ -1,0 +1,134 @@
+/* ==========================================================================
+   courses.css — 「课程」视图（views/courses.js）
+   只写这个视图特有的样式；通用组件来自 admin.css，文件行 / 缩略图（.files-*）来自 files.css，
+   保存条（.lists-savebar）和顺序按钮（.lists-order）来自 posts.css。类名以 .courses- 开头。
+   ========================================================================== */
+
+.courses-view { gap: 20px; }
+.courses-view > .page-header, .courses-host > .page-header { margin-bottom: 0; }
+.courses-host { gap: 16px; }
+.courses-view.is-drag-over .courses-materials,
+.courses-view.is-drag-over .courses-items { box-shadow: 0 0 0 2px var(--primary); }
+
+.courses-landing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 0 4px;
+}
+.courses-landing a { margin-left: 4px; }
+.courses-hint { margin: 0; padding: 0 4px; }
+
+/* ---------- 分组 + 课程列表 ---------- */
+.courses-group { padding-top: 10px; padding-bottom: 6px; }
+.courses-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.courses-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.courses-group-title .icon { color: var(--muted); }
+.courses-group-actions { display: inline-flex; align-items: center; gap: 2px; }
+
+.courses-row, .courses-item-row { padding-top: 14px; padding-bottom: 14px; }
+.courses-row .list-item-title, .courses-item-row .list-item-title { font-size: 15.5px; word-break: break-word; }
+.courses-desc { color: var(--text-2); font-size: 13.5px; line-height: 1.55; word-break: break-word; }
+.courses-row .list-item-meta, .courses-item-row .list-item-meta { gap: 6px 10px; }
+.courses-row-actions { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.courses-row-actions .btn-ghost.btn-danger:not(:hover) { --btn-fg: var(--muted); }
+
+/* ---------- 详情 ---------- */
+.courses-detail-head { align-items: flex-start; }
+.courses-detail-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.courses-detail-title h1 { word-break: break-word; }
+.courses-back { align-self: flex-start; margin-left: -8px; }
+.courses-detail-badges { gap: 6px 8px; margin-top: 4px; }
+.courses-card-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.courses-card-actions { gap: 8px; }
+.courses-items .empty, .courses-materials .empty { padding: 28px 12px; }
+.courses-items .lists-savebar { margin-top: 10px; }
+
+.courses-materials-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-bottom: 10px;
+  line-height: 1.7;
+}
+.courses-materials-info .icon { flex: none; margin-right: 2px; }
+.courses-materials-info > span { flex: 1 1 0; min-width: 0; }
+.courses-options { margin-bottom: 6px; }
+.courses-material-row .list-item-meta { flex-wrap: wrap; gap: 2px 10px; }
+.courses-material-used { display: inline-flex; flex-wrap: wrap; gap: 0 2px; min-width: 0; }
+.courses-material-used:empty { display: none; }
+.courses-material-used a { word-break: break-all; }
+.courses-material-actions { gap: 2px; flex-wrap: nowrap; }
+
+/* ---------- 批量上传对话框 ---------- */
+.courses-batch-modal .modal-body { padding-bottom: 8px; }
+.courses-batch { gap: 12px; }
+.courses-batch-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.courses-batch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) auto;
+  grid-template-areas: "file choice" "title title";
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.courses-batch-row[data-mode="materials"] { background: var(--bg); }
+.courses-batch-file { grid-area: file; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.courses-batch-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; }
+.courses-batch-name .small { word-break: break-all; }
+.courses-batch-choice { grid-area: choice; display: flex; flex-wrap: wrap; gap: 4px 14px; justify-content: flex-end; }
+.courses-batch-choice .checkbox { white-space: nowrap; font-size: 13.5px; }
+.courses-batch-title-wrap { grid-area: title; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.courses-batch-title { width: 100%; }
+.courses-batch-summary { margin: 0; }
+.courses-group-input { display: contents; }
+
+/* ---------- 手机 ---------- */
+@media (max-width: 760px) {
+  .courses-view { gap: 16px; }
+  .courses-row .list-item-actions, .courses-item-row .list-item-actions { width: 100%; justify-content: flex-end; margin-left: 0; }
+  .courses-row-actions .lists-order { margin-right: auto; }
+  .courses-detail-head .actions { width: 100%; }
+  .courses-batch-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "file" "choice" "title"; }
+  .courses-batch-choice { justify-content: flex-start; }
+  .courses-card-actions { width: 100%; }
+  /* 资料行：缩略图 + 名字一行，操作按钮换到下一行靠右，名字和「用在」有足够的宽度 */
+  .courses-material-row { flex-wrap: wrap; row-gap: 4px; }
+  .courses-material-row .list-item-main { flex: 1 1 calc(100% - 60px); }
+  .courses-material-row .files-name { white-space: normal; word-break: break-all; }
+  .courses-material-row .list-item-actions { width: 100%; justify-content: flex-end; margin-left: 0; }
+  .courses-materials .card-header, .courses-items .card-header { flex-wrap: wrap; gap: 8px; }
+}
+
+@media (max-width: 380px) {
+  .courses-btn-text { display: none; }
+}
+
+/* 删除整门课：页面最后，靠右 */
+.courses-danger-zone {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 0 8px;
+}

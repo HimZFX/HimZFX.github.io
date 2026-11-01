@@ -1,0 +1,14 @@
+{{- /*
+  课程资料：按 weight、再按标题排序一组页面（课程或子推文），返回排好序的页面列表。
+  weight 没写（或写 0）的排在最后，和 Hugo 自己的规则一致；标题相同的保持 Hugo 的默认顺序。
+  英文版没写 weight 时沿用共用版本的（见 courses/param.html）。
+*/ -}}
+{{- $items := slice -}}
+{{- range . -}}
+  {{- $w := int (partial "courses/param.html" (dict "page" . "key" "weight") | default 0) -}}
+  {{- if eq $w 0 -}}{{- $w = 2147483647 -}}{{- end -}}
+  {{- $items = $items | append (dict "w" $w "t" .LinkTitle "p" .) -}}
+{{- end -}}
+{{- $pages := slice -}}
+{{- range sort (sort $items "t") "w" -}}{{- $pages = $pages | append .p -}}{{- end -}}
+{{- return $pages -}}
