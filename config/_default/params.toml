@@ -25,7 +25,7 @@ comments = false
 [profileMode]
   enabled = true
   title = "Zhong Fangxiong"
-  subtitle = "Peking University | Physics & Astrophysics | Quant Trading"
+  subtitle = "Peking University | Physics & Astrophysics"
   imageUrl = "avatar.jpg"          # 对应 static/avatar.jpg
   imageWidth = 150
   imageHeight = 150
