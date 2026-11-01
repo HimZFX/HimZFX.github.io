@@ -1,0 +1,274 @@
+/* ==========================================================================
+   files.css — 「资料」视图（views/files.js，FILES 维护）
+   只写这个视图特有的样式；通用组件（.card .list .tabs .dropzone .banner …）来自 admin.css。
+   所有类名以 .files- 开头，避免和其他视图冲突。
+   ========================================================================== */
+
+.files-view { gap: 20px; }
+.files-view .page-header { margin-bottom: 0; }
+
+/* ---------- 文件夹选择 ---------- */
+.files-toolbar { min-width: 0; }
+.files-folders { flex-wrap: wrap; overflow: visible; }
+.files-folders .tab { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.files-folders .tab .icon { width: 15px; height: 15px; }
+.files-folders .files-folder-other { color: var(--muted); }
+.files-folder-custom-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.files-folder-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  padding-left: 4px;
+  min-width: 0;
+}
+.files-folder-info .icon { margin-right: 2px; }
+.files-folder-info > span { white-space: nowrap; }
+.files-code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+/* ---------- 上传区 ---------- */
+.files-upload-card { display: flex; flex-direction: column; gap: 14px; }
+.files-dropzone {
+  position: relative;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 16px;
+  padding: 20px 24px;
+  text-align: left;
+  cursor: pointer;
+}
+.files-dropzone:hover { border-color: var(--primary); }
+.files-drop-text { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.files-choose { flex: none; }
+.files-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.files-dropzone .files-drop-icon .icon { width: 26px; height: 26px; }
+.files-drop-title { color: var(--text); font-size: 15px; font-weight: 500; }
+.files-dropzone .files-choose .icon { width: 16px; height: 16px; }
+.files-drop-hint { font-size: 13px; color: var(--muted); }
+.files-dropzone.is-over .files-drop-title { color: var(--primary-text); }
+.files-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  opacity: 0;
+}
+.files-options { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; }
+.files-options .checkbox { flex: none; font-weight: 500; }
+
+/* ---------- 列表 ---------- */
+.files-list-header { gap: 12px; flex-wrap: wrap; }
+.files-list-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.files-search { position: relative; display: flex; align-items: center; flex: 0 1 260px; min-width: 0; }
+.files-search > .icon { position: absolute; left: 11px; width: 16px; height: 16px; color: var(--muted); pointer-events: none; }
+.files-search .input { width: 100%; padding-left: 34px; }
+
+.files-list-host > .files-list { margin: 0 -24px -20px; border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); box-shadow: none; }
+.files-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--hover-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.files-group:first-child { border-top: 0; }
+.files-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.files-row { flex-wrap: nowrap; padding-left: 24px; padding-right: 16px; }
+.files-row .list-item-main { flex: 1 1 auto; }
+.files-row .list-item-actions { flex: none; }
+.files-actions { display: flex; align-items: center; gap: 4px; }
+.files-name { font-size: 14.5px; }
+.files-row .list-item-meta { flex-wrap: nowrap; min-width: 0; }
+.files-size { flex: none; white-space: nowrap; }
+.files-link {
+  overflow: hidden;
+  min-width: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+
+/* 文件类型图标 / 缩略图 */
+.files-thumb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--gray-soft);
+  color: var(--muted);
+}
+.files-thumb .icon { width: 22px; height: 22px; }
+.files-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.files-thumb.has-img { background: var(--gray-soft); box-shadow: inset 0 0 0 1px var(--border); }
+.files-thumb-sm { width: 34px; height: 34px; border-radius: 7px; }
+.files-thumb-sm .icon { width: 18px; height: 18px; }
+.files-ext { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
+.files-thumb-sm .files-ext { font-size: 9.5px; }
+.files-type-pdf { background: var(--danger-soft); color: var(--danger); }
+.files-type-doc { background: var(--info-soft); color: var(--info); }
+.files-type-ppt { background: var(--warning-soft); color: var(--warning-text); }
+.files-type-xls { background: var(--primary-soft); color: var(--primary-text); }
+.files-type-zip { background: rgba(114, 46, 209, 0.1); color: #722ed1; }
+.files-type-media { background: rgba(19, 194, 194, 0.12); color: #08979c; }
+.files-type-image { background: var(--info-soft); color: var(--info); }
+
+/* ---------- 上传进度 ---------- */
+.files-batch { display: flex; flex-direction: column; gap: 12px; }
+.files-batch .card-header { margin-bottom: 0; }
+.files-batch-list { margin: 0; padding: 0; list-style: none; }
+.files-batch-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.files-batch-item:first-child { border-top: 0; }
+.files-batch-main { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.files-batch-side { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
+.files-batch-name { font-weight: 500; }
+.files-batch-name .small { margin-left: 4px; font-weight: 400; }
+.files-batch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; }
+.files-batch-meta .files-link { max-width: 100%; }
+.files-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--gray-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.files-status .spinner-sm { width: 12px; height: 12px; border-width: 2px; }
+.files-status.is-compressing, .files-status.is-uploading { background: var(--info-soft); color: var(--info); }
+.files-status.is-ready { background: var(--primary-soft); color: var(--primary-text); }
+.files-status.is-done, .files-status.is-same { background: var(--primary-soft); color: var(--primary-text); }
+.files-status.is-skipped, .files-status.is-failed { background: var(--danger-soft); color: var(--danger); }
+.files-status.is-cancelled { background: var(--gray-soft); color: var(--muted); }
+
+/* ---------- 弹窗内容 ---------- */
+.files-confirm p { margin: 0; }
+.files-review { padding: 10px 12px; }
+.files-review-title { margin-bottom: 4px; font-weight: 500; }
+.files-name-list { margin: 4px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.7; word-break: break-all; }
+.files-name-list code { font-size: 12.5px; }
+
+.files-folder-modal { min-width: 0; }
+.files-modal-label { font-size: 14px; font-weight: 500; }
+.files-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.files-folder-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.files-folder-option:hover { background: var(--hover); }
+.files-folder-option.is-current { background: var(--primary-soft); color: var(--primary-text); }
+.files-folder-option .icon { color: var(--muted); }
+.files-folder-option-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-prefix {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0 2px 0 4px;
+  color: var(--muted);
+}
+
+/* 手机上的操作面板 */
+.files-sheet .modal-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-sheet-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.files-sheet-list { display: flex; flex-direction: column; margin: 4px -8px 0; }
+.files-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.files-sheet-item:hover, .files-sheet-item:active { background: var(--hover); text-decoration: none; }
+.files-sheet-item .icon { width: 20px; height: 20px; color: var(--text-2); }
+.files-sheet-item.is-danger, .files-sheet-item.is-danger .icon { color: var(--danger); }
+
+/* ---------- 手机 ---------- */
+@media (max-width: 760px) {
+  .files-view { gap: 16px; }
+  .files-dropzone { flex-direction: column; justify-content: center; gap: 10px; padding: 20px 14px; text-align: center; }
+  .files-drop-text { align-items: center; }
+  .files-drop-icon { width: 44px; height: 44px; }
+  .files-search { flex: 1 1 100%; }
+  .files-list-host > .files-list { margin: 0 -16px -16px; }
+  .files-group { padding: 8px 16px; }
+  .files-row { padding-left: 16px; padding-right: 8px; gap: 10px; }
+  .files-row .list-item-main { flex-basis: auto; }
+  .files-row .list-item-actions { margin-left: 0; }
+  .files-row .list-item-actions .btn-icon { width: 36px; height: 36px; }
+  .files-action-label { display: none; }
+  .files-thumb { width: 40px; height: 40px; }
+  .files-batch-item { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 6px 10px; }
+  .files-batch-side { grid-column: 2; justify-content: flex-start; }
+  .files-batch-side .btn-sm { width: 30px; padding: 0; justify-content: center; }
+  .files-folder-custom-name { max-width: 50vw; }
+}

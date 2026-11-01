@@ -12,3 +12,7 @@
   [goldmark.extensions.passthrough.delimiters]
     block = [['$$', '$$'], ['\[', '\]']]
     inline = [['$', '$'], ['\(', '\)']]
+
+# 高亮：==文字== 渲染成 <mark>文字</mark>（像公众号排版里的荧光笔标记，样式见 assets/css/extended/mark.css）
+[goldmark.extensions.extras.mark]
+  enable = true

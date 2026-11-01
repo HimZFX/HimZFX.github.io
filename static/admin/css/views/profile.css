@@ -1,0 +1,358 @@
+/* ==========================================================================
+   profile.css — 「首页设置」（views/profile.js，PROFILE 维护）
+   只写这个视图特有的样式；通用组件（.card .field .input .btn .switch …）来自 admin.css。
+   所有类名以 .pf- 开头，避免和其他视图冲突。
+   ========================================================================== */
+
+.pf-view { min-width: 0; }
+
+/* ---------- 两栏布局：左边表单，右边首页预览 ---------- */
+.pf-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  align-items: start;
+  gap: 20px;
+}
+.pf-main { gap: 20px; min-width: 0; }
+.pf-side {
+  position: sticky;
+  top: calc(var(--topbar-h) + 20px);
+  min-width: 0;
+}
+
+.pf-card .card-title .icon { width: 18px; height: 18px; color: var(--primary); }
+.pf-card .card-title .badge { margin-left: 4px; font-weight: 500; }
+.pf-card-desc { margin-left: auto; }
+.pf-card-hint { margin: 12px 0 0; line-height: 1.7; }
+.pf-card-hint .kbd { font-size: 12px; }
+.pf-banner { margin-bottom: 14px; font-size: 13px; }
+
+/* 本机自动保存：「发现本机未发布的首页修改」 */
+.pf-restore-host:empty { display: none; }
+.pf-restore { margin-bottom: 20px; }
+
+.pf-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* ---------- 头像 ---------- */
+.pf-avatar { display: flex; align-items: center; gap: 24px; }
+.pf-avatar-frame {
+  position: relative;
+  flex: none;
+  width: 108px;
+  height: 108px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--gray-soft);
+  box-shadow: 0 0 0 1px var(--border), 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.pf-avatar-img { display: block; width: 100%; height: 100%; object-fit: cover; user-select: none; }
+.pf-avatar-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.pf-avatar-body { flex: 1 1 auto; min-width: 0; }
+.pf-avatar-body .row { align-items: center; gap: 8px; }
+.pf-avatar-body .hint { margin: 0; }
+.pf-avatar-info { line-height: 1.6; }
+.pf-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pf-fav { gap: 8px; }
+.pf-fav-img { width: 20px; height: 20px; border-radius: 4px; box-shadow: 0 0 0 1px var(--border); object-fit: cover; }
+
+/* ---------- 名字与简介 ---------- */
+.pf-override {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--hover-soft);
+}
+.pf-override-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+.pf-override-head .icon { width: 16px; height: 16px; color: var(--info); }
+.pf-override-head .muted { font-weight: 400; font-size: 13px; }
+
+/* ---------- 列表编辑器（按钮 / 社交链接 / 节日规则） ---------- */
+.pf-list { min-width: 0; }
+.pf-rows { display: flex; flex-direction: column; gap: 8px; }
+.pf-rows-head,
+.pf-row {
+  display: grid;
+  align-items: start;
+  gap: 8px 10px;
+}
+.pf-cols-button { grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1.6fr) auto; }
+.pf-cols-social { grid-template-columns: 26px minmax(0, 190px) minmax(0, 1fr) auto; }
+.pf-cols-rule { grid-template-columns: 26px 84px minmax(0, 150px) minmax(0, 150px) auto; }
+.pf-rows-head {
+  padding: 0 0 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.pf-row-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--gray-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.pf-cell { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pf-mlabel { font-size: 12.5px; color: var(--muted); }
+.pf-row-actions { display: flex; align-items: center; gap: 2px; padding-top: 3px; }
+.pf-row-actions .btn[disabled] { opacity: 0.3; }
+.pf-row-msgs {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: -2px;
+}
+.pf-row-msgs .error { font-size: 12.5px; }
+.pf-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--warning-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pf-warn .icon { flex: none; width: 13px; height: 13px; margin-top: 3px; }
+.pf-rows-empty { padding: 14px 0 6px; font-size: 13.5px; }
+.pf-list-foot { margin-top: 10px; }
+.pf-add { padding-left: 10px; padding-right: 12px; }
+
+.pf-icon-control { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pf-emoji-input { font-size: 20px; text-align: center; padding: 0 6px; }
+.pf-date-input { font-variant-numeric: tabular-nums; }
+
+/* ---------- 节日图标 ---------- */
+.pf-switch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+.pf-switch-text { font-weight: 500; }
+.pf-today { margin-left: auto; }
+.pf-holiday-body { transition: opacity 0.2s; }
+.pf-holiday-body.is-off { opacity: 0.55; }
+
+/* ---------- 首页预览 ---------- */
+.pf-preview { padding: 18px 18px 14px; }
+.pf-preview .card-header { margin-bottom: 14px; }
+.pf-preview-tabs { border-bottom: 0; }
+.pf-preview-tabs .tab { padding: 4px 10px; font-size: 12.5px; }
+.pf-browser {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.pf-browser-bar { display: flex; height: 38px; padding: 7px 10px 0; background: var(--gray-soft); }
+.pf-browser-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 230px;
+  padding: 0 10px;
+  border-radius: 8px 8px 0 0;
+  background: var(--card);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.pf-browser-tab > .icon { flex: none; color: var(--muted); }
+.pf-tab-fav { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--muted); }
+.pf-tab-fav img { width: 16px; height: 16px; border-radius: 3px; object-fit: cover; }
+.pf-tab-emoji { font-size: 14px; line-height: 1; }
+.pf-tab-title { min-width: 0; }
+.pf-pv-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 16px 26px;
+  text-align: center;
+}
+.pf-pv-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 92px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--gray-soft);
+  color: var(--muted);
+}
+.pf-pv-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.pf-pv-name { margin-top: 6px; font-size: 19px; font-weight: 700; line-height: 1.3; word-break: break-word; }
+.pf-pv-sub { max-width: 100%; color: var(--text-2); font-size: 12.5px; line-height: 1.5; word-break: break-word; }
+.pf-pv-sub:empty, .pf-pv-social:empty, .pf-pv-buttons:empty { display: none; }
+.pf-pv-social { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+.pf-pv-icon {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-pv-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
+.pf-pv-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: var(--gray-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.pf-pv-btn .icon { flex: none; color: var(--muted); }
+.pf-preview-note { margin: 10px 0 0; text-align: center; }
+
+/* ---------- 底部保存栏 ---------- */
+.pf-savebar {
+  position: sticky;
+  bottom: calc(var(--bottom-nav-h, 0px) + 12px);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 20px;
+  padding: 12px 16px 12px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-md);
+}
+.pf-savebar-text { min-width: 0; color: var(--muted); font-size: 13.5px; }
+.pf-savebar-text.is-dirty { color: var(--warning-text); }
+.pf-savebar-text.is-dirty::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+  vertical-align: 1px;
+}
+.pf-savebar-err { color: var(--danger); }
+.pf-savebar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* ---------- 发布确认 ---------- */
+.pf-confirm-list { margin: 0; padding-left: 20px; color: var(--text); }
+.pf-confirm-list li { margin: 3px 0; overflow-wrap: anywhere; }
+.pf-confirm .kbd { font-size: 12px; overflow-wrap: anywhere; }
+
+/* ---------- 头像裁剪弹窗 ---------- */
+.modal.pf-crop-modal { width: min(600px, 100%); }
+.pf-crop { display: flex; align-items: flex-start; gap: 22px; }
+.pf-crop-main { flex: 0 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.pf-crop-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+.pf-crop-stage:focus-visible { box-shadow: var(--focus-ring); }
+.pf-crop-stage.is-dragging { cursor: grabbing; }
+.pf-crop-canvas { display: block; width: 100%; height: 100%; }
+.pf-crop-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45);
+  outline: 2px solid rgba(255, 255, 255, 0.92);
+  outline-offset: -2px;
+  pointer-events: none;
+}
+.pf-crop-tools { display: flex; align-items: center; gap: 6px; }
+.pf-crop-zoom { flex: 1 1 auto; min-width: 0; }
+.pf-pm { font-size: 18px; font-weight: 600; line-height: 1; }
+.pf-crop-side { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.pf-crop-pv { display: flex; align-items: center; gap: 12px; }
+.pf-crop-pv-round { width: 72px; height: 72px; border-radius: 50%; box-shadow: 0 0 0 1px var(--border); }
+.pf-crop-pv-fav { width: 32px; height: 32px; border-radius: 6px; box-shadow: 0 0 0 1px var(--border); margin: 0 20px; }
+.pf-crop-tip { margin: 0; line-height: 1.6; }
+.pf-crop-warn { font-size: 13px; }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 1080px) {
+  .pf-layout { grid-template-columns: minmax(0, 1fr); }
+  .pf-side { position: static; }
+}
+
+@media (max-width: 760px) {
+  .pf-main { gap: 16px; }
+  .pf-grid-2 { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .pf-avatar { gap: 16px; align-items: flex-start; }
+  .pf-avatar-frame { width: 84px; height: 84px; }
+  .pf-card-desc { margin-left: 0; }
+  .pf-today { margin-left: 0; flex-basis: 100%; }
+
+  /* 列表行变成小卡片：第一行是序号 + 操作按钮，下面是各个输入框 */
+  .pf-rows { gap: 10px; }
+  .pf-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 8px 10px 12px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .pf-row-num { grid-row: 1; grid-column: 1; margin-top: 4px; }
+  .pf-row-actions { grid-row: 1; grid-column: 3; padding-top: 0; }
+  .pf-row .pf-cell { grid-column: 1 / -1; }
+  .pf-row-msgs { grid-column: 1 / -1; margin-top: 0; }
+  .pf-row-actions .btn-icon { width: 36px; height: 36px; }
+
+  /* 节日规则：emoji / 开始 / 结束 三格并排 */
+  .pf-row.pf-cols-rule { grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr); }
+  .pf-row.pf-cols-rule .pf-row-actions { grid-column: 2 / 4; justify-self: end; }
+  .pf-row.pf-cols-rule .pf-cell { grid-column: auto; }
+
+  .pf-savebar { padding: 10px 12px; bottom: calc(var(--bottom-nav-h, 0px) + 8px); }
+  .pf-savebar-text { flex-basis: 100%; font-size: 13px; }
+  .pf-savebar-text:not(.is-dirty) { display: none; }
+  .pf-savebar-actions { flex: 1 1 auto; }
+  .pf-savebar-actions .btn { flex: 1 1 0; }
+  .pf-savebar-actions .btn-primary { flex-grow: 2; }
+
+  .pf-crop { flex-direction: column; align-items: stretch; gap: 14px; }
+  .pf-crop-main { flex: none; width: min(100%, 340px); margin: 0 auto; }
+  .pf-crop-side { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+  .pf-crop-tip { flex-basis: 100%; }
+  .pf-crop-pv-round { width: 56px; height: 56px; }
+  .pf-crop-pv-fav { margin: 0 4px; }
+}
