@@ -20,18 +20,28 @@ node tests/admin/e2e-shell.mjs
 node tests/admin/e2e-editor.mjs
 # … e2e-lists / e2e-profile / e2e-background / e2e-files
 
+# 「课程」页：新建课程（中英文）、批量上传（每个文件一篇子推文 / 只放进资料）、子推文和课程的顺序（只改 weight 那一行）、
+# 冲突、新子推文（编辑器）、分组改名、拒绝 .html / .svg 等文件、手机布局，最后用 Hugo 构建检查课程页和子推文里的阅读器；
+# 还有手写 / 格式有问题的课程、一次 30 个文件、网址冲突、分组名只差大小写 / 空格、草稿课程（子推文一起隐藏）、删除整门课
+node tests/admin/e2e-courses.mjs
+
+# 网站这一侧的课程资料（layouts/courses/、layouts/partials/courses/、i18n/）：课程总页的分组和顺序、单元页、
+# 构建时生成的资料列表、子推文的面包屑和课程内上一篇 / 下一篇、英文站、手机与深色模式，以及草稿课程、嵌套子栏目等边界情况
+node tests/admin/e2e-courses-site.mjs
+
 # 网站的资料在线预览页（static/viewer/，PDF.js）和 {{< pdf >}} 短代码：懒加载、缩放、中文非嵌入字体、
 # 链接过滤、错误提示、参数校验 / 绕过尝试、手机与微信、深色模式、令牌不可读、CSP
 node tests/admin/e2e-viewer.mjs
 
 # 跨界面的完整使用流程（登录 → 写文章 + 英文版 → 上传 PDF 并在两种语言的文章里插入预览链接和嵌入阅读器 →
-# 换头像和简介 → 换背景动画 → 调整菜单 → 删除草稿 → Hugo 构建后检查两种语言的网站，并以访客身份打开
+# 换头像和简介 → 换背景动画 → 调整菜单 → 删除草稿 → 新建课程「近代物理实验」并批量上传两份实验报告 →
+# Hugo 构建后检查两种语言的网站（课程总页的分组、单元页、子推文里的阅读器、课程内上一篇 / 下一篇），并以访客身份打开
 # 预览链接和嵌入的阅读器，确认 PDF 真的显示出来）
 node tests/admin/e2e-journey.mjs
 ```
 
 每个 e2e 脚本都会把 Hugo 构建结果和截图放进自己的目录（默认在系统临时目录下），可以用环境变量指定：
-`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`。
+`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`。
 
 > 说明：Node 22 的 `node --test <目录>` 并不会去目录里找测试文件，而是把目录当成模块运行，
 > 所以这里放了一个 `index.js`，由它依次加载本目录的全部 `*.test.mjs`。

@@ -1,0 +1,306 @@
+/* 课程资料（layouts/courses/ 与 layouts/partials/courses/）：课程卡片、可选分组、单元页的子推文卡片和资料列表、
+   面包屑。只用 PaperMod 的颜色变量（--entry、--border、--secondary …），深浅色自动跟随。
+   assets/css/extended/ 下的 CSS 会被 PaperMod 自动打包进主样式表。 */
+
+/* ---------- 面包屑：课程资料 › 课程 › 本篇 ---------- */
+.course-breadcrumbs {
+    gap: 2px 6px;
+    margin-bottom: 6px;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.course-breadcrumbs a {
+    font-size: 14px;
+}
+
+.course-breadcrumbs a:hover {
+    color: var(--primary);
+    box-shadow: 0 1px 0;
+}
+
+.course-breadcrumbs-sep {
+    color: var(--tertiary);
+}
+
+.course-breadcrumbs [aria-current="page"] {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* ---------- 卡片（课程卡片、子推文卡片共用） ---------- */
+.course-list,
+.course-post-list,
+.course-material-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.course-card,
+.course-post {
+    position: relative;
+    margin-bottom: 16px;
+    padding: 20px var(--gap);
+    background: var(--entry);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: transform 0.1s, border-color 0.2s;
+}
+
+.course-card:hover,
+.course-post:hover {
+    border-color: var(--tertiary);
+}
+
+.course-card:active,
+.course-post:active {
+    transform: scale(0.98);
+}
+
+.course-card-title,
+.course-post-title {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.course-post-title {
+    font-size: 18px;
+}
+
+/* 整张卡片都可以点（链接的伪元素铺满卡片） */
+.course-card-title a::after,
+.course-post-title a::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius);
+}
+
+.course-card-title a:focus-visible,
+.course-post-title a:focus-visible {
+    outline: none;
+}
+
+.course-card-title a:focus-visible::after,
+.course-post-title a:focus-visible::after {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.course-card-desc,
+.course-post-desc {
+    margin: 6px 0 0;
+    color: var(--secondary);
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.course-card-meta {
+    margin: 10px 0 0;
+    color: var(--secondary);
+    font-size: 13px;
+}
+
+.course-draft {
+    display: inline-block;
+    margin-inline-start: 8px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--secondary);
+    font-size: 12px;
+    font-weight: normal;
+    line-height: 1.6;
+    vertical-align: middle;
+}
+
+/* ---------- 课程总页：可选的自定义分组 ---------- */
+.course-index {
+    margin-top: var(--content-gap);
+}
+
+.course-group + .course-group {
+    margin-top: 32px;
+}
+
+.course-group-title,
+.course-section-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 14px;
+    color: var(--primary);
+    font-size: 20px;
+    line-height: 1.4;
+}
+
+/* 标题右侧一条细线，把分组隔开 */
+.course-group-title::after,
+.course-section-title::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--tertiary);
+    opacity: 0.6;
+}
+
+/* ---------- 单元页 ---------- */
+.course-intro {
+    margin: var(--content-gap) 0 0;
+}
+
+.course-section {
+    margin-top: 36px;
+}
+
+.course-empty {
+    margin-top: var(--content-gap);
+    color: var(--secondary);
+}
+
+/* 资料列表：一张卡片里一行一个文件 */
+.course-material-list {
+    background: var(--entry);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.course-material {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+}
+
+.course-material + .course-material {
+    border-top: 1px solid var(--border);
+}
+
+/* 深色模式下 --border 和卡片底色几乎一样，分隔线换成半透明白色才看得见 */
+[data-theme="dark"] .course-material + .course-material {
+    border-top-color: rgba(255, 255, 255, 0.07);
+}
+
+.course-material-ext {
+    flex: none;
+    width: 46px;
+    margin-top: 2px;
+    padding: 2px 0;
+    border-radius: 4px;
+    background: var(--code-bg);
+    color: var(--secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    line-height: 1.6;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.course-material[data-ext="pdf"] .course-material-ext {
+    color: rgb(200, 60, 50);
+}
+
+[data-theme="dark"] .course-material[data-ext="pdf"] .course-material-ext {
+    color: rgb(240, 130, 120);
+}
+
+.course-material-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.course-material-name {
+    color: var(--primary);
+    font-weight: 500;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.course-material-name:hover,
+.course-material-post a:hover,
+.course-material-download:hover {
+    box-shadow: 0 1px 0;
+}
+
+.course-material-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    margin-top: 2px;
+    color: var(--secondary);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.course-material-post {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.course-material-post a,
+.course-material-download {
+    color: var(--secondary);
+    text-decoration: underline;
+    text-decoration-color: var(--tertiary);
+    text-underline-offset: 3px;
+}
+
+.course-material-post a:hover,
+.course-material-download:hover {
+    color: var(--primary);
+    box-shadow: none;
+}
+
+/* ---------- 子推文页 ---------- */
+.course-single .post-header .course-breadcrumbs {
+    margin-bottom: 10px;
+}
+
+.course-paginav {
+    margin-top: 8px;
+}
+
+.course-paginav a > span:last-child {
+    overflow-wrap: anywhere;
+}
+
+/* ---------- 手机 ---------- */
+@media screen and (max-width: 600px) {
+    .course-card,
+    .course-post {
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+
+    .course-card-title {
+        font-size: 19px;
+    }
+
+    .course-post-title {
+        font-size: 17px;
+    }
+
+    .course-material {
+        gap: 10px;
+        padding: 12px;
+    }
+
+    .course-material-ext {
+        width: 40px;
+        font-size: 10px;
+    }
+
+    .course-group + .course-group {
+        margin-top: 26px;
+    }
+}

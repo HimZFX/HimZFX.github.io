@@ -677,6 +677,42 @@ async function main() {
       assert.ok(!/^background:/m.test(fm3), '跟随全站设置 removes the key');
     });
 
+    await test('资料 button / cover / pasted files refuse .html / .svg / .js (same-origin scripts) with an explanation', async () => {
+      await gotoEdit(page, '#/edit?path=' + encodeURIComponent(POST));
+      await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+      const before = mock.commits.length;
+      // 资料 → 上传新资料… with a web page: refused, nothing inserted, nothing pending
+      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+      await page.waitForSelector('[data-testid="editor-docs-search"]');
+      await page.setInputFiles('[data-testid="editor-docs-upload"]', { name: '讲义.HTML', mimeType: 'text/html', buffer: Buffer.from('<script>1</script>') });
+      const t1 = page.locator('[data-testid="toast-error"]', { hasText: '讲义.HTML' });
+      await t1.waitFor();
+      assert.match(await t1.textContent(), /不能上传 \.html 文件.*登录令牌/);
+      await page.waitForSelector('.modal', { state: 'detached' }).catch(() => {});
+      if (await page.isVisible('[data-testid="modal-close"]')) await page.click('[data-testid="modal-close"]');
+      // cover image: an SVG is refused with the PNG suggestion
+      await page.setInputFiles('[data-testid="editor-cover-input"]', { name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
+      const t2 = page.locator('[data-testid="toast-error"]', { hasText: 'logo.svg' });
+      await t2.waitFor();
+      assert.match(await t2.textContent(), /SVG.*转换成 PNG/);
+      // dropped / pasted files go through the same check (Vditor upload handler)
+      await page.evaluate(() => {
+        const ed = document.querySelector('[data-testid="editor-body"]');
+        const dt = new DataTransfer();
+        dt.items.add(new File(['alert(1)'], 'tool.js', { type: 'text/javascript' }));
+        const target = ed.querySelector('.vditor-wysiwyg .vditor-reset');
+        target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      const t3 = page.locator('[data-testid="toast-error"]', { hasText: 'tool.js' });
+      await t3.waitFor({ timeout: 5000 }).catch(() => {}); // Vditor may filter by type before calling us; either way nothing is added
+      const md = await vditor.get(page);
+      assert.ok(!/讲义\.HTML|logo\.svg|tool\.js/i.test(md), 'nothing inserted: ' + md.slice(0, 200));
+      assert.equal(await page.$('.ed-cover-thumb img[src*="svg"]'), null);
+      // nothing to publish from these attempts
+      assert.equal(mock.commits.length, before);
+      for (const p of ['static/documents/讲义.html', 'static/documents/tool.js']) assert.equal(mock.readFile(p), undefined);
+    });
+
     await test('new post autosaves locally; #/edit?draft=<key> restores it', async () => {
       await gotoEdit(page, '#/edit?new=post');
       await page.fill('[data-testid="editor-title"]', '本机草稿测试');

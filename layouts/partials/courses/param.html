@@ -1,0 +1,21 @@
+{{- /*
+  课程资料：读取页面的一个 front matter 参数，带「语言版本回退」。
+  传入 dict "page" 页面 "key" 参数名（小写）。
+
+  例如 _index.en.md 只改了标题和简介、没写 group / weight 时，英文站沿用共用版本 _index.md
+  里的值（课程的分组、顺序、资料文件夹在两种语言里通常相同）；写了就用英文版自己的。
+  只从「共用版本」（没有语言后缀的 xxx.md）回退，反过来不行：只在 _index.en.md 里写的
+  group: "Seminars" 不会出现在中文站上。
+  返回 nil 表示没有写（自己和共用版本都没写）。
+*/ -}}
+{{- $page := .page -}}
+{{- $key := .key -}}
+{{- $v := index $page.Params $key -}}
+{{- $own := $page.File -}}
+{{- if and (not (isset $page.Params $key)) $own (ne $own.BaseFileName $own.TranslationBaseName) -}}
+  {{- /* 自己是语言专属版本（xxx.en.md）：找共用版本 */ -}}
+  {{- range $page.Translations -}}
+    {{- if and (eq $v nil) .File (eq .File.BaseFileName .File.TranslationBaseName) (isset .Params $key) -}}{{- $v = index .Params $key -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- return $v -}}

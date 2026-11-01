@@ -1,0 +1,37 @@
+# Interface text for the English site. Only this site's own entries live here; PaperMod's built-in
+# ones (prev_page, toc, code_copy …) are in themes/PaperMod/i18n/en.yaml and Hugo merges both files
+# (entries here win on a clash). The Chinese texts are in i18n/zh.yaml.
+
+# ---------- Course materials (layouts/courses/, layouts/partials/courses/) ----------
+- id: courses_contents
+  translation: "Contents"
+- id: courses_materials
+  translation: "Materials"
+- id: courses_other
+  translation: "Other"
+- id: courses_post_count
+  translation:
+    one: "{{ .Count }} post"
+    other: "{{ .Count }} posts"
+- id: courses_file_count
+  translation:
+    one: "{{ .Count }} file"
+    other: "{{ .Count }} files"
+- id: courses_used_in
+  translation: "Used in"
+- id: courses_preview
+  translation: "Preview: "
+- id: courses_download
+  translation: "Download"
+- id: courses_prev
+  translation: "Previous"
+- id: courses_next
+  translation: "Next"
+- id: courses_pager
+  translation: "Previous and next in this course"
+- id: courses_breadcrumbs
+  translation: "Breadcrumb"
+- id: courses_empty
+  translation: "Nothing has been posted for this course yet."
+- id: courses_draft
+  translation: "Draft"

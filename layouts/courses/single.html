@@ -1,0 +1,51 @@
+{{- /*
+  课程子推文 content/courses/<课程>/<篇>.md（例如近代物理实验的一个实验）。
+  与 PaperMod 的文章页相同，只是：显示面包屑（课程资料 › 课程 › 本篇）、不显示日期 / 阅读时间，
+  页尾的「上一篇 / 下一篇」只在同一门课里按 weight 切换（见 layouts/partials/post_nav_links.html）。
+*/ -}}
+{{- define "main" }}
+{{- /* 所在课程是草稿（没有发布）时，Hugo 仍然会发布它下面的子推文：提醒一下。
+     后台把课程设为草稿时会自动在 _index.md 里加上 cascade.build（render / list: never），子推文就一起隐藏了。 */ -}}
+{{- range .Ancestors }}
+{{- if and (not .IsHome) (not .RelPermalink) }}
+{{- warnf "课程「%s」没有发布（草稿），但它下面的子推文 %s 仍然会发布。要一起隐藏，请在它的 _index.md 里加上：cascade: { build: { render: never, list: never } }（后台把课程设为草稿时会自动加）" .Title $.RelPermalink }}
+{{- end }}
+{{- end }}
+
+<article class="post-single course-single">
+  <header class="post-header">
+    {{ partial "courses/breadcrumbs.html" . }}
+    <h1 class="post-title entry-hint-parent">
+      {{ .Title }}
+      {{- if .Draft }}<span class="course-draft">{{ i18n "courses_draft" }}</span>{{ end }}
+    </h1>
+    {{- if .Description }}
+    <div class="post-description">
+      {{ .Description }}
+    </div>
+    {{- end }}
+  </header>
+  {{- $isHidden := (.Param "cover.hiddenInSingle") | default (.Param "cover.hidden") | default false }}
+  {{- partial "cover.html" (dict "cxt" . "IsSingle" true "isHidden" $isHidden) }}
+  {{- if (.Param "ShowToc") }}
+  {{- partial "toc.html" . }}
+  {{- end }}
+
+  {{- if .Content }}
+  <div class="post-content">
+    {{- if not (.Param "disableAnchoredHeadings") }}
+    {{- partial "anchored_headings.html" .Content -}}
+    {{- else }}{{ .Content }}{{ end }}
+  </div>
+  {{- end }}
+
+  <footer class="post-footer">
+    {{- partial "post_nav_links.html" . }}
+  </footer>
+
+  {{- if (.Param "comments") }}
+  {{- partial "comments.html" . }}
+  {{- end }}
+</article>
+
+{{- end }}{{/* end main */}}

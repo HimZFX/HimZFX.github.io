@@ -1,0 +1,16 @@
+{{- /*
+  课程资料的面包屑：课程资料 › 近代物理实验 › 实验名（最后一项是当前页，不是链接）。
+  课程总页（/courses/）本身不显示。样式沿用 PaperMod 的 .breadcrumbs，见 assets/css/extended/courses.css。
+*/ -}}
+{{- $chain := slice -}}
+{{- range .Ancestors.Reverse -}}
+  {{- if not .IsHome -}}{{- $chain = $chain | append . -}}{{- end -}}
+{{- end -}}
+{{- if $chain -}}
+<nav class="breadcrumbs course-breadcrumbs" aria-label="{{ i18n "courses_breadcrumbs" }}">
+  {{- range $chain -}}
+  {{- if .RelPermalink -}}<a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>{{- else -}}<span>{{ .LinkTitle }}</span>{{- end -}}<span class="course-breadcrumbs-sep" aria-hidden="true">›</span>
+  {{- end -}}
+  <span aria-current="page">{{ .LinkTitle }}</span>
+</nav>
+{{- end -}}

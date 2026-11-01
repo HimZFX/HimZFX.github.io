@@ -1,0 +1,7 @@
+{{- /* 课程资料：文件大小，例如 820 B、36 KB、2.4 MB（1 KB = 1024 B） */ -}}
+{{- $n := float . -}}
+{{- if lt $n 1024 -}}{{- printf "%d B" (int $n) -}}
+{{- else if lt $n 1048576 -}}{{- $k := div $n 1024 -}}{{- if lt $k 10 -}}{{- printf "%.1f KB" $k -}}{{- else -}}{{- printf "%.0f KB" $k -}}{{- end -}}
+{{- else if lt $n 1073741824 -}}{{- $m := div $n 1048576 -}}{{- if lt $m 10 -}}{{- printf "%.1f MB" $m -}}{{- else -}}{{- printf "%.0f MB" $m -}}{{- end -}}
+{{- else -}}{{- printf "%.1f GB" (div $n 1073741824) -}}
+{{- end -}}

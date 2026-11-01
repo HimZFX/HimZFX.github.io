@@ -24,6 +24,7 @@ const ROUTES = {
   posts: 'posts',
   edit: 'editor',
   pages: 'pages',
+  courses: 'courses',
   profile: 'profile',
   background: 'background',
   files: 'files',
@@ -34,6 +35,7 @@ const DEFAULT_ROUTE = 'posts';
 const NAV = [
   { route: 'posts', label: '文章', short: '文章', icon: 'post', testid: 'nav-posts' },
   { route: 'pages', label: '页面', short: '页面', icon: 'page', testid: 'nav-pages' },
+  { route: 'courses', label: '课程', short: '课程', icon: 'course', testid: 'nav-courses' },
   { route: 'profile', label: '首页设置', short: '首页', icon: 'home', testid: 'nav-profile' },
   { route: 'background', label: '背景动画', short: '背景', icon: 'background', testid: 'nav-background' },
   { route: 'files', label: '资料', short: '资料', icon: 'files', testid: 'nav-files' },
@@ -43,6 +45,7 @@ const ROUTE_TITLES = {
   posts: '文章',
   edit: '编辑',
   pages: '页面',
+  courses: '课程',
   profile: '首页设置',
   background: '背景动画',
   files: '资料',
@@ -1015,12 +1018,17 @@ function userAvatar(user) {
   return img;
 }
 
+/** 课程里的页面（content/courses/<课程>/…；「课程资料」总页 content/courses/_index.md 本身属于「页面」）。 */
+const COURSE_PAGE_RE = /^content\/courses\/[^/]+\/[^/]+$/;
+const COURSE_DIR_RE = /^\/*(?:content\/)?courses\/[^/]+\/*$/;
+
 function activeNavRoute(info) {
   if (info.route !== 'edit') return info.route;
   const p = info.params || {};
-  if (p.new === 'page') return 'pages';
+  if (p.new === 'page') return COURSE_DIR_RE.test(String(p.dir || '')) ? 'courses' : 'pages';
   // 本机草稿：file:<path> 的草稿按文件路径判断；new:… 的新草稿看不出类型，归到「文章」
   const path = p.path || (typeof p.draft === 'string' && p.draft.startsWith('file:') ? p.draft.slice(5) : '');
+  if (path && COURSE_PAGE_RE.test(path)) return 'courses';
   if (path) return path.startsWith(PATHS.posts + '/') && !/\/_index(\.[a-z-]+)?\.md$/.test(path) ? 'posts' : 'pages';
   return 'posts';
 }

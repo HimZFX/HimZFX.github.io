@@ -162,7 +162,7 @@ async function main() {
         assert.match(s[1], /\bsrc=/, 'inline <script> found');
         assert.equal(s[2].trim(), '');
       }
-      for (const css of ['css/admin.css', 'css/views/editor.css', 'css/views/posts.css', 'css/views/profile.css', 'css/views/background.css', 'css/views/files.css']) {
+      for (const css of ['css/admin.css', 'css/views/editor.css', 'css/views/posts.css', 'css/views/profile.css', 'css/views/background.css', 'css/views/files.css', 'css/views/courses.css']) {
         assert.ok(html.includes(`href="${css}"`), `missing stylesheet ${css}`);
       }
     });
@@ -312,7 +312,10 @@ async function main() {
     await test('navigating between all routes never crashes (missing views → friendly error)', async () => {
       const { context, page, st } = await newPage();
       await openAdmin(page, mock);
-      for (const [testid, route] of [['nav-pages', 'pages'], ['nav-profile', 'profile'], ['nav-background', 'background'], ['nav-files', 'files'], ['nav-posts', 'posts']]) {
+      // navigation order: 文章 · 页面 · 课程 · 首页 · 背景 · 资料
+      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => a.dataset.route)), ['posts', 'pages', 'courses', 'profile', 'background', 'files']);
+      assert.deepEqual(await page.$$eval('.nav-item .nav-label', (els) => els.map((e) => e.textContent)), ['文章', '页面', '课程', '首页设置', '背景动画', '资料']);
+      for (const [testid, route] of [['nav-pages', 'pages'], ['nav-courses', 'courses'], ['nav-profile', 'profile'], ['nav-background', 'background'], ['nav-files', 'files'], ['nav-posts', 'posts']]) {
         await page.click(`[data-testid="${testid}"]`);
         await waitViewReady(page, route);
         assert.equal(await page.evaluate(() => location.hash.split('?')[0]), '#/' + route);
@@ -338,7 +341,10 @@ async function main() {
       await page.waitForFunction(() => document.body.dataset.viewReady === 'edit' || document.body.dataset.viewReady === 'posts');
       // a page opened from a local draft key highlights 页面, a post draft 文章
       for (const [hash, nav] of [['#/edit?draft=' + encodeURIComponent('file:content/about.md'), 'nav-pages'],
-        ['#/edit?draft=' + encodeURIComponent('file:content/posts/first-physics-note.md'), 'nav-posts']]) {
+        ['#/edit?draft=' + encodeURIComponent('file:content/posts/first-physics-note.md'), 'nav-posts'],
+        // a course page / new course sub-post highlights 课程; the 课程资料 landing page itself stays under 页面
+        ['#/edit?draft=' + encodeURIComponent('file:content/courses/lab/exp-1.md'), 'nav-courses'],
+        ['#/edit?draft=' + encodeURIComponent('file:content/courses/_index.md'), 'nav-pages']]) {
         await page.evaluate((h) => { location.hash = h; }, hash);
         await page.waitForFunction((n) => document.querySelector(`[data-testid="${n}"]`)?.getAttribute('aria-current') === 'page', nav);
       }
@@ -902,7 +908,7 @@ export default async function mount(container) {
       assert.ok(nav.items.every(Boolean));
       assert.equal(await page.isVisible('[data-testid="logout"]'), true);
       await page.screenshot({ path: path.join(SHOTS, 'mobile-posts.png') });
-      for (const route of ['pages', 'profile', 'background', 'files']) {
+      for (const route of ['pages', 'courses', 'profile', 'background', 'files']) {
         await page.tap(`[data-testid="nav-${route}"]`);
         await waitViewReady(page, route);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${route}: horizontal scroll`);
@@ -917,6 +923,20 @@ export default async function mount(container) {
       await page.setViewportSize({ width: 360, height: 740 });
       await page.waitForTimeout(200);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), '360: horizontal scroll');
+      // six tabs still fit at 360 px: every tab ≥ 56 px wide, icon + short label inside its own box, no overlap
+      const tabs = await page.evaluate(() => [...document.querySelectorAll('.nav-item')].map((a) => {
+        const r = a.getBoundingClientRect();
+        const l = a.querySelector('.nav-label-short').getBoundingClientRect();
+        const i = a.querySelector('.nav-icon').getBoundingClientRect();
+        return { left: r.left, right: r.right, width: r.width, labelIn: l.left >= r.left - 0.5 && l.right <= r.right + 0.5 && l.width > 0, iconIn: i.width > 0 && i.left >= r.left && i.right <= r.right, overflow: a.scrollWidth > a.clientWidth + 1 };
+      }));
+      assert.equal(tabs.length, 6);
+      for (const t of tabs) {
+        assert.ok(t.width >= 56, `tab too narrow at 360: ${t.width}`);
+        assert.ok(t.labelIn && t.iconIn && !t.overflow, 'tab content fits: ' + JSON.stringify(t));
+      }
+      for (let i = 1; i < tabs.length; i++) assert.ok(tabs[i].left >= tabs[i - 1].right - 0.5, 'tabs do not overlap');
+      assert.ok(tabs.at(-1).right <= 360.5, 'last tab inside the viewport');
       await page.tap('[data-testid="logout"]');
       await page.waitForSelector('[data-testid="confirm-ok"]');
       await page.waitForTimeout(300);

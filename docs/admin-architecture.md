@@ -31,7 +31,7 @@ static/admin/
 ├── cassette-frame.html     背景动画预览的沙箱页面（无内联脚本，只引入 js/cassette-frame.js）
 ├── css/
 │   ├── admin.css           设计变量（颜色、间距、深浅色）+ 公共组件（按钮、卡片、对话框、标签页、徽章……）
-│   └── views/*.css         每个界面自己的样式（editor / posts（也用于 pages）/ profile / background / files）
+│   └── views/*.css         每个界面自己的样式（editor / posts（也用于 pages）/ profile / background / files / courses）
 ├── js/
 │   ├── config.js           全局常量：REPO、apiBase()、STORAGE_KEYS、PATHS、LIMITS、站点与语言名称、令牌创建页地址
 │   ├── main.js             入口：登录状态、启动加载、整体布局、传给视图的 ctx、ctx.publish（含冲突对话框）、
@@ -44,6 +44,10 @@ static/admin/
 │   ├── tomlpatch.js        保留注释的 TOML 精确修改
 │   ├── content.js          双语内容模型（纯函数）：页面组、各语言显示哪个文件、网址 slug、图片目录；
 │   │                       资料在线预览链接 viewerUrlFor / isViewerFilePath（规则与网站 static/viewer/path.js 一致）
+│   ├── courses.js          「课程」的内容模型（纯函数）：collectCourses、排序 / 分组 / reweight / nextWeights、
+│   │                       文件名 → 标题 / 网址、资料目录、新文件模板、批量上传的子推文正文、草稿课程的 cascade（第 13 节）
+│   ├── uploads.js          往 static/ 上传的共用逻辑：拒绝会执行脚本的类型（uploadBlockReason）、.gitignore 匹配、
+│   │                       图片压缩、同批重名改名、上传前检查与确认框内容、文件 / 预览网址、引用检查与删除（第 13 节）
 │   ├── images.js           图片压缩、正方形裁剪、安全文件名
 │   ├── drafts.js           IndexedDB：编辑器自动保存的草稿 + GitHub 文件内容（blob）缓存
 │   ├── preview.js          编辑器「手机预览」的渲染（写进无脚本的沙箱 iframe）
@@ -55,7 +59,8 @@ static/admin/
 │       ├── editor.js       文章 / 页面编辑器（Vditor），多语言版本标签页、图片 / 资料、自动保存、发表
 │       ├── profile.js      「首页设置」：头像裁剪、名字简介、按钮、社交链接、节日图标
 │       ├── background.js   「背景动画」：卡带列表、实时预览、参数微调
-│       └── files.js        「资料」：static/ 下文件的上传、复制链接（PDF：复制预览链接 /viewer/?file=…）、删除
+│       ├── courses.js      「课程」：课程列表（分组、顺序）、新建课程、一门课的子推文 / 资料、批量上传、删除课程（第 13 节）
+│       └── files.js        「资料」：static/ 下文件的上传、复制链接（PDF：复制预览链接 /viewer/?file=…）、删除（上传 / 删除逻辑在 uploads.js）
 └── vendor/                 第三方库本地副本（见第 10 节）
 
 tests/admin/                单元测试 + 端到端测试（见第 9 节）
@@ -66,14 +71,15 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
 | 地址 | 视图 | 参数 |
 |---|---|---|
 | `#/posts`（默认） | `views/posts.js` | `filter=all\|published\|draft`（可选） |
-| `#/edit` | `views/editor.js` | `path=<仓库路径>` 打开已有文件；`new=post`；`new=page&dir=<目录>`；`draft=<草稿 key>` |
+| `#/edit` | `views/editor.js` | `path=<仓库路径>` 打开已有文件；`new=post`；`new=page&dir=<目录>`（`<目录>` 是已有介绍页的课程 `content/courses/<课程>` 时 = 新子推文）；`draft=<草稿 key>` |
 | `#/pages` | `views/pages.js` | |
+| `#/courses` | `views/courses.js` | `course=<课程网址名>`（可选；有 = 打开这门课） |
 | `#/profile` | `views/profile.js` | |
 | `#/background` | `views/background.js` | |
 | `#/files` | `views/files.js` | `dir=<static 下的目录>`（可选） |
 | `#/login` | `views/login.js` | 未登录时由外壳自动跳转 |
 
-路由名到模块名的映射在 `main.js` 的 `ROUTES`（例如 `edit` → `editor`）。
+路由名到模块名的映射在 `main.js` 的 `ROUTES`（例如 `edit` → `editor`）。编辑器里打开课程的页面（`content/courses/<课程>/…`，或新子推文）时，导航高亮「课程」（`activeNavRoute`）；「课程资料」总页 `content/courses/_index.md` 仍属于「页面」。
 
 ---
 
@@ -126,7 +132,7 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
    - 网络中断 / 5xx：请求可能已经成功。记下这次写入的内容，多读几次分支指针确认；仍无法确认时抛出 `uncertain` 错误，提示用户稍后再点一次发布——届时第 3 步会识别出"已经是我们写的内容"，不会重复发布。
 7. 成功后用本地记账更新文件树（等于最新树 + 本次修改），触发 `onChange`。
 
-提交信息统一以 `admin: ` 开头（例如 `admin: 发表《标题》`、`admin: 删除资料 xxx.pdf`），方便在 git log 里区分。
+提交信息统一以 `admin: ` 开头（例如 `admin: 发表《标题》`、`admin: 删除资料 xxx.pdf`、`admin: 课程《近代物理实验》上传 3 个文件，新增 2 篇子推文`），方便在 git log 里区分。
 
 ---
 
@@ -162,6 +168,13 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 (b) 手机预览 iframe 的 `srcdoc`（`preview.js`，标题等文字先转义）；
 (c) Vditor 自己渲染的编辑区——`editor.js` 的 `neutralizeEmbeds` 会把 Lute 输出里的 `<iframe>` 等嵌入元素换成不加载任何东西的占位，否则文章里一个指向同源页面的 iframe 就能读到令牌。
 仓库里来的链接只允许 `http(s)`（`posts.js` 的 `safeHref`）。
+
+**不能上传会以本站身份执行脚本的文件**：`static/` 里的文件和后台同源，GitHub Pages 按扩展名给 Content-Type，
+一个 `.html` / `.svg` / `.xml` 被直接打开时，里面的脚本能读到记住的令牌。所以 `uploads.js` 的 `uploadBlockReason(原文件名, 处理后的文件名)`
+拒绝 `BLOCKED_UPLOAD_EXTS`（`html htm xhtml xht shtml xml xsl xslt svg svgz js mjs`，不区分大小写，结尾的空白 / 点去掉后再看），
+并给出中文说明 `BLOCKED_UPLOAD_EXPLAIN`（SVG 建议转成 PNG，网页 / 文档导出成 PDF）。所有上传入口都经过它：
+「资料」和「课程」的上传走 `checkUploads`（列为「不能上传，会被跳过」），编辑器的图片 / 资料 / 封面 / 粘贴拖入走 `refuseUpload`（提示后拒绝）。
+新增上传入口时必须同样检查；不要为了某个文件放宽这份清单（真需要时用户自己用 git 提交）。
 
 **沙箱 iframe**
 
@@ -209,6 +222,8 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 - 编辑器「单独写英文版」= 复制当前内容新建 `xxx.en.md`（发表时才创建文件）；删除专属版本 = 该语言改回显示共用版本。
 - 首页设置里「英文站单独设置」写入 `languages.toml` 的 `[en.params.profileMode]`；留空 = 删除该键，表空了就删表头。
 - 新建栏目：`content/<网址>/_index.md`，填了英文名称时再加 `_index.en.md`。
+- 课程：同样的规则（新建课程填了英文名称 → `_index.en.md`；批量上传的子推文只写共用版本）。网站读 `group`、`weight`、`materialsDir`、`showMaterials` 时，
+  语言专属版本没写就沿用共用版本（`layouts/partials/courses/param.html`），反过来不行；后台改分组时，其他语言版本自己写了不同的分组名就不动它。
 
 ---
 
@@ -263,14 +278,16 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 
 ```bash
 # 在仓库根目录
-node --test tests/admin/            # 单元测试：content / formats / github / mark / mock（index.js 负责加载全部 *.test.mjs）
+node --test tests/admin/            # 单元测试：content / courses（含 uploads）/ formats / github / mark / mock（index.js 负责加载全部 *.test.mjs）
 
 node tests/admin/e2e-shell.mjs       # 登录、导航、退出、401、CSP、手机布局
 node tests/admin/e2e-editor.mjs      # 编辑器：发表 / 更新、英文版、自动保存与恢复、冲突、手机预览、高亮
 node tests/admin/e2e-lists.mjs       # 文章列表、页面与菜单排序、新建栏目
 node tests/admin/e2e-profile.mjs     # 首页设置、头像裁剪
 node tests/admin/e2e-background.mjs  # 背景动画预览与参数
-node tests/admin/e2e-files.mjs       # 资料上传 / 删除
+node tests/admin/e2e-files.mjs       # 资料上传 / 删除（含拒绝 .html / .svg）
+node tests/admin/e2e-courses.mjs     # 「课程」：新建课程、批量上传（一个提交）、只放进资料、顺序、分组、冲突、新子推文、删除课程，最后 Hugo 构建
+node tests/admin/e2e-courses-site.mjs # 网站的课程资料模板：总页分组与顺序、单元页、构建时的资料列表、面包屑、课程内上一篇 / 下一篇、英文站
 node tests/admin/e2e-journey.mjs     # 跨界面的完整使用流程，最后用 Hugo 构建并检查两种语言的网站（含访客打开资料预览 / 嵌入阅读器）
 node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/viewer/ 与 {{< pdf >}} 短代码
 ```
@@ -279,10 +296,10 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 |---|---|
 | `HUGO_BIN` | Hugo 可执行文件，需与 CI 相同（0.147.4 extended）；找不到时依赖 Hugo 的测试自动跳过 |
 | `ADMIN_TEST_TMP` | 测试输出的根目录（默认系统临时目录）；`ADMIN_TEST_KEEP=1` 让 `mock.test.mjs` 保留导出 / 构建结果 |
-| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
-| `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files`；编辑器的后续用例依赖前面的） |
+| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
+| `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files` / `e2e-courses` / `e2e-courses-site`；编辑器和课程的后续用例依赖前面的，只用来调试） |
 | `SKIP_BUILD=1` | 复用上一次的初始构建（`e2e-shell` / `e2e-lists` / `e2e-profile`） |
-| `DEBUG=1` | 打印浏览器控制台输出（`e2e-editor` / `e2e-journey`） |
+| `DEBUG=1` | 打印浏览器控制台输出（`e2e-editor` / `e2e-journey` / `e2e-courses`） |
 
 注意：不要用 `hugo -d /dev/null` 之类的命令做构建检查；e2e 脚本会把构建结果放到上面的目录里。
 
@@ -379,3 +396,95 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 **测试**：`node tests/admin/e2e-viewer.mjs`（`VIEWER_E2E_DIR` 放构建结果和截图）。用固定版本的 Hugo 构建一份导出的仓库副本，
 覆盖：多页中文 PDF 的懒加载与缩放、非嵌入中文字体（检查 cmaps）、PDF 里的 `javascript:` 链接被丢弃、加密 / 损坏的 PDF、
 图片和其他文件、各种非法 `file` 参数（不发出任何请求）、含 `#`、`%`、HTML 字符的文件名、CSP，以及中英文站的 `{{< pdf >}}` 短代码。
+
+---
+
+## 13. 课程（#/courses）
+
+「课程资料」像博客：每门课是一个 Hugo section（单元页），里面可以有子推文。网站的模板和后台**共同遵守**下面的约定，
+改一边必须同步另一边（`courses.test.mjs`、`e2e-courses.mjs`、`e2e-courses-site.mjs` 都有覆盖）。
+使用方法见 [SITE_GUIDE.md 第 6 节「课程资料」](../SITE_GUIDE.md#课程资料课程单元与子推文)。
+
+**内容约定**
+
+| 路径 | 内容 |
+|---|---|
+| `content/courses/_index.md`（+ `.en.md`） | 「课程资料」总页：用户写的说明文字 + 导航菜单项。属于「页面」，不属于「课程」 |
+| `content/courses/<课程>/_index.md`（+ 可选 `_index.en.md`） | 课程单元页。`title`、`description`（一句话，卡片上显示）、可选 `group`（自由文字，原样显示）、`weight`（课程之间的顺序）；可选 `materialsDir`（默认 `static/documents/courses/<课程>/`）、`showMaterials`（默认 `true`）。**没有 `menu`** |
+| `content/courses/<课程>/<篇>.md` | 子推文：`title`、`weight`（课程里的顺序）、可选 `description`、`draft: false`。不需要 `date`（课程里不显示日期） |
+| `static/documents/courses/<课程>/` | 资料文件夹，网址 `/documents/courses/<课程>/…` |
+
+- 排序：`weight` 再标题；`weight` 缺省或 0 排在最后（和 Hugo 一致）。
+- 分组：没有课程写 `group` → 一个没有标题的列表；否则每组一个标题，组按组内最小 `weight`（相同按组名），组内按 `weight`、标题，没有分组的放进最后的「其他」/ Other。
+  后台的 `courses.groupCourses` 和网站的 `layouts/partials/courses/landing.html` 实现同一个规则。没有任何"年级"之类的固定概念。
+
+**网站这一侧**（不属于后台，写在这里是因为约定是共同的）
+
+| 文件 | 作用 |
+|---|---|
+| `layouts/courses/list.html` | `/courses/` → `partials/courses/landing.html`（说明文字 + 课程卡片）；`/courses/<课程>/` → `partials/courses/unit.html`（面包屑、介绍、子推文卡片、资料列表） |
+| `layouts/courses/single.html` | 子推文：面包屑、无日期 / 阅读时间；所在课程是草稿时 `warnf` 提醒 |
+| `layouts/partials/courses/info.html` | 一门课的汇总：分组、子推文（`sort.html`）、资料列表 |
+| `layouts/partials/courses/{param,sort,card,breadcrumbs,size}.html` | 带语言版本回退的参数读取、排序、卡片、面包屑、文件大小 |
+| `layouts/partials/post_nav_links.html` | 覆盖 PaperMod：课程子推文的上一篇 / 下一篇只在同一门课里按 `weight`；其他页面是原版的逐字拷贝 |
+| `i18n/zh.yaml`、`i18n/en.yaml` | `courses_*` 界面文字；PaperMod 自带的条目照常合并 |
+| `assets/css/extended/courses.css` | 样式（只用主题的颜色变量，深浅色自动） |
+
+资料列表在**构建时**生成：`os.ReadDir` 读资料文件夹（相对项目根目录，在 Hugo 0.147.4 和 mock 导出的仓库副本里都可用），
+跳过子文件夹和以 `.` 开头的文件，按文件名排序。PDF / 图片链接到 `/viewer/?file=…`（非默认语言加 `&lang=`），其他文件直接链接（逐段编码）；
+某篇子推文的正文引用了这个文件（原样路径、编码路径、预览链接）时显示「收录于」那一篇。所以后台上传资料**不需要改任何 .md**。
+
+**后台：`views/courses.js`**
+
+- 列表页 `#/courses`：`collectCourses(repo.list('content/'))` + `readFrontMatters` → 按 `groupCourses` 显示（和网站顺序一致）。
+  ↑ ↓ 只在组内交换，分组的 ↑ ↓ 整组移动；「保存顺序」用 `reweight`（原 weight 都是不同的有效数字时只是重新分配这些数字，交换两项只改两个文件；否则按 10、20、30… 重编）
+  → 一个提交，每个文件只用 `patchFields`（= `frontmatter.setFields` + 正文不变校验）改 `weight` 那一行，所有语言版本一起改。
+  「分组」= 改 `group`（`canonicalGroup`：只差大小写 / 空白时沿用已有写法）；分组「改名」= 所有分组名等于旧名字的文件一起改。
+- 「新建课程」：`_index.md`（+ 填了英文名称时 `_index.en.md`），`weight` = `nextWeights` 接在最大值后面，`baseSha: null`（网址被占用 → 冲突提示换网址）。
+- 详情页 `#/courses?course=<课程>`：子推文（顺序、编辑、删除全部语言版本）、资料（复制预览链接 / 复制链接、打开、删除——`uploads.deleteStaticFile`，先列出引用）、
+  「删除课程」（`courseDeletionPlan`：课程文件夹全部文件 + `static/images/pages/courses/<课程>/`；资料文件夹只在勾选、且是默认文件夹时删除；一个提交）。
+- 编辑器配合（`editor.js`）：`#/edit?new=page&dir=content/courses/<课程>` 在课程已有介绍页时 = 新子推文（填文件名；第一次发表时 `weight` = 本课最大值之后；
+  front matter 顺序 `title, weight, description, draft`；没有日期和菜单）；课程里的页面不显示菜单字段；「资料」按钮上传到这门课的资料文件夹；
+  课程介绍页改为草稿时用 `draftCascadeUpdate` 加上 `cascade: { build: { render: never, list: never } }`（Hugo 不会因为 section 是草稿就隐藏子页面），
+  恢复发表时只去掉这份后台写的 cascade；只删介绍页而文件夹里还有子推文时，引导到「删除课程」。`pages.js` 不列课程目录，只在总页那一行放一个「在「课程」里管理」的链接。
+
+**批量上传的提交形状**
+
+流程：选文件 / 拖放 → 去掉系统垃圾文件 → 可选压缩 JPG / PNG（`prepareUpload`）→ `assignUniqueNames`（同批重名加 -2）→ 路径 `<资料目录>/<文件名>`
+→ `checkUploads`（拒绝类型、≥ 95 MB、和文件夹重名；提醒 ≥ 25 MB、替换、`.gitignore`、HEIC）→ 对话框（每个文件「生成子推文」/「只放进资料列表」、标题）
+→ **一次** `ctx.publish`：
+
+```js
+{
+  message: 'admin: 课程《近代物理实验》上传 3 个文件，新增 2 篇子推文',
+  // 只放进资料：'admin: 课程《…》上传资料 a.pdf' / 'admin: 课程《…》上传资料 a.pdf 等 3 个文件'
+  changes: [
+    { path: 'static/documents/courses/modern-physics-lab/photoelectric.pdf', content: Blob, baseSha: null },  // 替换已有文件时是它的 sha
+    { path: 'static/documents/courses/modern-physics-lab/franck-hertz.pdf',  content: Blob, baseSha: null },
+    { path: 'static/documents/courses/modern-physics-lab/实验数据.xlsx',     content: Blob, baseSha: null },
+    { path: 'content/courses/modern-physics-lab/photoelectric.md', content: itemDocument(…), baseSha: null },
+    { path: 'content/courses/modern-physics-lab/franck-hertz.md',  content: itemDocument(…), baseSha: null },
+  ],
+  summary: ['上传 …（大小）', …, '新增子推文 …《标题》', …],
+  viewUrl: '<站点>/courses/modern-physics-lab/', viewLabel: '查看课程',
+}
+```
+
+- 子推文：`weight` = `nextWeights(现有 weight, n)`（最大 20 → 30、40…；没有 → 10、20…）；文件名 = `itemSlugFor(标题, 原文件名, 已占用)`
+  （标题有英文字母就用标题，否则用文件名，再不行 `item-<标题里的数字>`；重名加 -2）；正文 = `itemBodyFor`：PDF → `{{< pdf "<网站路径>" >}}`，
+  图片 → `![标题](路径)`，其他 → `[下载 文件名](路径)`。front matter 由 `itemDocument` 生成（`title, weight, description?, draft: false`）。
+- 冲突或失败：这一批保留在 `state.pendingBatch`，页面顶部出现「重新检查并上传」/「放弃」；重试时从压缩后的名字重新检查（必要时先 `repo.load()`），
+  不会重复上传已成功的提交（第 3 节）。有未完成的一批时 `canLeave` 会确认。
+
+**共用模块**
+
+- `uploads.js`：「资料」页（`files.js`）、「课程」页、编辑器共用。新增上传入口时请复用 `checkUploads` / `uploadReviewSections` / `refusedContent`，
+  至少调用 `uploadBlockReason`（第 4 节）。`files.js` 仍然导出 `parseGitignore` / `createIgnoreMatcher`（实现已移到这里），旧测试不用改。
+- `courses.js`：纯函数，Node 里可直接导入测试；视图只做界面和 `ctx.publish`。
+
+**测试**
+
+- 单元：`tests/admin/courses.test.mjs`（路径、排序 / 分组 / reweight / nextWeights、标题和网址、新文件模板、子推文正文、草稿 cascade、删除计划，以及 `uploads: blocked types`）。
+- `node tests/admin/e2e-courses.mjs`（`COURSES_E2E_DIR`）：后台「课程」页的完整流程，检查提交内容（字节级的 PDF、精确的 front matter、只改 weight 那一行），最后用 Hugo 构建导出的仓库。
+- `node tests/admin/e2e-courses-site.mjs`（`COURSES_SITE_E2E_DIR`）：只测网站模板，用 mock 写入固定的课程夹具（不碰真实 `content/`），构建「有分组」「无分组」两个版本和一个边界情况版本（草稿课程、嵌套子栏目、`materialsDir`、只差大小写的分组名……），并要求构建没有 WARN / ERROR。
+- 拒绝上传的类型：`e2e-files.mjs`、`e2e-courses.mjs`、`e2e-editor.mjs` 都有用例；`e2e-journey.mjs` 里也有新建「近代物理实验」并批量上传两份实验报告的步骤。

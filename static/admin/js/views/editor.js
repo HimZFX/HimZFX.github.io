@@ -4,7 +4,9 @@
  * 路由：
  *   #/edit?path=<仓库路径>         打开已有文件（同一页面的所有语言版本作为标签页）
  *   #/edit?new=post                写新文章（共用版本 content/posts/<文件名>.md）
- *   #/edit?new=page&dir=<目录>     新建栏目首页（<目录>/_index.md）
+ *   #/edit?new=page&dir=<目录>     新建栏目首页（<目录>/_index.md）；
+ *                                  <目录> 是一门课（content/courses/<课程>，已有 _index）时 = 新建这门课的子推文
+ *                                  （content/courses/<课程>/<文件名>.md，weight 排在最后，没有菜单）
  *   #/edit?draft=<草稿 key>        继续编辑一份本机草稿（drafts.js）
  *
  * 数据模型：一个「页面组」（content.groupPages）的每个版本（共用 / 中文专属 / 英文专属）是一个 variant，
@@ -31,6 +33,8 @@ import {
   splitDocument, parseFrontMatter, setFields, buildDocument, newFrontMatter, FrontMatterError,
 } from '../frontmatter.js';
 import { compressImage, timestampName, safeFileName, extOf } from '../images.js';
+import * as CM from '../courses.js';
+import { uploadBlockReason, BLOCKED_UPLOAD_EXPLAIN } from '../uploads.js';
 import * as drafts from '../drafts.js';
 import { parseToml } from '../tomlpatch.js';
 import { renderPreview, ensureVditor, loadIconScript, VDITOR_MARKDOWN } from '../preview.js';
@@ -512,6 +516,8 @@ class Editor {
     this.activeKey = null;
     this.kind = 'post';               // 'post' | 'page'
     this.isNewGroup = false;          // 还没保存过的新文章 / 新页面
+    this.courseItem = false;          // 新建的是课程子推文（content/courses/<课程>/<文件名>.md）
+    this.courseFm = null;             // 所在课程 _index 的 front matter（资料目录 materialsDir）
     this.group = null;                // { key, dir, base, isIndex, variants }
     this.slug = { value: '', touched: false };
     this.newKey = null;               // 新文章的草稿 key（new:…）
@@ -592,7 +598,9 @@ class Editor {
     } else if (p.new === 'page') {
       const dir = this.normalizeDir(p.dir);
       const index = `${dir}/_index.md`;
-      if (this.repo.has(index)) {
+      if (CM.isCourseDir(dir) && this.courseHasIndex(dir)) {
+        this.openNewCourseItem(dir);
+      } else if (this.repo.has(index)) {
         await this.openPath(index);
       } else {
         this.openNewPage(dir);
@@ -601,6 +609,7 @@ class Editor {
       this.openNewPost();
     }
 
+    await this.loadCourseFm();
     this.buildLayout();
     await this.createVditor();
     if (this.destroyed) return;
@@ -616,7 +625,7 @@ class Editor {
     document.addEventListener('keydown', this.onKeyDown, true);
     document.addEventListener('visibilitychange', this.onHidden);
     window.addEventListener('pagehide', this.onHidden);
-    this.ctx.setTitle(this.isNewGroup ? (this.kind === 'post' ? '写新文章' : '新建页面') : (this.kind === 'post' ? '编辑文章' : '编辑页面'));
+    this.ctx.setTitle(this.isNewGroup ? (this.kind === 'post' ? '写新文章' : this.courseItem ? '新子推文' : '新建页面') : (this.kind === 'post' ? '编辑文章' : '编辑页面'));
     this.loadEffectNames();
     this.leaving = false;
   }
@@ -666,6 +675,7 @@ class Editor {
   }
 
   collectBases() {
+    if (this.courseItem) { this.collectCourseBases(this.group.dir); return; }
     const bases = new Set();
     for (const e of this.repo.list(PATHS.posts + '/')) {
       const rest = e.path.slice(PATHS.posts.length + 1);
@@ -674,6 +684,63 @@ class Editor {
       if (info) bases.add(info.base.toLowerCase());
     }
     this.existingBases = bases;
+  }
+
+  /** 新子推文不能和这门课里已有的文件 / 文件夹重名。 */
+  collectCourseBases(dir) {
+    const bases = new Set(['_index', 'index']);
+    for (const e of this.repo.list(dir + '/')) {
+      const rest = e.path.slice(dir.length + 1);
+      if (rest.includes('/')) { bases.add(rest.split('/')[0].toLowerCase()); continue; }
+      const info = C.parseContentPath(e.path, this.langs);
+      bases.add((info ? info.base : rest).toLowerCase());
+    }
+    this.existingBases = bases;
+  }
+
+  /** 正在编辑的是一门课的介绍页（content/courses/<课程>/_index*.md）。 */
+  isCourseIndex() {
+    return !!(this.group && this.group.isIndex && this.courseSlug());
+  }
+
+  /** 这门课已经有介绍页（_index.md 的任一语言版本）。 */
+  courseHasIndex(dir) {
+    return this.repo.list(dir + '/').some((e) => {
+      const info = C.parseContentPath(e.path, this.langs);
+      return info && info.isIndex && info.dir === dir;
+    });
+  }
+
+  /** 页面在某门课里（课程单元页或子推文）→ 那门课的网址名，否则 null。 */
+  courseSlug() {
+    const dir = this.group && this.group.dir;
+    return dir && CM.isCourseDir(dir) ? dir.slice(CM.COURSES_DIR.length + 1) : null;
+  }
+
+  /** 读所在课程 _index 的 front matter（资料目录用；读不到就用默认目录）。 */
+  async loadCourseFm() {
+    const slug = this.courseSlug();
+    if (!slug) return;
+    const dir = this.group.dir;
+    const p = [null, this.ctx.defaultLang, ...this.langs].map((l) => C.variantPath(dir, '_index', l)).find((x) => this.repo.has(x));
+    if (!p) return;
+    try { this.courseFm = parseFrontMatter(splitDocument(await this.repo.readText(p)).fmText); } catch { this.courseFm = null; }
+  }
+
+  /** 编辑器上传的资料放在哪里：课程里的页面 → 这门课的资料文件夹；其他 → static/documents。 */
+  docDir() {
+    const slug = this.courseSlug();
+    return slug ? CM.materialsDirFor(slug, this.courseFm || {}) : PATHS.documents;
+  }
+
+  /** 新文章 / 新子推文要填文件名（网址）。 */
+  get hasSlugField() {
+    return this.isNewGroup && (this.kind === 'post' || this.courseItem);
+  }
+
+  /** 新子推文的文件路径（共用版本）。 */
+  newItemPath() {
+    return this.kind === 'post' ? C.variantPath(PATHS.posts, this.slug.value, null) : C.variantPath(this.group.dir, this.slug.value, null);
   }
 
   normalizeDir(dir) {
@@ -792,15 +859,48 @@ class Editor {
     const path = `${dir}/_index.md`;
     // 菜单顺序默认排在现有菜单项后面
     const v = this.makeVariant({ key: 'shared', path, exists: false, sha: null, fmText: null, fm: {}, body: '' });
-    v.form = this.defaultForm({ inMenu: true, weight: '' });
+    // 课程的介绍页（content/courses/<课程>/_index.md）不进导航菜单：课程列在「课程资料」页上，顺序在「课程」页里调
+    const course = CM.isCourseDir(dir);
+    v.form = this.defaultForm({ inMenu: !course, weight: '' });
     v.baseForm = clone(v.form);
     v.isNew = true;
     this.variants.set('shared', v);
     this.activeKey = 'shared';
-    this.suggestWeight(v);
+    if (!course) this.suggestWeight(v);
     drafts.loadDraft(v.draftKey).then((rec) => {
       if (rec && !this.destroyed) { v.localDraft = rec; this.renderBanners(); }
     });
+  }
+
+  /** 新建课程子推文：content/courses/<课程>/<文件名>.md，weight 排在这门课现有子推文后面，不加菜单。 */
+  openNewCourseItem(dir, draftKey) {
+    this.isNewGroup = true;
+    this.kind = 'page';
+    this.courseItem = true;
+    this.newKey = draftKey || drafts.newDraftKey();
+    this.group = { key: null, dir, base: '', isIndex: false, variants: {} };
+    this.collectCourseBases(dir);
+    const v = this.makeVariant({ key: 'shared', path: null, exists: false, sha: null, fmText: null, fm: {}, body: '' });
+    v.form = this.defaultForm();
+    v.baseForm = clone(v.form);
+    v.isNew = true;
+    v.draftKey = this.newKey;
+    this.variants.set('shared', v);
+    this.activeKey = 'shared';
+    this.slug = { value: CM.itemSlugFor('', '', this.existingBases), touched: false };
+  }
+
+  /** 这门课现有子推文最大的 weight 之后的下一个（10、20、30…）。 */
+  async nextItemWeight() {
+    const dir = this.group.dir;
+    const groups = C.groupPages(this.repo.list(dir + '/'), this.langs).filter((g) => g.dir === dir && !g.isIndex);
+    const ws = [];
+    for (const g of groups) {
+      for (const p of Object.values(g.variants)) {
+        try { ws.push(CM.weightOf(parseFrontMatter(splitDocument(await this.repo.readText(p)).fmText))); } catch { /* 忽略格式有问题的文件 */ }
+      }
+    }
+    return CM.nextWeights(ws, 1)[0];
   }
 
   async suggestWeight(v) {
@@ -823,6 +923,14 @@ class Editor {
 
   openNewFromDraft(key, rec) {
     const f = rec.fields || {};
+    if (f.courseItem && CM.isCourseDir(f.dir)) {
+      this.openNewCourseItem(this.normalizeDir(f.dir), key);
+      if (f.slug) this.slug = { value: str(f.slug), touched: !!f.slugTouched };
+      const v = this.variants.get('shared');
+      v.localDraft = rec;
+      this.pendingAutoApply = true;
+      return;
+    }
     this.isNewGroup = true;
     this.kind = f.kind === 'page' ? 'page' : 'post';
     this.newKey = key;
@@ -1067,7 +1175,7 @@ class Editor {
       const dot = name.lastIndexOf('.');
       const stem = dot > 0 ? name.slice(0, dot) : name;
       const ext = dot > 0 ? name.slice(dot) : '';
-      const taken = (n) => this.media.has(n) || (kind === 'doc' && this.repo.has(`${PATHS.documents}/${n}`));
+      const taken = (n) => this.media.has(n) || (kind === 'doc' && this.repo.has(`${this.docDir()}/${n}`));
       for (let i = 2; taken(finalName); i++) finalName = `${stem}-${i}${ext}`;
     } else if (this.media.has(name)) {
       const existing = this.media.get(name);
@@ -1083,6 +1191,9 @@ class Editor {
   }
 
   imageDir() {
+    if (this.courseItem && this.isNewGroup) {
+      return C.imageDirFor({ dir: this.group.dir, base: this.slug.value, isIndex: false });
+    }
     if (this.kind === 'post') {
       const base = this.isNewGroup ? this.slug.value : this.group.base;
       return C.imageDirFor({ dir: PATHS.posts, base, isIndex: false });
@@ -1103,7 +1214,7 @@ class Editor {
   }
 
   docSitePath(name) {
-    return mdDest(C.sitePathFor(`${PATHS.documents}/${name}`));
+    return mdDest(C.sitePathFor(`${this.docDir()}/${name}`));
   }
 
   /** 草稿用：blob 地址 → admin-pending://名字 */
@@ -1139,7 +1250,7 @@ class Editor {
     for (const [name, m] of this.media) {
       if (m.kind === 'image') {
         if ((m.url && md.includes(m.url)) || md.includes(PENDING + name) || cover === PENDING + name) used.push(name);
-      } else if (md.includes(this.docSitePath(name)) || C.referencesSitePath(md, C.sitePathFor(`${PATHS.documents}/${name}`))) {
+      } else if (md.includes(this.docSitePath(name)) || C.referencesSitePath(md, C.sitePathFor(`${this.docDir()}/${name}`))) {
         // 直接链接、在线预览链接（/viewer/?file=…）或 {{< pdf >}} 短代码
         used.push(name);
       }
@@ -1181,7 +1292,7 @@ class Editor {
       this.active.form.title = els.title.value;
       this.fitTitle();
       els.titleError.hidden = true;
-      if (this.isNewGroup && this.kind === 'post' && !this.slug.touched) this.updateSlugSuggestion();
+      if (this.hasSlugField && !this.slug.touched) this.updateSlugSuggestion();
       this.changed();
     });
     els.title.addEventListener('keydown', (e) => {
@@ -1977,11 +2088,13 @@ class Editor {
             newGroup: this.isNewGroup,
             slug: this.slug.value,
             slugTouched: this.slug.touched,
+            courseItem: this.courseItem || undefined,
           },
           images,
           path: v.path || undefined,
           baseSha: v.exists ? v.sha : null,
-          groupKey: this.group.key || undefined,
+          // 新子推文还没有页面组：用「目录/文件名」，这样草稿列在「页面」而不是「文章」里
+          groupKey: this.group.key || (this.courseItem ? `${this.group.dir}/${this.slug.value || 'new'}` : undefined),
           updatedAt: Date.now(),
         });
         this.autosaveOk = ok;
@@ -2288,7 +2401,8 @@ class Editor {
     if (sum) {
       sum.textContent = this.kind === 'post'
         ? [v.form.tags.length ? `${v.form.tags.length} 个标签` : '', v.form.date ? formatDate(v.form.date).slice(0, 10) : ''].filter(Boolean).join(' · ')
-        : (v.form.inMenu ? `菜单顺序 ${v.form.weight || '—'}` : '不在菜单中');
+        : this.courseSlug() && !v.form.inMenu ? (this.group.isIndex ? '课程介绍页' : '课程子推文')
+          : (v.form.inMenu ? `菜单顺序 ${v.form.weight || '—'}` : '不在菜单中');
     }
   }
 
@@ -2361,41 +2475,7 @@ class Editor {
 
     if (this.kind === 'post') {
       if (this.isNewGroup) {
-        const slugInput = h('input', {
-          class: 'input mono', type: 'text', value: this.slug.value, placeholder: 'my-first-post',
-          autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', maxlength: 81,
-          dataset: { testid: 'editor-slug' },
-        });
-        const urlHint = h('div', { class: 'hint' });
-        const err = h('div', { class: 'error', role: 'alert', dataset: { testid: 'editor-slug-error' } });
-        const update = () => {
-          const e = this.slugError();
-          err.textContent = e || '';
-          err.hidden = !e || !this.slug.value;
-          slugInput.setAttribute('aria-invalid', e && this.slug.value ? 'true' : 'false');
-          urlHint.textContent = `网址：/posts/${this.slug.value || '…'}/ · 只能用小写字母、数字和 -`;
-        };
-        slugInput.addEventListener('input', () => {
-          const raw = slugInput.value;
-          const cleaned = raw.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-{2,}/g, '-');
-          if (cleaned !== raw) slugInput.value = cleaned;
-          this.slug.value = cleaned.replace(/^-+/, '');
-          this.slug.touched = this.slug.value !== '';
-          if (!this.slug.touched) this.updateSlugSuggestion();
-          update();
-          this.renderSlugHint();
-          this.changed();
-        });
-        slugInput.addEventListener('blur', () => {
-          const t = this.slug.value.replace(/-+$/, '');
-          if (t !== this.slug.value) { this.slug.value = t; slugInput.value = t; update(); }
-        });
-        els.slugInput = slugInput;
-        els.slugUpdate = update;
-        update();
-        items.push(h('div', { class: 'field' },
-          h('label', { htmlFor: 'ed-slug' }, '文件名（网址）'),
-          Object.assign(slugInput, { id: 'ed-slug' }), urlHint, err));
+        items.push(this.slugFieldEl());
       } else {
         items.push(h('div', { class: 'field' },
           h('span', { class: 'label' }, '文件'),
@@ -2444,9 +2524,25 @@ class Editor {
       const bgOff = isPlainObject(v.fm.background) && v.fm.background.enabled === false;
       items.push(this.field('背景动画', sel, { id: 'ed-effect', hint: bgOff ? '这篇文章设置了 background.enabled: false（不显示背景动画）。' : null }));
     } else {
-      items.push(h('div', { class: 'field' },
-        h('span', { class: 'label' }, '文件'),
-        h('div', { class: 'ed-path mono small', title: v.path || '' }, v.path || '')));
+      const inCourse = !!this.courseSlug();
+      if (this.hasSlugField) items.push(this.slugFieldEl());
+      else {
+        items.push(h('div', { class: 'field' },
+          h('span', { class: 'label' }, '文件'),
+          h('div', { class: 'ed-path mono small', title: v.path || '' }, v.path || '')));
+      }
+      if (inCourse) {
+        // 课程里的页面：顺序（weight）和分组（group）在「课程」页里调整，这里不改它们
+        items.push(h('div', { class: 'field' },
+          h('span', { class: 'label' }, this.group.isIndex ? '课程' : '在课程里的位置'),
+          h('div', { class: 'hint', dataset: { testid: 'editor-course-note' } },
+            this.group.isIndex
+              ? '这是一门课的介绍页。分组和课程顺序在「课程」页里调整（保存时不会改动它们）。'
+              : this.isNewGroup ? '新子推文排在这门课现有子推文的最后面，发表后可以在「课程」页里调整顺序。' : '顺序在「课程」页里用 ↑ ↓ 调整。'),
+          h('a', { class: 'btn btn-sm btn-ghost', href: '#/courses?course=' + encodeURIComponent(this.courseSlug()), dataset: { testid: 'editor-course-link' } }, svgIcon('course'), '打开这门课')));
+      }
+    }
+    if (this.kind !== 'post' && !(this.courseSlug() && !v.baseForm.inMenu)) {
       const lt = h('input', { class: 'input', type: 'text', id: 'ed-linktitle', value: f.linkTitle, placeholder: f.title || '和标题相同', dataset: { testid: 'editor-linktitle' } });
       lt.addEventListener('input', () => set('linkTitle', lt.value));
       items.push(this.field('菜单名称', lt, { id: 'ed-linktitle', hint: '顶部菜单里显示的名字，留空则使用标题。', optional: true }));
@@ -2461,13 +2557,59 @@ class Editor {
         this.changed();
       }, { testid: 'editor-inmenu' }));
       items.push(weightField);
-
+    }
+    if (this.kind !== 'post') {
       const desc = h('textarea', { class: 'input', id: 'ed-desc', rows: 3, value: f.description, dataset: { testid: 'editor-description' } });
       desc.addEventListener('input', () => set('description', desc.value));
-      items.push(this.field('描述', desc, { id: 'ed-desc', optional: true }));
+      items.push(this.field('描述', desc, { id: 'ed-desc', optional: true, hint: this.courseSlug() ? '一句话，显示在课程页的卡片上。' : null }));
     }
     render(els.settingsBody, items);
     this.renderStatus();
+  }
+
+  /** 新文章 / 新子推文的「文件名（网址）」输入框。 */
+  slugFieldEl() {
+    const els = this.els;
+    const slugInput = h('input', {
+      class: 'input mono', type: 'text', value: this.slug.value, placeholder: 'my-first-post',
+      autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', maxlength: 81,
+      dataset: { testid: 'editor-slug' },
+    });
+    const urlHint = h('div', { class: 'hint' });
+    const err = h('div', { class: 'error', role: 'alert', dataset: { testid: 'editor-slug-error' } });
+    const update = () => {
+      const e = this.slugError();
+      err.textContent = e || '';
+      err.hidden = !e || !this.slug.value;
+      slugInput.setAttribute('aria-invalid', e && this.slug.value ? 'true' : 'false');
+      urlHint.textContent = `网址：${this.slugUrlPrefix()}${this.slug.value || '…'}/ · 只能用小写字母、数字和 -`;
+    };
+    slugInput.addEventListener('input', () => {
+      const raw = slugInput.value;
+      const cleaned = raw.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-{2,}/g, '-');
+      if (cleaned !== raw) slugInput.value = cleaned;
+      this.slug.value = cleaned.replace(/^-+/, '');
+      this.slug.touched = this.slug.value !== '';
+      if (!this.slug.touched) this.updateSlugSuggestion();
+      update();
+      this.renderSlugHint();
+      this.changed();
+    });
+    slugInput.addEventListener('blur', () => {
+      const t = this.slug.value.replace(/-+$/, '');
+      if (t !== this.slug.value) { this.slug.value = t; slugInput.value = t; update(); }
+    });
+    els.slugInput = slugInput;
+    els.slugUpdate = update;
+    update();
+    return h('div', { class: 'field' },
+      h('label', { htmlFor: 'ed-slug' }, '文件名（网址）'),
+      Object.assign(slugInput, { id: 'ed-slug' }), urlHint, err);
+  }
+
+  slugUrlPrefix() {
+    if (this.kind === 'post') return '/posts/';
+    return '/' + this.group.dir.slice(PATHS.content.length + 1) + '/';
   }
 
   coverField(v) {
@@ -2503,7 +2645,9 @@ class Editor {
   }
 
   updateSlugSuggestion() {
-    this.slug.value = C.suggestSlug(this.active.form.title, this.existingBases);
+    this.slug.value = this.courseItem
+      ? CM.itemSlugFor(this.active.form.title, '', this.existingBases)
+      : C.suggestSlug(this.active.form.title, this.existingBases);
     if (this.els.slugInput) {
       this.els.slugInput.value = this.slug.value;
       this.els.slugUpdate && this.els.slugUpdate();
@@ -2544,7 +2688,7 @@ class Editor {
     const s = this.slug.value;
     if (!s) return '请填写文件名（只用小写字母、数字和 -）';
     if (!C.isValidSlug(s)) return '文件名只能包含小写字母、数字和 -，并以字母或数字开头';
-    if (this.existingBases.has(s.toLowerCase())) return '已经有同名的文章了，请换一个文件名';
+    if (this.existingBases.has(s.toLowerCase())) return this.courseItem ? '这门课里已经有同名的子推文了，请换一个文件名' : '已经有同名的文章了，请换一个文件名';
     return null;
   }
 
@@ -2554,6 +2698,7 @@ class Editor {
   /** 压缩并登记一张图片；返回 { name, url } 或 null。 */
   async prepareImage(file) {
     const ext = extOf(file.name || '');
+    if (this.refuseUpload(file)) return null;
     let result;
     try {
       result = await compressImage(file, { maxWidth: LIMITS.imageMaxWidth, quality: LIMITS.imageQuality });
@@ -2579,6 +2724,7 @@ class Editor {
 
   /** 资料（非图片文件）：放进 static/documents/，与文章一起提交。 */
   prepareDocument(file) {
+    if (this.refuseUpload(file)) return null;
     if (file.size >= LIMITS.maxFileMB * MB) {
       toast(`文件「${file.name}」太大（${formatBytes(file.size)}），超过 ${LIMITS.maxFileMB} MB，无法上传`, { type: 'error' });
       return null;
@@ -2587,6 +2733,18 @@ class Editor {
       toast(`文件「${file.name}」比较大（${formatBytes(file.size)}），上传会慢一些`, { type: 'warning' });
     }
     return this.addMedia(safeFileName(file.name || 'file'), file, 'doc');
+  }
+
+  /**
+   * 不允许上传的类型（.html / .svg / .js …，见 uploads.js）：提示原因并拒绝。
+   * 它们放在 static/ 里被直接打开时，脚本会以本站身份运行，能读到记住的登录令牌。
+   */
+  refuseUpload(file) {
+    const name = String((file && file.name) || '');
+    const r = uploadBlockReason(name, safeFileName(name || 'file'));
+    if (!r) return false;
+    toast(`「${name}」不能上传：${r.note}。${BLOCKED_UPLOAD_EXPLAIN}`, { type: 'error', timeout: 12000 });
+    return true;
   }
 
   /** Vditor 的上传入口：工具栏上传按钮、粘贴、拖入都会走这里。 */
@@ -2604,7 +2762,7 @@ class Editor {
         } else {
           const m = this.prepareDocument(file);
           // PDF 默认插入在线预览链接（安卓手机和微信里也能看）；想嵌入阅读器可以用「资料」按钮
-          if (m) parts.push(this.docMarkdown(C.sitePathFor(`${PATHS.documents}/${m.name}`), file.name, 'link'));
+          if (m) parts.push(this.docMarkdown(C.sitePathFor(`${this.docDir()}/${m.name}`), file.name, 'link'));
         }
       }
     } finally {
@@ -2707,8 +2865,9 @@ class Editor {
 
   /** 「资料」按钮：选择 static/documents/ 里的文件插入（PDF 可选在线预览链接或嵌入阅读器），或上传新资料。 */
   openDocuments() {
-    const files = this.repo.list(PATHS.documents + '/');
-    const pending = [...this.media.entries()].filter(([, m]) => m.kind === 'doc' && !m.committed).map(([name]) => ({ path: `${PATHS.documents}/${name}`, size: this.media.get(name).blob.size, pending: true }));
+    const docDir = this.docDir();
+    const files = [...this.repo.list(PATHS.documents + '/'), ...(docDir === PATHS.documents || docDir.startsWith(PATHS.documents + '/') ? [] : this.repo.list(docDir + '/'))];
+    const pending = [...this.media.entries()].filter(([, m]) => m.kind === 'doc' && !m.committed).map(([name]) => ({ path: `${docDir}/${name}`, size: this.media.get(name).blob.size, pending: true }));
     const all = [...pending, ...files];
     const search = h('input', { class: 'input', type: 'search', placeholder: '搜索资料…', 'aria-label': '搜索资料', dataset: { testid: 'editor-docs-search' } });
     const listEl = h('div', { class: 'list ed-doc-list' });
@@ -2761,7 +2920,7 @@ class Editor {
         type: 'button', class: 'list-item ed-doc-item', dataset: { testid: 'editor-doc-item' }, on: { click: () => insert(f.path) },
       },
       h('div', { class: 'list-item-main' },
-        h('div', { class: 'list-item-title' }, f.path.slice(PATHS.documents.length + 1)),
+        h('div', { class: 'list-item-title' }, f.path.startsWith(PATHS.documents + '/') ? f.path.slice(PATHS.documents.length + 1) : f.path.slice('static/'.length)),
         h('div', { class: 'list-item-meta' }, C.sitePathFor(f.path), ' · ', formatBytes(f.size), f.pending ? badge('待上传', 'orange') : null)),
       svgIcon('plus'))));
     };
@@ -2774,7 +2933,7 @@ class Editor {
       const items = [];
       for (const file of chosen) {
         const added = this.prepareDocument(file);
-        if (added) items.push({ sitePath: C.sitePathFor(`${PATHS.documents}/${added.name}`), text: file.name });
+        if (added) items.push({ sitePath: C.sitePathFor(`${docDir}/${added.name}`), text: file.name });
       }
       m.close();
       if (items.length) {
@@ -2788,7 +2947,9 @@ class Editor {
     m = modal({
       title: '插入资料',
       content: h('div', { class: 'stack-sm stack' },
-        h('p', { class: 'muted small' }, '资料放在 static/documents/ 里，点一下插入；PDF 可以插入在线预览链接（安卓手机和微信里也能看），或直接嵌入阅读器。也可以上传新文件（随文章一起发表）。'),
+        h('p', { class: 'muted small' }, docDir === PATHS.documents
+          ? '资料放在 static/documents/ 里，点一下插入；PDF 可以插入在线预览链接（安卓手机和微信里也能看），或直接嵌入阅读器。也可以上传新文件（随文章一起发表）。'
+          : `资料放在 static/documents/ 里，点一下插入；PDF 可以插入在线预览链接（安卓手机和微信里也能看），或直接嵌入阅读器。上传的新文件放进这门课的资料文件夹 ${docDir}/（随这一页一起发表，也会列在课程页的资料里）。`),
         search, listEl, upload),
       actions: [
         { text: '取消', kind: 'ghost' },
@@ -2893,6 +3054,11 @@ class Editor {
     const fm = v.fm || {};
     const wantDraft = mode === 'draft';
     if (C.isDraftFm(fm) !== wantDraft) u.draft = wantDraft;
+    if (this.isCourseIndex()) {
+      // 课程设为草稿：Hugo 不会自动隐藏它的子推文，用 cascade.build 一起隐藏；恢复发布时去掉（见 courses.js）
+      const cu = CM.draftCascadeUpdate(fm, wantDraft);
+      if (cu.change) u.cascade = cu.value;
+    }
     if (f.title !== b.title) u.title = f.title.trim();
     if (f.description !== b.description) u.description = f.description.trim() ? f.description.trim() : undefined;
     if (this.kind === 'post') {
@@ -2933,12 +3099,18 @@ class Editor {
       if (f.math !== this.siteDefaults.math) out.math = f.math;
       if (f.comments !== this.siteDefaults.comments) out.comments = f.comments;
       if (f.effect) out.background = { effect: f.effect };
+    } else if (this.courseItem) {
+      // 课程子推文：title、weight（课程里的顺序）、可选 description、draft；没有菜单、没有日期
+      out.weight = v.itemWeight;
+      if (f.description.trim()) out.description = f.description.trim();
+      out.draft = mode === 'draft';
     } else {
       if (f.linkTitle.trim()) out.linkTitle = f.linkTitle.trim();
       out.draft = mode === 'draft';
       if (f.description.trim()) out.description = f.description.trim();
       const menu = buildMenu(undefined, f.inMenu, f.weight);
       if (menu) out.menu = menu;
+      if (out.draft && this.isCourseIndex()) out.cascade = CM.draftCascadeUpdate({}, true).value;
     }
     return out;
   }
@@ -2956,7 +3128,7 @@ class Editor {
       toast('请先填写标题', { type: 'warning' });
       return false;
     }
-    if (this.isNewGroup && this.kind === 'post') {
+    if (this.hasSlugField) {
       const err = this.slugError();
       if (err) {
         this.toggleSettings(true);
@@ -3040,16 +3212,16 @@ class Editor {
       } else if (v.exists && v.published) {
         const ok = await confirmDialog({
           title: '改为草稿？',
-          message: '这一页已经发表了。保存为草稿后，网站上将不再显示它，直到你再次发表。',
+          message: this.isCourseIndex()
+            ? '这门课已经发表了。保存为草稿后，网站上的课程页和它的全部子推文都不再显示（课程资料文件仍然可以通过网址打开），直到你再次发表。'
+            : '这一页已经发表了。保存为草稿后，网站上将不再显示它，直到你再次发表。',
           okText: '改为草稿', danger: true,
         });
         if (!ok) return;
       }
     }
 
-    const path = this.isNewGroup && this.kind === 'post'
-      ? C.variantPath(PATHS.posts, this.slug.value, null)
-      : v.path;
+    const path = this.hasSlugField ? this.newItemPath() : v.path;
     if (this.isNewGroup && this.repo.has(path)) {
       toast('已经有同名的文件了，请换一个文件名', { type: 'warning' });
       return;
@@ -3059,6 +3231,11 @@ class Editor {
     if (this.kind === 'post' && v.isNew && !v.form.date) {
       v.form.date = hugoDate();
       v.needsAutosave = true;
+    }
+    // 新子推文：顺序排在这门课现有子推文后面（第一次发表时定下来，重试时不变）
+    if (this.courseItem && v.isNew && v.itemWeight == null) {
+      v.itemWeight = await this.nextItemWeight();
+      if (this.destroyed) return;
     }
     const imgDir = this.imageDir();
 
@@ -3073,7 +3250,9 @@ class Editor {
       used = fb.used;
       bodyUnchanged = fb.unchanged;
       if (v.isNew && v.fmText === null) {
-        newFm = newFrontMatter(this.newFields(v, mode, imgDir));
+        newFm = this.courseItem
+          ? newFrontMatter(this.newFields(v, mode, imgDir), ['title', 'weight', 'description', 'draft'])
+          : newFrontMatter(this.newFields(v, mode, imgDir));
       } else {
         const updates = this.computeUpdates(v, mode, imgDir);
         const hasUpdates = Object.keys(updates).length > 0;
@@ -3120,7 +3299,7 @@ class Editor {
         changes.push({ path: `${imgDir}/${name}`, content: m.blob });
         imageCount++;
       } else {
-        changes.push({ path: `${PATHS.documents}/${name}`, content: m.blob, baseSha: null });
+        changes.push({ path: `${this.docDir()}/${name}`, content: m.blob, baseSha: null });
         docCount++;
       }
     }
@@ -3374,7 +3553,7 @@ class Editor {
     const dir = this.group.dir === PATHS.content ? '' : this.group.dir.slice(PATHS.content.length + 1);
     if (this.group.isIndex) rel = dir ? `${dir}/` : '';
     else {
-      const fileBase = this.isNewGroup && this.kind === 'post' ? this.slug.value : this.group.base;
+      const fileBase = this.hasSlugField ? this.slug.value : this.group.base;
       const base = typeof fm.slug === 'string' && fm.slug.trim() ? fm.slug.trim() : fileBase;
       if (!base) return null;
       rel = `${dir ? dir + '/' : ''}${base}/`;
@@ -3383,6 +3562,8 @@ class Editor {
   }
 
   listHash() {
+    const course = this.courseSlug();
+    if (course) return '#/courses?course=' + encodeURIComponent(course);
     return this.kind === 'post' ? '#/posts' : '#/pages';
   }
 
@@ -3453,6 +3634,23 @@ class Editor {
   }
 
   async deleteAll() {
+    if (this.isCourseIndex()) {
+      // 只删课程介绍页会让子推文变成「课程资料」下的散页：整门课请在「课程」页里删除
+      const dir = this.group.dir + '/';
+      const own = new Set([...this.variants.values()].map((x) => x.path).filter(Boolean));
+      const rest = this.repo.list(dir).filter((e) => !own.has(e.path));
+      if (rest.length) {
+        const go = await confirmDialog({
+          title: '这门课里还有子推文',
+          message: h('div', { class: 'stack-sm', dataset: { testid: 'editor-delete-course-note' } },
+            h('p', {}, `这是课程的介绍页。${dir} 里还有 ${rest.length} 个其他文件（子推文等）：只删除介绍页的话，它们会变成「课程资料」下没有归属的页面。`),
+            h('p', {}, '要删除整门课（介绍页、全部子推文，可以选择连资料一起删），请在「课程」页里打开这门课，点「删除课程」。')),
+          okText: '去「课程」页', cancelText: '取消',
+        });
+        if (go) this.ctx.navigate('#/courses?course=' + encodeURIComponent(this.courseSlug()));
+        return;
+      }
+    }
     const existing = [...this.variants.values()].filter((x) => x.exists);
     const imgDir = this.imageDir();
     // 只删这一页自己的图片：子目录如果是另一页的图片目录（例如栏目首页 courses/_index.md 的目录

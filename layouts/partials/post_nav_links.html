@@ -1,0 +1,52 @@
+{{- /*
+  覆盖 PaperMod 的 post_nav_links.html：
+    - 课程子推文（content/courses/<课程>/<篇>.md）：「上一篇 / 下一篇」只在同一门课里，按 weight、标题的顺序；
+    - 其他页面：与 PaperMod 原版完全相同（下面 else 分支是原版的逐字拷贝）。
+*/ -}}
+{{- if and .IsPage (eq .Section "courses") .Parent (not .Parent.IsHome) (ne .Parent.RelPermalink (site.GetPage "/courses").RelPermalink) }}
+{{- $pages := partial "courses/sort.html" .Parent.RegularPages }}
+{{- $idx := -1 }}
+{{- range $i, $p := $pages }}{{ if eq $p.RelPermalink $.RelPermalink }}{{ $idx = $i }}{{ end }}{{ end }}
+{{- if and (ge $idx 0) (gt (len $pages) 1) }}
+<nav class="paginav course-paginav" aria-label="{{ i18n "courses_pager" }}">
+  {{- if gt $idx 0 }}
+  {{- with index $pages (sub $idx 1) }}
+  <a class="prev" href="{{ .Permalink }}" rel="prev">
+    <span class="title">« {{ i18n "courses_prev" }}</span>
+    <br>
+    <span>{{- .LinkTitle -}}</span>
+  </a>
+  {{- end }}
+  {{- end }}
+  {{- if lt (add $idx 1) (len $pages) }}
+  {{- with index $pages (add $idx 1) }}
+  <a class="next" href="{{ .Permalink }}" rel="next">
+    <span class="title">{{ i18n "courses_next" }} »</span>
+    <br>
+    <span>{{- .LinkTitle -}}</span>
+  </a>
+  {{- end }}
+  {{- end }}
+</nav>
+{{- end }}
+{{- else }}
+{{- $pages := where site.RegularPages "Type" "in" site.Params.mainSections }}
+{{- if and (gt (len $pages) 1) (in $pages . ) }}
+<nav class="paginav">
+  {{- with $pages.Next . }}
+  <a class="prev" href="{{ .Permalink }}">
+    <span class="title">« {{ i18n "prev_page" }}</span>
+    <br>
+    <span>{{- .Name -}}</span>
+  </a>
+  {{- end }}
+  {{- with $pages.Prev . }}
+  <a class="next" href="{{ .Permalink }}">
+    <span class="title">{{ i18n "next_page" }} »</span>
+    <br>
+    <span>{{- .Name -}}</span>
+  </a>
+  {{- end }}
+</nav>
+{{- end }}
+{{- end }}

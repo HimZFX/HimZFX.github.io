@@ -2,7 +2,7 @@
 //
 // Covers: upload (button + drag & drop), image compression on/off, exact bytes in the mock repo,
 // list + links + search, copy link, PDF preview links (/viewer/?file=…) + 复制文件链接, overwrite confirm,
-// .gitignore confirm, ≥25 MB warning, delete warnings for direct / viewer-link / {{< pdf >}} references,
+// .gitignore confirm, ≥25 MB warning, refused .html / .svg / .js / .xml uploads, delete warnings for direct / viewer-link / {{< pdf >}} references,
 // delete, 图片 folder, custom folder chooser (admin/ refused), mobile layout, and finally a Hugo
 // build of the exported repo that must serve /documents/<file>.
 //
@@ -397,8 +397,43 @@ await test('≥ 25 MB file dropped: warning, cancel uploads nothing', async () =
   assert.equal(mock.readBytes('static/documents/大视频.mp4'), undefined);
 });
 
-await test('delete a file (warns about the referencing post)', async () => {
+await test('web pages / scripts / SVG are refused (same origin as the admin): explanation, nothing uploaded', async () => {
+  const before = mock.commits.length;
+  const reqBefore = mock.requests.filter((r) => r.method === 'POST').length;
   await page.click(sel('files-batch-close'));
+  // only refused files → 「无法上传」 with the reason per file and the explanation
+  await setFiles(page, [
+    { name: 'evil.html', mimeType: 'text/html', buffer: Buffer.from('<script>localStorage.getItem("admin.token")</script>') },
+    { name: 'Logo.SVG', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>') },
+    { name: 'app.mjs', mimeType: 'text/javascript', buffer: Buffer.from('export {}') },
+    { name: 'feed.xml', mimeType: 'application/xml', buffer: Buffer.from('<x/>') },
+  ]);
+  await page.waitForSelector(sel('upload-refused'));
+  const text = await page.textContent(sel('upload-refused'));
+  assert.match(text, /evil\.html.*不能上传 \.html 文件/);
+  assert.match(text, /Logo\.SVG.*SVG.*转换成 PNG/);
+  assert.match(text, /app\.mjs/);
+  assert.match(text, /feed\.xml/);
+  assert.match(await page.textContent(sel('upload-blocked-explain')), /以本站的身份运行.*登录令牌/);
+  await page.click(sel('confirm-ok'));
+  await waitBatch(page, 'cancelled');
+  // mixed with an allowed file → the confirm lists the refused ones (cancel here, nothing is uploaded)
+  await setFiles(page, [
+    { name: 'x.htm', mimeType: 'text/html', buffer: Buffer.from('<p>') },
+    { name: 'ok-notes.pdf', mimeType: 'application/pdf', buffer: pdfLike('ok') },
+  ]);
+  await page.waitForSelector(sel('files-warn-refused'));
+  assert.match(await page.textContent(sel('files-warn-refused')), /x\.htm.*\.htm/);
+  assert.ok(await page.isVisible(sel('upload-blocked-explain')));
+  await page.click(sel('confirm-cancel'));
+  await waitBatch(page, 'cancelled');
+  assert.equal(mock.commits.length, before);
+  assert.equal(mock.requests.filter((r) => r.method === 'POST').length, reqBefore, 'no blob was even created');
+  for (const f of ['evil.html', 'Logo.svg', 'app.mjs', 'feed.xml', 'x.htm', 'ok-notes.pdf']) assert.equal(mock.readBytes(`static/documents/${f}`), undefined, f);
+});
+
+await test('delete a file (warns about the referencing post)', async () => {
+  if (await page.isVisible(sel('files-batch-close'))) await page.click(sel('files-batch-close'));
   await page.click(`${rowSel('static/documents/report.pdf')} ${sel('files-delete')}`);
   await page.waitForSelector(sel('confirm-ok'));
   await page.waitForSelector(sel('files-delete-refs'));
