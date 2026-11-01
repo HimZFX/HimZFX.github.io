@@ -292,6 +292,11 @@ function stemOf(name) {
   return (i > 0 ? n.slice(0, i) : n) || 'image';
 }
 
+/** 能写进 {{< pdf "…" >}} 的网站路径（引号、换行、{{ }} 会破坏短代码；阅读器不接受的路径也不行）。 */
+function canEmbedPdf(sitePath) {
+  return C.isPdfPath(sitePath) && C.isViewerFilePath(sitePath) && !/["\r\n{}<>`]/.test(sitePath);
+}
+
 /** Markdown 链接文字里的 [ ] 会破坏语法。 */
 const linkText = (s) => String(s || '').replace(/[[\]\n\r]/g, ' ').trim() || '文件';
 
@@ -1134,7 +1139,8 @@ class Editor {
     for (const [name, m] of this.media) {
       if (m.kind === 'image') {
         if ((m.url && md.includes(m.url)) || md.includes(PENDING + name) || cover === PENDING + name) used.push(name);
-      } else if (md.includes(this.docSitePath(name))) {
+      } else if (md.includes(this.docSitePath(name)) || C.referencesSitePath(md, C.sitePathFor(`${PATHS.documents}/${name}`))) {
+        // 直接链接、在线预览链接（/viewer/?file=…）或 {{< pdf >}} 短代码
         used.push(name);
       }
     }
@@ -1346,7 +1352,7 @@ class Editor {
   /** 工具栏：手机上把常用的（图片、公式、资料、标题…）放在最前面，不常用的收进「更多」。 */
   toolbarItems() {
     const formula = { name: 'formula', tip: '插入公式', tipPosition: 'n', icon: ICON_FORMULA, click: () => this.insertFormula() };
-    const docs = { name: 'documents', tip: '插入资料链接', tipPosition: 'n', icon: ICON_DOCS, click: () => this.openDocuments() };
+    const docs = { name: 'documents', tip: '插入资料（PDF 可在线预览）', tipPosition: 'n', icon: ICON_DOCS, click: () => this.openDocuments() };
     const gallery = { name: 'gallery', tip: '多图并排', tipPosition: 'n', icon: ICON_GALLERY, click: () => this.pickImages('gallery') };
     const figure = { name: 'figure', tip: '带说明的图片', tipPosition: 'n', icon: ICON_FIGURE, click: () => this.pickImages('figure') };
     // 高亮 = ==文字==（Ctrl/⌘ + Shift + M；Vditor 会把快捷键自动写进提示里）
@@ -1474,6 +1480,54 @@ class Editor {
       if (pre && top.querySelector('.vditor-wysiwyg__preview')) pre.style.display = 'none';
       range = document.createRange();
       range.setStart(after, 0);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (internal) internal.range = range;
+    } catch (err) {
+      console.warn('[editor] caret move failed', err);
+    }
+  }
+
+  /**
+   * 插入要独占一段的内容（{{< pdf >}}、{{< gallery >}}、{{< figure >}}）：
+   * 先离开代码 / 公式块；光标所在的段落有文字时，在它后面新建一个空段落再插入
+   * （否则 Vditor 只用一个换行把短代码接在这段文字后面，网站上就不是单独的一段，短代码也不会生效）；
+   * 插入后光标放进短代码后面的新段落，接着打字不会写进短代码里。
+   * 源码 / 即时渲染模式下直接插入前后带空行的文字。
+   */
+  insertBlockMarkdown(md) {
+    if (!this.vd) return;
+    this.moveCaretOutOfBlock();
+    const mode = this.vd.getCurrentMode ? this.vd.getCurrentMode() : 'wysiwyg';
+    if (mode !== 'wysiwyg') {
+      this.insertMarkdown(`\n\n${md}\n\n`);
+      return;
+    }
+    this.caretToEmptyParagraph();
+    this.insertMarkdown(`\n${md}\n`);
+    this.caretToEmptyParagraph();
+  }
+
+  /** 所见即所得模式：光标所在的顶层段落不是空的 → 在它后面新建一个空段落，把光标放进去。 */
+  caretToEmptyParagraph() {
+    try {
+      const internal = this.vd.vditor && this.vd.vditor.wysiwyg;
+      const root = this.els.vditor.querySelector('.vditor-wysiwyg .vditor-reset');
+      const sel = getSelection();
+      let range = sel.rangeCount && root.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : internal && internal.range;
+      if (!range || !root.contains(range.startContainer)) return;
+      let top = range.startContainer;
+      while (top && top.parentNode !== root) top = top.parentNode;
+      if (!top || top.nodeType !== 1) return;
+      const empty = top.tagName === 'P' && !top.textContent.replace(/[\u200b\s]/g, '') && !top.querySelector('img, video, .vditor-wysiwyg__block');
+      if (empty) return;
+      const p = document.createElement('p');
+      p.setAttribute('data-block', '0');
+      p.appendChild(document.createTextNode('\u200b'));
+      top.after(p);
+      range = document.createRange();
+      range.setStart(p, 0);
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
@@ -2549,7 +2603,8 @@ class Editor {
           if (m) parts.push(`![${linkText(stemOf(file.name))}](${m.url})`);
         } else {
           const m = this.prepareDocument(file);
-          if (m) parts.push(`[${linkText(file.name)}](${this.docSitePath(m.name)})`);
+          // PDF 默认插入在线预览链接（安卓手机和微信里也能看）；想嵌入阅读器可以用「资料」按钮
+          if (m) parts.push(this.docMarkdown(C.sitePathFor(`${PATHS.documents}/${m.name}`), file.name, 'link'));
         }
       }
     } finally {
@@ -2595,14 +2650,62 @@ class Editor {
         md = `{{< gallery ${list.map((m) => `"${PENDING}${m.name}"`).join(' ')} >}}`;
       }
       this.restoreCaret(caret);
-      this.moveCaretOutOfBlock();
-      this.insertMarkdown(`\n${md}\n`);
+      this.insertBlockMarkdown(md);
       toast(kind === 'gallery' ? `已插入 ${list.length} 张并排的图片（点「手机预览」看效果），发表时一起上传` : '已插入带说明的图片（点「手机预览」看效果），发表时一起上传', { type: 'success', timeout: 6000 });
     });
     input.click();
   }
 
-  /** 「资料」按钮：选择 static/documents/ 里的文件插入链接，或上传新资料。 */
+  /**
+   * 资料在正文里的写法。
+   *   how = 'link'（PDF）：在线预览链接 [名字](/viewer/?file=%2Fdocuments%2F…)，安卓手机和微信里也能看；
+   *   how = 'embed'（PDF）：{{< pdf "/documents/…" >}}，文章里直接显示阅读器（网站的 layouts/shortcodes/pdf.html）；
+   *   其他文件（或 how = 'file'）：文件本身的链接 [名字](/documents/…)。
+   * @param {string} sitePath 网站路径（未编码），例如 '/documents/讲义-第1章.pdf'
+   */
+  docMarkdown(sitePath, text, how) {
+    if (C.isPdfPath(sitePath)) {
+      if (how === 'embed' && canEmbedPdf(sitePath)) return `{{< pdf "${sitePath}" >}}`;
+      if (how === 'link' || how === 'embed') {
+        // 英文专属版本（xxx.en.md）里的链接打开英文界面的阅读器；共用版本 / 中文版用默认的中文界面
+        const key = this.activeKey;
+        const lang = key && key !== 'shared' && key !== this.ctx.defaultLang ? key : undefined;
+        const url = C.viewerUrlFor(sitePath, { lang });
+        if (url) return `[${linkText(text)}](${url})`;
+      }
+    }
+    return `[${linkText(text)}](${mdDest(sitePath)})`;
+  }
+
+  /** 插入 PDF 前问一下：插入在线预览链接，还是在正文里嵌入阅读器。取消 → null。 */
+  askPdfInsert(names) {
+    return new Promise((resolve) => {
+      let picked = null;
+      let dlg = null;
+      const option = (how, icon, title, desc, testid) => h('button', {
+        type: 'button', class: 'ed-doc-choice', dataset: { testid },
+        on: { click: () => { picked = how; dlg.close(); } },
+      },
+      svgIcon(icon),
+      h('span', { class: 'ed-doc-choice-text' },
+        h('span', { class: 'ed-doc-choice-title' }, title),
+        h('span', { class: 'ed-doc-choice-desc' }, desc)));
+      dlg = modal({
+        title: names.length > 1 ? `怎样插入这 ${names.length} 个 PDF？` : '怎样插入这个 PDF？',
+        testid: 'editor-doc-choice',
+        content: h('div', { class: 'stack-sm' },
+          h('p', { class: 'muted small ed-doc-choice-files' }, names.join('、')),
+          option('link', 'link', '插入链接（点开在线预览）',
+            '正文里是一个链接，点开后在网页里直接看 PDF，安卓手机和微信里也能看，页面上可以下载。', 'editor-doc-insert-link'),
+          option('embed', 'eye', '嵌入阅读器（正文里直接显示）',
+            '文章里直接显示 PDF，可以翻页；下面带「在新页面打开」和「下载」。编辑器和手机预览里显示为一张卡片。', 'editor-doc-insert-embed')),
+        actions: [{ text: '取消', kind: 'ghost', testid: 'editor-doc-insert-cancel' }],
+        onClose: () => resolve(picked),
+      });
+    });
+  }
+
+  /** 「资料」按钮：选择 static/documents/ 里的文件插入（PDF 可选在线预览链接或嵌入阅读器），或上传新资料。 */
   openDocuments() {
     const files = this.repo.list(PATHS.documents + '/');
     const pending = [...this.media.entries()].filter(([, m]) => m.kind === 'doc' && !m.committed).map(([name]) => ({ path: `${PATHS.documents}/${name}`, size: this.media.get(name).blob.size, pending: true }));
@@ -2611,18 +2714,41 @@ class Editor {
     const listEl = h('div', { class: 'list ed-doc-list' });
     let m;
     const caret = this.saveCaret();
-    const insertAtCaret = (md) => {
+    const insertAtCaret = (md, { block = false } = {}) => {
       // 对话框里的搜索框拿走了光标、关闭时焦点又回到了工具栏按钮（m.close() 是同步的）：
       // 先把焦点和光标放回打开对话框之前的位置再插入（否则会插到文章开头，再按空格还会重新打开对话框）
       if (this.destroyed) return;
       this.restoreCaret(caret);
+      if (block) { this.insertBlockMarkdown(md); return; }
       this.moveCaretOutOfBlock();
       this.insertMarkdown(md);
+    };
+    /**
+     * 插入若干资料：PDF 先问插入方式（取消 = 什么都不插入）。
+     * items: [{ sitePath, text }]；嵌入的阅读器是单独的段落（和图集 / 带说明的图片一样放在公式、代码块外面）。
+     */
+    const insertDocs = async (items) => {
+      const pdfs = items.filter((it) => C.isPdfPath(it.sitePath));
+      let how = 'file';
+      if (pdfs.length) {
+        how = await this.askPdfInsert(pdfs.map((it) => it.sitePath.slice(it.sitePath.lastIndexOf('/') + 1)));
+        if (!how || this.destroyed) {
+          if (!this.destroyed) this.restoreCaret(caret);
+          return null;
+        }
+      }
+      const parts = items.map((it) => this.docMarkdown(it.sitePath, it.text, how));
+      const block = parts.some((p) => p.startsWith('{{<'));
+      if (block) insertAtCaret(parts.join('\n\n'), { block: true });
+      else insertAtCaret(items.length > 1 ? parts.join('\n\n') + '\n' : parts[0]);
+      return how;
     };
     const insert = (path) => {
       const name = path.slice(path.lastIndexOf('/') + 1);
       m.close();
-      insertAtCaret(`[${linkText(name)}](${mdDest(C.sitePathFor(path))})`);
+      insertDocs([{ sitePath: C.sitePathFor(path), text: name }]).then((how) => {
+        if (how === 'embed') toast('已嵌入 PDF 阅读器（点「手机预览」看位置），发表后在网站上显示', { type: 'success', timeout: 6000 });
+      }).catch((err) => console.error(err));
     };
     const draw = () => {
       const q = search.value.trim().toLowerCase();
@@ -2645,22 +2771,24 @@ class Editor {
       const chosen = [...(upload.files || [])];
       upload.value = '';
       if (!chosen.length) return;
-      const parts = [];
+      const items = [];
       for (const file of chosen) {
         const added = this.prepareDocument(file);
-        if (added) parts.push(`[${linkText(file.name)}](${this.docSitePath(added.name)})`);
+        if (added) items.push({ sitePath: C.sitePathFor(`${PATHS.documents}/${added.name}`), text: file.name });
       }
       m.close();
-      if (parts.length) {
-        insertAtCaret(parts.join('\n\n') + '\n');
-        toast('已插入资料链接，发表时一起上传', { type: 'success' });
+      if (items.length) {
+        insertDocs(items).then((how) => {
+          if (how) toast(how === 'embed' ? '已嵌入 PDF 阅读器，发表时一起上传' : '已插入资料，发表时一起上传', { type: 'success' });
+          else toast('没有插入。上传的文件留在「资料」列表里（待上传），可以再点一次插入；不用的话不会上传', { type: 'info', timeout: 7000 });
+        }).catch((err) => console.error(err));
       }
     });
     draw();
     m = modal({
-      title: '插入资料链接',
+      title: '插入资料',
       content: h('div', { class: 'stack-sm stack' },
-        h('p', { class: 'muted small' }, '资料放在 static/documents/ 里，点一下插入链接；也可以上传新文件（随文章一起发表）。'),
+        h('p', { class: 'muted small' }, '资料放在 static/documents/ 里，点一下插入；PDF 可以插入在线预览链接（安卓手机和微信里也能看），或直接嵌入阅读器。也可以上传新文件（随文章一起发表）。'),
         search, listEl, upload),
       actions: [
         { text: '取消', kind: 'ghost' },

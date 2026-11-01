@@ -100,6 +100,13 @@
 .files-row .list-item-main { flex: 1 1 auto; }
 .files-row .list-item-actions { flex: none; }
 .files-actions { display: flex; align-items: center; gap: 4px; }
+/* PDF 有 4 个按钮：中等宽度的屏幕上「复制文件链接」只留图标（有 title / aria-label） */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .files-copy-secondary .files-action-label { display: none; }
+}
+.page-header .files-viewer-note { display: flex; align-items: flex-start; gap: 6px; }
+.files-viewer-note .icon { flex: none; margin-top: 3px; color: var(--primary-text); }
+.files-sheet-note { margin: 0; }
 .files-name { font-size: 14.5px; }
 .files-row .list-item-meta { flex-wrap: nowrap; min-width: 0; }
 .files-size { flex: none; white-space: nowrap; }

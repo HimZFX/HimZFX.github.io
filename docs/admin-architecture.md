@@ -42,7 +42,8 @@ static/admin/
 │   ├── repo.js             Repo：main 分支文件树的本地视图、读取（带 blob 缓存）、原子提交 + 冲突检查、watchDeploy
 │   ├── frontmatter.js      YAML front matter 的拆分 / 解析 / 精确修改 / 拼装
 │   ├── tomlpatch.js        保留注释的 TOML 精确修改
-│   ├── content.js          双语内容模型（纯函数）：页面组、各语言显示哪个文件、网址 slug、图片目录
+│   ├── content.js          双语内容模型（纯函数）：页面组、各语言显示哪个文件、网址 slug、图片目录；
+│   │                       资料在线预览链接 viewerUrlFor / isViewerFilePath（规则与网站 static/viewer/path.js 一致）
 │   ├── images.js           图片压缩、正方形裁剪、安全文件名
 │   ├── drafts.js           IndexedDB：编辑器自动保存的草稿 + GitHub 文件内容（blob）缓存
 │   ├── preview.js          编辑器「手机预览」的渲染（写进无脚本的沙箱 iframe）
@@ -54,7 +55,7 @@ static/admin/
 │       ├── editor.js       文章 / 页面编辑器（Vditor），多语言版本标签页、图片 / 资料、自动保存、发表
 │       ├── profile.js      「首页设置」：头像裁剪、名字简介、按钮、社交链接、节日图标
 │       ├── background.js   「背景动画」：卡带列表、实时预览、参数微调
-│       └── files.js        「资料」：static/ 下文件的上传、复制链接、删除
+│       └── files.js        「资料」：static/ 下文件的上传、复制链接（PDF：复制预览链接 /viewer/?file=…）、删除
 └── vendor/                 第三方库本地副本（见第 10 节）
 
 tests/admin/                单元测试 + 端到端测试（见第 9 节）
@@ -139,6 +140,7 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
 - 令牌只发往 `config.apiBase()`：正式环境永远是 `https://api.github.com`。只有页面运行在 `localhost` / `127.0.0.1` 时，才允许 `localStorage['admin.apiBase']` 覆盖（测试和本地开发用）。**绝不**从网址、查询参数、hash 或仓库内容读取 API 地址，否则别人能构造链接把令牌骗走。
 - 令牌不出现在 URL、日志里。`main.js` 的 `guardedFetch` 只观察状态码：会话中任何请求返回 401 → 弹出「登录已失效」对话框，粘贴新令牌后继续，页面上未发布的修改保留。
 - 记住的令牌在 `himzfx.github.io` 整个源共用的存储里，网站页面上加载的第三方脚本（KaTeX、giscus）理论上能读到——这是默认不勾选的原因，登录页也如实告知。
+  网站上带脚本的独立页面（目前只有资料预览页 `/viewer/`）也在这个源里，必须按[第 12 节](#12-资料在线预览页viewer属于网站)的方式加固。
 
 **CSP（`index.html` 的 meta）**
 
@@ -269,14 +271,15 @@ node tests/admin/e2e-lists.mjs       # 文章列表、页面与菜单排序、�
 node tests/admin/e2e-profile.mjs     # 首页设置、头像裁剪
 node tests/admin/e2e-background.mjs  # 背景动画预览与参数
 node tests/admin/e2e-files.mjs       # 资料上传 / 删除
-node tests/admin/e2e-journey.mjs     # 跨界面的完整使用流程，最后用 Hugo 构建并检查两种语言的网站
+node tests/admin/e2e-journey.mjs     # 跨界面的完整使用流程，最后用 Hugo 构建并检查两种语言的网站（含访客打开资料预览 / 嵌入阅读器）
+node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/viewer/ 与 {{< pdf >}} 短代码
 ```
 
 | 环境变量 | 作用 |
 |---|---|
 | `HUGO_BIN` | Hugo 可执行文件，需与 CI 相同（0.147.4 extended）；找不到时依赖 Hugo 的测试自动跳过 |
 | `ADMIN_TEST_TMP` | 测试输出的根目录（默认系统临时目录）；`ADMIN_TEST_KEEP=1` 让 `mock.test.mjs` 保留导出 / 构建结果 |
-| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`JOURNEY_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
+| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
 | `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files`；编辑器的后续用例依赖前面的） |
 | `SKIP_BUILD=1` | 复用上一次的初始构建（`e2e-shell` / `e2e-lists` / `e2e-profile`） |
 | `DEBUG=1` | 打印浏览器控制台输出（`e2e-editor` / `e2e-journey`） |
@@ -322,3 +325,57 @@ node tests/admin/e2e-journey.mjs     # 跨界面的完整使用流程，最后�
 4. 写入仓库只能通过 `ctx.publish()`，每个修改的文件都带读取时的 `baseSha`；改 TOML 用 `tomlpatch`，改 front matter 用 `frontmatter.setFields`。
 5. 遵守第 4 节的规则：界面用 `h()` / `textContent` 生成，不把仓库内容写进 `innerHTML`，不引入外部脚本。
 6. 写 `tests/admin/e2e-stats.mjs`（参考 tests/admin/README.md 里的推荐写法：`startMock` + `buildSite` + `openAdmin`），并在 README 里登记。
+
+---
+
+## 12. 资料在线预览页（/viewer/，属于网站）
+
+安卓手机、尤其是微信内置浏览器打不开 PDF（只能下载），所以网站有一个独立的静态预览页 `static/viewer/`，
+后台的「复制预览链接」和编辑器的「插入链接（点开在线预览）」都指向它，`{{< pdf >}}` 短代码把它嵌进 iframe。
+它不是后台的一部分（不用令牌、不调 GitHub API），但**和后台同源**，所以写在这里。详细说明见
+[static/viewer/README.md](../static/viewer/README.md)，使用方法见 [SITE_GUIDE.md 第 9 节](../SITE_GUIDE.md#在线预览点开就能看不用先下载)。
+
+**文件**
+
+| 文件 | 作用 |
+|---|---|
+| `static/viewer/index.html` | 页面骨架 + CSP；不经过 Hugo 模板，不加载主题、KaTeX、giscus、背景动画 |
+| `static/viewer/viewer.js` | 主逻辑（ES 模块）：参数校验、PDF 懒加载渲染、缩放、页码、图片、中英文界面、错误提示 |
+| `static/viewer/path.js` | `?file=` 的校验 `parseFileParam`（纯函数）和 `viewerHref` |
+| `static/viewer/theme.js`、`nomodule.js`、`viewer.css` | 深浅色（只读 `pref-theme`）、老浏览器提示、样式 |
+| `static/viewer/vendor/pdfjs/` | PDF.js 本地副本，见下文 |
+| `layouts/shortcodes/pdf.html` + `assets/css/extended/pdf-embed.css` | 嵌入短代码：`iframe`（`embed=1`、`lang` = 页面语言、`loading="lazy"`）+「在新页面打开」「下载」 |
+
+**URL 约定**（网站和后台必须一致）
+
+```
+/viewer/?file=<encodeURIComponent(网站路径)>[&lang=en][&embed=1][&page=N]
+```
+
+- 后台只通过 `content.js` 的 `viewerUrlFor(sitePath, { lang, embed, absolute, siteUrl, page })` 生成链接，
+  `isViewerFilePath` 判断路径能否预览；规则与 `path.js` 一致，改一边必须同步另一边（`content.test.mjs` 和 `e2e-viewer.mjs` 都有覆盖）。
+- `file` 接受：以 `/` 开头且不是 `//`；没有反斜杠、控制字符；解码前后（最多 3 轮）都没有空段、`.`、`..`、编码的 `/`；
+  不在 `/admin/`、`/viewer/` 下（不区分大小写）。`.pdf` → PDF.js；`.png .jpg .jpeg .gif .webp .avif .svg` → `<img>`；
+  其他 → 下载提示。不合格时只显示错误，**不发请求、不跳转**。
+- 后台引用检查（删除资料前的提示）把直接链接、预览链接、`{{< pdf >}}` 都算作引用。
+
+**安全加固**（后台的令牌可能在同源 `localStorage` 里，见第 4 节）
+
+- CSP：`default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` 等。
+  比后台更严：没有 `'unsafe-eval'`、`'unsafe-inline'`，没有内联脚本。不需要 `'wasm-unsafe-eval'`——WebAssembly 解码器只在 Worker 里运行。
+- 只读 `localStorage['pref-theme']`，不碰其他存储；`<meta name="referrer" content="no-referrer">`。
+- PDF.js：不带 `pdf.sandbox`、`quickjs-eval`（不执行 PDF 里的脚本），`enableXfa: false`、`isEvalSupported: false`；
+  PDF 里的链接只保留 `http(s)`、`mailto` 和文档内跳转，外链 `target=_blank` + `noopener noreferrer`。
+- 页面内容一律用 DOM API / `textContent` 生成，不用 `innerHTML`（文件名可能含 HTML 字符）。
+- 后台编辑器里的 `{{< pdf >}}` 和手机预览都只显示为卡片，不在后台里加载 iframe（第 4 节的 `neutralizeEmbeds` 规则不变）。
+
+**PDF.js（本地副本）**：`pdfjs-dist` 6.4.299，Apache-2.0，用 **legacy** 版本（老的安卓 / 微信 WebView 也能跑）。
+复制了 `build/pdf.min.mjs`、`build/pdf.worker.min.mjs`、`cmaps/`（中文 PDF 没有嵌入字体时必须有）、`standard_fonts/`、
+`wasm/`（不含 `quickjs-eval.*`）、`iccs/`、`LICENSE`。升级步骤见 [static/viewer/vendor/pdfjs/README.md](../static/viewer/vendor/pdfjs/README.md)：
+`npm pack pdfjs-dist@<版本>` → 整体替换这些目录 → 核对 `legacy/build/pdf.mjs` 里 `getDocument` 的参数
+（`cMapUrl`、`standardFontDataUrl`、`wasmUrl`、`iccUrl`）和 `TextLayer`、`page.render` 的用法，同步 `viewer.js` → 更新 README 版本号 → 跑测试。
+新版本如果要求放宽 CSP，应该先找原因，而不是直接放宽。
+
+**测试**：`node tests/admin/e2e-viewer.mjs`（`VIEWER_E2E_DIR` 放构建结果和截图）。用固定版本的 Hugo 构建一份导出的仓库副本，
+覆盖：多页中文 PDF 的懒加载与缩放、非嵌入中文字体（检查 cmaps）、PDF 里的 `javascript:` 链接被丢弃、加密 / 损坏的 PDF、
+图片和其他文件、各种非法 `file` 参数（不发出任何请求）、含 `#`、`%`、HTML 字符的文件名、CSP，以及中英文站的 `{{< pdf >}}` 短代码。

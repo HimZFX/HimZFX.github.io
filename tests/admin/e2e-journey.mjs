@@ -1,10 +1,13 @@
 // tests/admin/e2e-journey.mjs — one realistic user journey across ALL admin views on a single mock:
 //
 //   log in (real login form) → write + publish a shared post with math and an image → add its English
-//   version → upload a PDF in 资料 → link it from the post with the editor's 资料 button → change the avatar
-//   and the subtitle → switch the background cassette → reorder the menu → save a draft post and delete it
+//   version → upload a (real, 3-page) PDF in 资料 (copy its online-preview link) → link AND embed it in both
+//   versions of the post with the editor's 资料 button (插入链接 → /viewer/?file=…, 嵌入阅读器 → {{< pdf >}})
+//   → change the avatar and the subtitle → switch the background cassette → reorder the menu → save a draft post and delete it
 //   from the list → discard a local (browser) draft → export + Hugo build → check the BUILT site (both
-//   languages, served by the mock) reflects every change, and every original config comment survived.
+//   languages, served by the mock) reflects every change, and every original config comment survived →
+//   as a visitor on /posts/<slug>/ and /en/posts/<slug>/: the preview link opens the viewer, which renders the
+//   PDF, and the embedded reader renders it too (in the page's language), never touching the admin token.
 //
 // After every publish the mock's files are checked. Run from the repo root:
 //   node tests/admin/e2e-journey.mjs
@@ -42,7 +45,10 @@ const IMGDIR = `static/images/posts/${SLUG}`;
 const TITLE_ZH = '穿越时空的旅程';
 const TITLE_EN = 'A Journey Through Spacetime';
 const PDF_NAME = 'gr-lecture-notes.pdf';
-const PDF_BYTES = Buffer.from('%PDF-1.4\n% journey test\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n');
+const PDF_VIEWER = `/viewer/?file=%2Fdocuments%2F${PDF_NAME}`; // the online preview (works in WeChat / on Android)
+const PDF_EMBED = `{{< pdf "/documents/${PDF_NAME}" >}}`; // the embedded reader (layouts/shortcodes/pdf.html)
+const PDF_PAGES = 3;
+let PDF_BYTES; // a real PDF made by Chromium (see makePdf), so the built site's viewer can render it
 const SUBTITLE = '北京大学 · 物理与天体物理 · 旅程测试';
 const DRAFT_SLUG = 'throwaway-draft';
 
@@ -196,6 +202,64 @@ async function fetchSite(mock, p) {
   return { status: res.status, type: res.headers.get('content-type') || '', bytes: Buffer.from(await res.arrayBuffer()) };
 }
 
+/** A real 3-page PDF (Chinese text + a coloured bar per page) printed by Chromium. */
+async function makePdf(browser) {
+  const ctx = await browser.newContext();
+  const pg = await ctx.newPage();
+  const pages = Array.from({ length: PDF_PAGES }, (_, i) => `<section><h1>广义相对论讲义 · 第 ${i + 1} 页</h1>
+    <div style="height:40px;background:hsl(${120 * i} 75% 45%)"></div><p>${'时空弯曲告诉物质如何运动，物质告诉时空如何弯曲。'.repeat(8)}</p></section>`);
+  await pg.setContent(`<!doctype html><meta charset="utf-8"><style>section{page-break-after:always;padding:40px}h1{font-size:28px}p{font-size:17px;line-height:1.8}</style>${pages.join('')}`);
+  const pdf = await pg.pdf({ format: 'A4', printBackground: true });
+  await ctx.close();
+  return pdf;
+}
+
+/** Pixel stats of page n's canvas in a viewer frame (non-blank + the coloured bar). */
+const canvasStats = (frame, n) => frame.evaluate((n) => {
+  const c = document.querySelector(`.page[data-page-number="${n}"] canvas`);
+  if (!c) return null;
+  const s = document.createElement('canvas');
+  s.width = 100;
+  s.height = 140;
+  const g = s.getContext('2d');
+  g.drawImage(c, 0, 0, s.width, s.height);
+  const d = g.getImageData(0, 0, s.width, s.height).data;
+  let dark = 0;
+  let colored = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] + d[i + 1] + d[i + 2] < 384) dark++;
+    if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) colored++;
+  }
+  return { dark, colored };
+}, n);
+
+/** Wait until a viewer (page or iframe) is ready and page 1 is drawn; returns its state. */
+async function viewerRendered(frame) {
+  await frame.waitForFunction(() => document.documentElement.getAttribute('data-ready') === '1' || document.documentElement.hasAttribute('data-error'), null, { timeout: 30000 });
+  assert.equal(await frame.evaluate(() => document.documentElement.getAttribute('data-error')), null, 'the viewer reported an error');
+  await frame.waitForFunction(() => { const d = document.querySelector('.page[data-page-number="1"]'); return d && d.classList.contains('rendered') && d.querySelector('canvas'); }, null, { timeout: 30000 });
+  const stats = await canvasStats(frame, 1);
+  assert.ok(stats.dark > 20 && stats.colored > 100, 'page 1 is drawn (text + coloured bar): ' + JSON.stringify(stats));
+  return frame.evaluate(() => ({
+    pages: Number(document.documentElement.getAttribute('data-pages')),
+    lang: document.documentElement.lang,
+    embed: document.documentElement.classList.contains('embed'),
+    download: document.getElementById('download').getAttribute('href'),
+    downloadText: document.getElementById('download').textContent.trim(),
+  }));
+}
+
+/** Insert a PDF with the editor's 资料 button: how = 'link' | 'embed'. */
+async function insertPdf(page, how) {
+  await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
+  await page.waitForSelector(tid('editor-docs-search'));
+  await page.fill(tid('editor-docs-search'), 'lecture');
+  const item = page.locator(tid('editor-doc-item'), { hasText: PDF_NAME });
+  await item.waitFor();
+  await item.click();
+  await page.click(tid(how === 'embed' ? 'editor-doc-insert-embed' : 'editor-doc-insert-link'));
+}
+
 const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 
 // ---------------------------------------------------------------------------
@@ -207,6 +271,7 @@ async function main() {
   console.log(`  initial site built in ${built.ms} ms\n`);
 
   const browser = await chromium.launch();
+  PDF_BYTES = await makePdf(browser);
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   context.setDefaultTimeout(20000);
   const origin = new URL(mock.url).origin;
@@ -345,6 +410,9 @@ async function main() {
       assert.deepEqual(c.changes.map((x) => x.path), [`static/documents/${PDF_NAME}`]);
       assert.ok(Buffer.compare(mock.readBytes(`static/documents/${PDF_NAME}`), PDF_BYTES) === 0, 'PDF byte-exact');
       await page.waitForSelector(`${tid('files-row')}[data-path="static/documents/${PDF_NAME}"]`);
+      // the PDF's 「打开」 opens the online viewer; 「复制文件链接」 still gives the file itself
+      assert.equal(await page.getAttribute(`${tid('files-row')}[data-path="static/documents/${PDF_NAME}"] ${tid('files-open')}`, 'href'), mock.url + PDF_VIEWER);
+      assert.ok(await page.isVisible(`${tid('files-row')}[data-path="static/documents/${PDF_NAME}"] ${tid('files-copy-preview')}`));
       await page.screenshot({ path: path.join(SHOTS, '02-files.png') });
     });
 
@@ -356,22 +424,41 @@ async function main() {
       assert.equal(await page.inputValue(tid('editor-title')), TITLE_ZH, 'the zh (shared) version opens');
       await vditor.caretToEnd(page);
       await page.keyboard.type('讲义下载：', { delay: 5 });
-      await page.click('[data-testid="editor-body"] .vditor-toolbar [data-type="documents"]');
-      await page.waitForSelector(tid('editor-docs-search'));
-      await page.fill(tid('editor-docs-search'), 'lecture');
-      const item = page.locator(tid('editor-doc-item'), { hasText: PDF_NAME });
-      await item.waitFor();
-      await item.click();
-      await until(async () => (await vditor.get(page)).includes(`(/documents/${PDF_NAME})`), { msg: 'PDF link inserted' });
+      await insertPdf(page, 'link');
+      await until(async () => (await vditor.get(page)).includes(`(${PDF_VIEWER})`), { msg: 'PDF link inserted' });
+      // …and embed the reader below it (its own paragraph)
+      await insertPdf(page, 'embed');
+      await until(async () => (await vditor.get(page)).includes(PDF_EMBED), { msg: 'PDF reader embedded' });
       const commit = await clickAndCommit(page, mock, tid('editor-publish'));
       // with two variants the editor names the one it updated
       assert.equal(commit.message, `admin: 更新《${TITLE_ZH}》（共用版本）`);
       assert.deepEqual(commit.changes.map((c) => c.path), [POST], 'the PDF is already in the repo → only the post');
       const { body } = splitMd(mock.readFile(POST));
-      assert.match(body, new RegExp(`\\[[^\\]]*\\]\\(/documents/${PDF_NAME.replace(/\./g, '\\.')}\\)`));
+      assert.ok(body.includes(`[${PDF_NAME}](${PDF_VIEWER})`), body);
+      assert.ok(body.includes(`\n\n${PDF_EMBED}\n`), 'the embed is its own paragraph:\n' + body);
       assert.match(body, /讲义下载/);
       assert.match(body, new RegExp(`/images/posts/${SLUG}/`), 'image link kept');
       assert.match(body, /\$\$\nds\^2/, 'math kept');
+    });
+
+    // -----------------------------------------------------------------------
+    await step('English version: link + embed the PDF too → 更新 (viewer link carries lang=en)', async () => {
+      await page.click(tid('editor-tab-en'));
+      await page.waitForSelector(`${tid('editor-tab-en')}.active`);
+      await until(async () => (await vditor.get(page)).includes('tie geometry to matter'), { msg: 'the English body is shown' });
+      await vditor.caretToEnd(page);
+      await page.keyboard.type(' Lecture notes:', { delay: 5 });
+      await insertPdf(page, 'link');
+      await until(async () => (await vditor.get(page)).includes(`(${PDF_VIEWER}&lang=en)`), { msg: 'English PDF link inserted' });
+      await insertPdf(page, 'embed');
+      await until(async () => (await vditor.get(page)).includes(PDF_EMBED), { msg: 'PDF reader embedded (en)' });
+      const commit = await clickAndCommit(page, mock, tid('editor-publish'));
+      assert.match(commit.message, /^admin: 更新《/);
+      assert.deepEqual(commit.changes.map((c) => c.path), [POST_EN], 'only the English file');
+      const { body } = splitMd(mock.readFile(POST_EN));
+      assert.ok(body.includes(`(${PDF_VIEWER}&lang=en)`), body);
+      assert.ok(body.includes(`\n\n${PDF_EMBED}\n`), body);
+      assert.ok(!splitMd(mock.readFile(POST)).body.includes('Lecture notes'), 'the shared version is untouched');
     });
 
     // -----------------------------------------------------------------------
@@ -542,7 +629,14 @@ async function main() {
       assert.ok(zhHtml.includes(TITLE_ZH), 'zh post has the Chinese title');
       assert.ok(enHtml.includes(TITLE_EN), 'en post has the English title');
       assert.ok(!enHtml.includes(TITLE_ZH), 'en post does not use the shared title');
-      assert.ok(zhHtml.includes(`/documents/${PDF_NAME}`), 'zh post links the PDF');
+      assert.ok(zhHtml.includes(PDF_VIEWER), 'zh post links the PDF’s online preview');
+      assert.ok(enHtml.includes(`${PDF_VIEWER}&amp;lang=en`), 'en post links the English online preview');
+      for (const [html, lang] of [[zhHtml, 'zh'], [enHtml, 'en']]) {
+        // the shortcode became an <iframe> to the viewer in embed mode, in the page's language
+        const m = /<iframe class="?pdf-embed-frame"? src="?([^" >]+)/.exec(html);
+        assert.ok(m, `${lang} post has the embedded reader`);
+        assert.equal(m[1].replace(/&amp;/g, '&'), `/viewer/?file=%2Fdocuments%2F${PDF_NAME}&lang=${lang}&embed=1`);
+      }
       assert.ok(zhHtml.includes(`/images/posts/${SLUG}/`), 'zh post shows the image');
       assert.ok(zhHtml.includes('G_{\\mu\\nu} = 8\\pi G'), 'math source reaches the page untouched (KaTeX renders it client-side)');
       const img = await fetchSite(mock, `/images/posts/${SLUG}/${encodeURIComponent(imgName)}`);
@@ -555,6 +649,10 @@ async function main() {
       const pdf = await fetchSite(mock, `/documents/${PDF_NAME}`);
       assert.equal(pdf.status, 200);
       assert.equal(Buffer.compare(pdf.bytes, PDF_BYTES), 0, 'PDF served byte-exact');
+      // …and the online viewer the post links to is part of the site
+      if (fs.existsSync(path.join(REPO_ROOT, 'static', 'viewer', 'index.html'))) {
+        assert.equal((await fetchSite(mock, PDF_VIEWER)).status, 200, 'viewer page served');
+      }
 
       // avatar + favicon
       const av = await fetchSite(mock, '/avatar.jpg');
@@ -587,6 +685,73 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
+    await step('visitor (zh + en): the preview link opens a viewer that renders the PDF; the embedded reader renders it', async () => {
+      const externalBefore = external.length;
+      const viewerExternal = [];
+      for (const [prefix, lang] of [['', 'zh'], ['/en', 'en']]) {
+        // same browser profile as the admin (the token is remembered in localStorage on this origin)
+        const vp = await context.newPage();
+        vp.on('pageerror', (e) => pageErrors.push(`${lang} visitor: ${e.message}`));
+        vp.on('console', (m) => { if (/CSP-VIOLATION|Content Security Policy/.test(m.text())) cspErrors.push(m.text()); });
+        vp.on('request', (req) => {
+          if (req.url().includes(mock.token)) tokenLeaks.push(`visitor url: ${req.url()}`);
+          let fromViewer = false;
+          try { fromViewer = new URL(req.frame().url()).pathname.startsWith('/viewer/'); } catch { /* detached frame */ }
+          if (fromViewer && !req.url().startsWith(mock.url + '/')) viewerExternal.push(req.url());
+          if (req.headers().authorization) tokenLeaks.push(`visitor auth header: ${req.url()}`);
+        });
+        await vp.addInitScript(() => {
+          // record every storage key the site's scripts touch (the viewer may only read pref-theme)
+          window.__storage = [];
+          const P = Storage.prototype;
+          for (const fn of ['getItem', 'setItem', 'removeItem', 'key', 'clear']) {
+            const orig = P[fn];
+            P[fn] = function (...a) { if (location.pathname.startsWith('/viewer/')) window.__storage.push(`${fn}:${a[0]}`); return orig.apply(this, a); };
+          }
+        });
+        await vp.goto(`${mock.url}${prefix}/posts/${SLUG}/`, { waitUntil: 'domcontentloaded' });
+        assert.equal(await vp.evaluate(() => localStorage.getItem('admin.token')), mock.token, 'precondition: token remembered on this origin');
+
+        // 1. the embedded reader
+        const handle = await vp.waitForSelector('figure.pdf-embed iframe');
+        await handle.scrollIntoViewIfNeeded();
+        const frame = await handle.contentFrame();
+        const emb = await viewerRendered(frame);
+        assert.equal(emb.pages, PDF_PAGES);
+        assert.equal(emb.embed, true);
+        assert.equal(emb.lang, lang === 'en' ? 'en' : 'zh-CN');
+        assert.equal(emb.download, `/documents/${PDF_NAME}`);
+        assert.equal(emb.downloadText, lang === 'en' ? 'Download' : '下载');
+        const caption = await vp.$$eval('figure.pdf-embed figcaption a', (as) => as.map((a) => [a.textContent.trim(), a.getAttribute('href')]));
+        assert.deepEqual(caption, [[lang === 'en' ? 'Open in new tab' : '在新页面打开', `/viewer/?file=%2Fdocuments%2F${PDF_NAME}&lang=${lang}`],
+          [lang === 'en' ? 'Download' : '下载', `/documents/${PDF_NAME}`]]);
+        assert.deepEqual(await frame.evaluate(() => window.__storage), ['getItem:pref-theme'], 'embedded viewer storage access');
+        await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-embed.png`) });
+
+        // 2. the preview link in the text → the viewer page (same tab), then back to the post
+        const link = vp.locator(`.post-content a[href^="/viewer/?file="]:not(figure a)`);
+        assert.equal(await link.count(), 1, 'one preview link in the text');
+        await link.scrollIntoViewIfNeeded();
+        await Promise.all([vp.waitForURL(/\/viewer\/\?file=/), link.click()]);
+        const v = await viewerRendered(vp);
+        assert.equal(v.pages, PDF_PAGES);
+        assert.equal(v.embed, false);
+        assert.equal(v.lang, lang === 'en' ? 'en' : 'zh-CN');
+        assert.equal(v.download, `/documents/${PDF_NAME}`);
+        assert.equal(await vp.title(), PDF_NAME);
+        assert.deepEqual(await vp.evaluate(() => window.__storage), ['getItem:pref-theme'], 'viewer storage access');
+        await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-viewer.png`) });
+        await vp.goBack();
+        assert.equal(new URL(vp.url()).pathname, `${prefix}/posts/${SLUG}/`, 'back returns to the post');
+        await vp.close();
+      }
+      assert.deepEqual(viewerExternal, [], 'the viewer requested nothing outside the site');
+      // the theme's own post page loads KaTeX from the CDN (blocked in this test) — that is not the viewer's doing
+      const added = external.splice(externalBefore);
+      assert.deepEqual(added.filter((u) => !u.startsWith('https://cdn.jsdelivr.net/npm/katex@')), [], 'unexpected external requests');
+    });
+
+    // -----------------------------------------------------------------------
     await step('every original comment in config/_default/*.toml is still there, in order', async () => {
       const exp = path.join(OUT, 'export');
       for (const p of CONFIG) {
@@ -606,8 +771,8 @@ async function main() {
       assert.deepEqual(cspErrors, []);
       assert.deepEqual(external, []);
       assert.deepEqual(tokenLeaks, []);
-      // one commit per publish: 2 post + 1 upload + 1 link + 1 profile + 1 background + 1 menu + 1 draft + 1 delete
-      assert.equal(mock.commits.length, 9, mock.commits.map((c) => c.message).join('\n'));
+      // one commit per publish: 2 post + 1 upload + 2 link/embed (zh, en) + 1 profile + 1 background + 1 menu + 1 draft + 1 delete
+      assert.equal(mock.commits.length, 10, mock.commits.map((c) => c.message).join('\n'));
     });
   } finally {
     await browser.close();

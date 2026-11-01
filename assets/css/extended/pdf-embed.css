@@ -1,0 +1,63 @@
+/* 嵌入式资料阅读器（配合 layouts/shortcodes/pdf.html，阅读器本身是 /viewer/）。
+   assets/css/extended/ 下的 CSS 会被 PaperMod 自动打包进主样式表。 */
+.post-content .pdf-embed {
+    margin: 1.5rem 0;
+}
+
+.post-content .pdf-embed-frame {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    /* 屏幕高度的 80%，但不超过 900px、不低于 420px（不用 min()，老的安卓 WebView 也能正确显示） */
+    height: 80vh;
+    max-height: 900px;
+    min-height: 420px;
+    border: 1px solid var(--border);
+    border-radius: 8px 8px 0 0;
+    background: var(--code-bg);
+}
+
+.post-content .pdf-embed-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 16px;
+    margin: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--secondary);
+}
+
+.post-content p.pdf-embed-links {
+    border-top: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.post-content .pdf-embed-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.post-content .pdf-embed-actions {
+    display: inline-flex;
+    flex: none;
+    gap: 16px;
+}
+
+.post-content .pdf-embed-actions a {
+    white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+    .post-content .pdf-embed-frame {
+        height: 72vh;
+        min-height: 360px;
+    }
+}

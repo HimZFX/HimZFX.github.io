@@ -1,7 +1,8 @@
 // tests/admin/e2e-files.mjs — Playwright end-to-end test for the 「资料」 view (views/files.js).
 //
 // Covers: upload (button + drag & drop), image compression on/off, exact bytes in the mock repo,
-// list + links + search, copy link, overwrite confirm, .gitignore confirm, ≥25 MB warning,
+// list + links + search, copy link, PDF preview links (/viewer/?file=…) + 复制文件链接, overwrite confirm,
+// .gitignore confirm, ≥25 MB warning, delete warnings for direct / viewer-link / {{< pdf >}} references,
 // delete, 图片 folder, custom folder chooser (admin/ refused), mobile layout, and finally a Hugo
 // build of the exported repo that must serve /documents/<file>.
 //
@@ -19,6 +20,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { startMock, buildSite, openAdmin, REPO_ROOT } from './mock-github.mjs';
 import { createIgnoreMatcher, normalizeStaticDir } from '../../static/admin/js/views/files.js';
+import { viewerUrlFor } from '../../static/admin/js/content.js';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 
@@ -219,6 +221,9 @@ await waitView(page);
 
 await test('empty 资料 folder shows an empty state + folder info', async () => {
   assert.ok(await page.isVisible(sel('files-empty')));
+  // the page explains that PDFs open in the browser (also on Android / in WeChat)
+  assert.match(await page.textContent(sel('files-viewer-note')), /PDF 会在网页里直接打开.*安卓手机和微信里也能看/);
+  assert.match(await page.textContent(sel('files-viewer-note')), /复制预览链接/);
   const info = await page.textContent(sel('files-folder-info'));
   assert.match(info, /static\/documents\//);
   assert.match(info, /\/documents\//);
@@ -254,6 +259,16 @@ await test('upload a PDF + a PNG (compressed) in one commit', async () => {
   const statuses = await page.$$eval(sel('files-batch-item'), (els) => els.map((e) => [e.dataset.name, e.dataset.status]));
   assert.deepEqual(statuses, [['report.pdf', 'done'], ['Chart-Photo.jpg', 'done']]);
   assert.match(await page.textContent(sel('files-batch')), /原名 Chart Photo\.png/);
+  // 复制 in the batch card: the PDF gives its preview link, the image its file link
+  const batchItem = (name) => `${sel('files-batch-item')}[data-name="${name}"] ${sel('files-batch-copy')}`;
+  assert.match(await page.textContent(batchItem('report.pdf')), /复制预览链接/);
+  assert.match(await page.textContent(batchItem('Chart-Photo.jpg')), /^复制链接$/);
+  await page.click(batchItem('report.pdf'));
+  await page.waitForFunction(async () => /\/viewer\//.test(await navigator.clipboard.readText()));
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), mock.url + '/viewer/?file=%2Fdocuments%2Freport.pdf');
+  await page.click(batchItem('Chart-Photo.jpg'));
+  await page.waitForFunction(async () => /Chart-Photo\.jpg$/.test(await navigator.clipboard.readText()));
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), mock.url + '/documents/Chart-Photo.jpg');
   await page.screenshot({ path: path.join(SHOTS, 'files-uploaded-desktop.png'), fullPage: true });
 });
 
@@ -264,10 +279,22 @@ await test('list shows both files with /documents/… links', async () => {
     name: e.querySelector('[data-testid="files-name"]').textContent,
     link: e.querySelector('[data-testid="files-link"]').textContent,
     open: e.querySelector('[data-testid="files-open"]').getAttribute('href'),
+    preview: !!e.querySelector('[data-testid="files-copy-preview"]'),
+    copyLabel: e.querySelector('[data-testid="files-copy"]').textContent,
   })));
   assert.deepEqual(rows.map((r) => r.link), ['/documents/Chart-Photo.jpg', '/documents/report.pdf']);
   assert.equal(rows[1].name, 'report.pdf');
-  assert.equal(rows[1].open, mock.url + '/documents/report.pdf');
+  // PDF: 「打开」 opens the online viewer; 「复制预览链接」 is offered, 「复制文件链接」 stays
+  assert.equal(rows[1].open, mock.url + '/viewer/?file=%2Fdocuments%2Freport.pdf');
+  assert.equal(rows[1].preview, true);
+  assert.equal(rows[1].copyLabel, '复制文件链接');
+  // image: the direct file link (displays everywhere)
+  assert.equal(rows[0].open, mock.url + '/documents/Chart-Photo.jpg');
+  assert.equal(rows[0].preview, false);
+  assert.equal(rows[0].copyLabel, '复制链接');
+  // the preview button comes first (primary action)
+  const order = await page.$$eval(`${rowSel('static/documents/report.pdf')} .files-actions > *`, (els) => els.map((e) => e.dataset.testid));
+  assert.deepEqual(order, ['files-copy-preview', 'files-copy', 'files-open', 'files-delete']);
   assert.match(await page.textContent(sel('files-count')), /共 2 个文件/);
   // image row gets a thumbnail read from the repo
   await page.waitForSelector(`${rowSel('static/documents/Chart-Photo.jpg')} .files-thumb img`, { timeout: 10000 });
@@ -290,6 +317,24 @@ await test('copy link copies the full URL', async () => {
   await page.waitForSelector(sel('toast-success'));
   const clip = await page.evaluate(() => navigator.clipboard.readText());
   assert.equal(clip, mock.url + '/documents/report.pdf');
+});
+
+await test('复制预览链接 copies the online viewer URL (file param fully encoded)', async () => {
+  await closeToasts(page);
+  await page.click(`${rowSel('static/documents/report.pdf')} ${sel('files-copy-preview')}`);
+  await page.waitForSelector(sel('toast-success'));
+  assert.match(await page.textContent(sel('toast-success')), /已复制预览链接/);
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  assert.equal(clip, mock.url + '/viewer/?file=%2Fdocuments%2Freport.pdf');
+  const u = new URL(clip);
+  assert.equal(u.origin, mock.url);
+  assert.equal(u.pathname, '/viewer/');
+  assert.equal(u.searchParams.get('file'), '/documents/report.pdf');
+  // the file link is still there and unchanged
+  await closeToasts(page);
+  await page.click(`${rowSel('static/documents/report.pdf')} ${sel('files-copy')}`);
+  await page.waitForSelector(sel('toast-success'));
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), mock.url + '/documents/report.pdf');
 });
 
 await test('uploading the same name asks before replacing (cancel, then replace)', async () => {
@@ -365,6 +410,45 @@ await test('delete a file (warns about the referencing post)', async () => {
   assert.equal(mock.commits.at(-1).message, 'admin: 删除资料 report.pdf');
   assert.deepEqual(mock.commits.at(-1).changes, [{ path: 'static/documents/report.pdf', status: 'removed' }]);
   assert.ok(mock.readBytes('static/documents/Chart-Photo.jpg'), 'other file untouched');
+});
+
+const VIEWER_DOC = 'static/documents/讲义 第2章 (下).pdf';
+const VIEWER_SITE_PATH = '/documents/讲义 第2章 (下).pdf';
+const REF_POSTS = {
+  // only an absolute viewer link (what 「复制预览链接」 gives), English UI
+  'content/posts/uses-viewer-link.md': `---\ntitle: "预览链接"\ndate: 2026-10-02\ndraft: false\n---\n\n讲义见 [第2章](${viewerUrlFor(VIEWER_SITE_PATH, { absolute: true, siteUrl: 'https://himzfx.github.io/', lang: 'en' })})。\n`,
+  // only the embed shortcode
+  'content/posts/uses-embed.md': `---\ntitle: "嵌入阅读器"\ndate: 2026-10-03\ndraft: false\n---\n\n第2章：\n\n{{< pdf "${VIEWER_SITE_PATH}" >}}\n`,
+  // a viewer link to a different file must not count
+  'content/posts/other-viewer.md': `---\ntitle: "别的资料"\ndate: 2026-10-04\ndraft: false\n---\n\n[第3章](${viewerUrlFor('/documents/讲义 第3章 (下).pdf')})\n`,
+};
+const HAS_PDF_SHORTCODE = fs.existsSync(path.join(REPO_ROOT, 'layouts', 'shortcodes', 'pdf.html'));
+
+await test('delete warns about posts that reference the file only via a viewer link or {{< pdf >}}', async () => {
+  mock.setFiles({ [VIEWER_DOC]: '%PDF-1.4 chapter 2\n', ...REF_POSTS });
+  await page.reload();
+  await waitView(page);
+  await page.waitForSelector(rowSel(VIEWER_DOC));
+  // the preview link of a name with spaces / parentheses / Chinese
+  assert.equal(await page.getAttribute(`${rowSel(VIEWER_DOC)} ${sel('files-open')}`, 'href'),
+    mock.url + '/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89%20%E7%AC%AC2%E7%AB%A0%20%28%E4%B8%8B%29.pdf');
+  const before = mock.commits.length;
+  await page.click(`${rowSel(VIEWER_DOC)} ${sel('files-delete')}`);
+  await page.waitForSelector(sel('confirm-ok'));
+  await page.waitForSelector(sel('files-delete-refs'));
+  const refs = await page.textContent(sel('files-delete-refs'));
+  assert.match(refs, /有 2 篇文章或页面引用了它/);
+  assert.match(refs, /content\/posts\/uses-viewer-link\.md/);
+  assert.match(refs, /content\/posts\/uses-embed\.md/);
+  assert.doesNotMatch(refs, /other-viewer/);
+  await page.click(sel('confirm-cancel'));
+  await page.waitForSelector(sel('confirm-cancel'), { state: 'detached' });
+  assert.equal(mock.commits.length, before, 'cancelled delete commits nothing');
+  assert.ok(mock.readBytes(VIEWER_DOC));
+  if (!HAS_PDF_SHORTCODE) {
+    // the site's {{< pdf >}} shortcode is not in this checkout → keep the final Hugo build working
+    mock.setFiles({ 'content/posts/uses-embed.md': null });
+  }
 });
 
 await test('re-upload report.pdf via drag & drop (kept for the build check)', async () => {
@@ -469,11 +553,19 @@ await test('mobile layout (390×844 and 360 wide): no horizontal scroll', async 
   await m.screenshot({ path: path.join(SHOTS, 'files-mobile-uploaded.png'), fullPage: true });
   await m.setViewportSize({ width: 360, height: 740 });
   assert.ok(await noHorizontalScroll(m), 'no horizontal scroll at 360');
-  // desktop action buttons are hidden; the ⋯ sheet offers copy / open / delete
+  // desktop action buttons are hidden; the ⋯ sheet offers copy preview / copy file / open / delete
   assert.equal(await m.isVisible(`${rowSel('static/documents/report.pdf')} ${sel('files-delete')}`), false);
   await m.click(`${rowSel('static/documents/report.pdf')} ${sel('files-more')}`);
   await m.waitForSelector(sel('files-sheet-delete'));
-  assert.equal(await m.getAttribute(sel('files-sheet-open'), 'href'), mock.url + '/documents/report.pdf');
+  assert.equal(await m.getAttribute(sel('files-sheet-open'), 'href'), mock.url + '/viewer/?file=%2Fdocuments%2Freport.pdf');
+  const sheetItems = await m.$$eval('.files-sheet-item', (els) => els.map((e) => [e.dataset.testid, e.textContent]));
+  assert.deepEqual(sheetItems, [
+    ['files-sheet-copy-preview', '复制预览链接'],
+    ['files-sheet-copy', '复制文件链接'],
+    ['files-sheet-open', '在线预览'],
+    ['files-sheet-delete', '删除'],
+  ]);
+  assert.match(await m.textContent('.files-sheet'), /安卓手机和微信里也能看/);
   await m.waitForTimeout(350);
   await m.screenshot({ path: path.join(SHOTS, 'files-mobile-action-sheet.png') });
   await m.click(sel('files-sheet-delete'));
@@ -496,6 +588,15 @@ await test('exported repo builds and serves /documents/<file>', async () => {
   assert.ok(fs.existsSync(path.join(BUILD2_DIR, 'documents', 'Chart-Photo.jpg')));
   assert.ok(fs.readFileSync(path.join(BUILD2_DIR, 'images', 'logo.png')).equals(SMALL_PNG));
   assert.ok(!fs.existsSync(path.join(BUILD2_DIR, 'documents', 'undergraduate_thesis.pdf')));
+  // the post with the absolute viewer link keeps it (Hugo may escape & as &amp;)
+  const viewerPost = fs.readFileSync(path.join(BUILD2_DIR, 'posts', 'uses-viewer-link', 'index.html'), 'utf8');
+  assert.ok(viewerPost.includes('https://himzfx.github.io/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89%20%E7%AC%AC2%E7%AB%A0%20%28%E4%B8%8B%29.pdf'), 'viewer link survives the build');
+  if (HAS_PDF_SHORTCODE) {
+    const embedPost = fs.readFileSync(path.join(BUILD2_DIR, 'posts', 'uses-embed', 'index.html'), 'utf8');
+    assert.match(embedPost, /<iframe[^>]+\/viewer\/\?file=%2[Ff]documents%2[Ff]/, 'the {{< pdf >}} shortcode renders the embedded viewer');
+  } else {
+    console.log('    (layouts/shortcodes/pdf.html not present: skipped the {{< pdf >}} build check)');
+  }
 });
 
 await test('no page errors, nothing left the mock origin except blocked CDNs', async () => {

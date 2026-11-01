@@ -168,6 +168,8 @@ async function main() {
     console.log(`  built in ${r.ms} ms`);
   }
   const ORIG = { params: mock.readFile(P_PARAMS), langs: mock.readFile(P_LANGS), hugo: mock.readFile(P_HUGO) };
+  // the current subtitle as committed (the owner edits it from the admin, so it is read, not hard-coded)
+  const SUB_ORIG = /^  subtitle = "([^"]*)"$/m.exec(ORIG.params)[1];
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
@@ -201,7 +203,7 @@ async function main() {
       await waitView(page, 'profile');
       await page.waitForSelector(tid('profile-save'));
       assert.equal(await page.inputValue(tid('profile-title')), 'Zhong Fangxiong');
-      assert.equal(await page.inputValue(tid('profile-subtitle')), 'Peking University | Physics & Astrophysics | Quant Trading');
+      assert.equal(await page.inputValue(tid('profile-subtitle')), SUB_ORIG);
       assert.equal(await page.inputValue(tid('profile-site-title')), "HimZFX's Lab");
       assert.equal(await page.inputValue(tid('profile-override-en-subtitle')), '');
       assert.equal(await page.locator(tid('button-row')).count(), 2);
@@ -345,7 +347,7 @@ async function main() {
       const vers = new Set(favAdded.map((l) => FAV_RE.exec(l)[1]));
       assert.equal(vers.size, 1, 'all three icon links use the same version');
       FAVICON_VER = [...vers][0];
-      assert.deepEqual(d.removed, ['  enabled = true', '  subtitle = "Peking University | Physics & Astrophysics | Quant Trading"',
+      assert.deepEqual(d.removed, ['  enabled = true', `  subtitle = "${SUB_ORIG}"`,
         '  favicon = "/favicon.jpg"', '  favicon16x16 = "/favicon.jpg"', '  favicon32x32 = "/favicon.jpg"'].sort());
       assert.deepEqual(d.added.filter((l) => !FAV_RE.test(l)), ['  enabled = false', `  subtitle = "${SUB_NEW}"`, '[[socialIcons]]', '  name = "zhihu"', `  url = "${ZHIHU}"`].sort());
       // the avatar keeps its address (the imageUrl line, with its comment, is untouched)

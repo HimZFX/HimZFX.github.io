@@ -1,0 +1,83 @@
+{{- /*
+  PDF / 图片阅读器短代码：在文章或页面里直接嵌入资料的在线预览（/viewer/，PDF.js，手机和微信里也能看）。
+
+  用法（文件放在 static/documents/ 下，或用管理后台「资料」上传）：
+    {{< pdf "/documents/讲义-第1章.pdf" >}}
+    {{< pdf src="/documents/讲义-第1章.pdf" page="3" height="600" title="第 1 章讲义" >}}
+
+  命名参数（都可省略；用了命名参数时文件写在 src 里）：
+    src     文件的网站路径，以 / 开头，例如 /documents/x.pdf（也支持图片 .png/.jpg 等）
+    page    从第几页开始显示（默认 1）
+    height  阅读器高度：数字表示像素（600），也可写 600px / 70vh（默认：屏幕高度的 80%，最高 900px）
+    title   显示在阅读器下方的名称（默认：文件名）
+
+  阅读器下方总有一行「在新页面打开 / 下载」，即使阅读器加载失败也能拿到文件。
+  英文站（/en/）里自动显示英文界面。样式在 assets/css/extended/pdf-embed.css。
+*/ -}}
+{{- $src := "" -}}
+{{- $page := "" -}}
+{{- $height := "" -}}
+{{- $title := "" -}}
+{{- if .IsNamedParams -}}
+  {{- $src = .Get "src" | default (.Get "file") | default "" -}}
+  {{- $page = .Get "page" | default "" -}}
+  {{- $height = .Get "height" | default "" -}}
+  {{- $title = .Get "title" | default "" -}}
+{{- else -}}
+  {{- $src = .Get 0 | default "" -}}
+{{- end -}}
+{{- $src = trim (string $src) " \t\r\n" -}}
+{{- $page = trim (string $page) " " -}}
+{{- $height = trim (string $height) " " -}}
+{{- $title = trim (string $title) " " -}}
+{{- $en := eq .Page.Language.Lang "en" -}}
+{{- $lang := .Page.Language.Lang -}}
+
+{{- /* 本站完整网址 → 站内路径；漏写开头的 / 时补上 */ -}}
+{{- $base := strings.TrimSuffix "/" site.BaseURL -}}
+{{- if and $base (hasPrefix $src $base) -}}{{- $src = strings.TrimPrefix $base $src -}}{{- end -}}
+{{- $external := or (findRE `^[a-zA-Z][a-zA-Z0-9+.-]*:` $src) (hasPrefix $src "//") -}}
+{{- if and $src (not $external) (not (hasPrefix $src "/")) -}}{{- $src = printf "/%s" $src -}}{{- end -}}
+
+{{- if not $src -}}
+  {{- warnf "pdf 短代码缺少文件路径：%s" .Position -}}
+{{- else if $external -}}
+  {{- warnf "pdf 短代码只能嵌入本站的文件（例如 /documents/x.pdf），这里写的是 %q：%s" $src .Position -}}
+  <p class="pdf-embed-links"><a href="{{ $src }}" target="_blank" rel="noopener noreferrer">{{ $title | default $src }}</a></p>
+{{- else -}}
+  {{- $name := path.Base $src -}}
+  {{- $label := $title | default $name -}}
+  {{- /* 「下载」链接：文件名里的 # 和 ? 不能原样写进网址（会被当成锚点 / 查询）。和阅读器一样逐段处理：
+        已经是 %XX 编码的段保持不变，否则其中的 % 也要编码成 %25（例如 50%off.pdf）。 */ -}}
+  {{- $fileHref := "" -}}
+  {{- range split (strings.TrimPrefix "/" $src) "/" -}}
+    {{- $seg := . -}}
+    {{- if ne (len (findRE `%[0-9A-Fa-f]{2}` $seg)) (strings.Count "%" $seg) -}}{{- $seg = replace $seg "%" "%25" -}}{{- end -}}
+    {{- $seg = replace (replace $seg "#" "%23") "?" "%3F" -}}
+    {{- $fileHref = printf "%s/%s" $fileHref $seg -}}
+  {{- end -}}
+  {{- $viewer := "viewer/" | relURL -}}
+  {{- $q := printf "?file=%s&lang=%s" (urlquery $src) (urlquery $lang) -}}
+  {{- if findRE `^[1-9][0-9]{0,5}$` $page -}}{{- $q = printf "%s&page=%s" $q $page -}}{{- end -}}
+  {{- $style := "" -}}
+  {{- if findRE `^[0-9]+(\.[0-9]+)?$` $height -}}
+    {{- $style = printf "height:%spx;max-height:none;min-height:0" $height -}}
+  {{- else if findRE `^[0-9]+(\.[0-9]+)?(px|vh|svh|dvh|em|rem)$` $height -}}
+    {{- $style = printf "height:%s;max-height:none;min-height:0" $height -}}
+  {{- else if $height -}}
+    {{- warnf "pdf 短代码的 height %q 无效（可写 600、600px 或 70vh），已使用默认高度：%s" $height .Position -}}
+  {{- end -}}
+<figure class="pdf-embed">
+  <iframe class="pdf-embed-frame" src="{{ printf "%s%s&embed=1" $viewer $q }}"
+    title="{{ if $en }}Preview: {{ else }}预览：{{ end }}{{ $label }}"
+    loading="lazy" allow="fullscreen" referrerpolicy="no-referrer"
+    {{- with $style }} style="{{ . | safeCSS }}"{{ end }}></iframe>
+  <figcaption class="pdf-embed-links">
+    <span class="pdf-embed-name" title="{{ $name }}">{{ $label }}</span>
+    <span class="pdf-embed-actions">
+      <a href="{{ printf "%s%s" $viewer $q }}" target="_blank" rel="noopener">{{ if $en }}Open in new tab{{ else }}在新页面打开{{ end }}</a>
+      <a href="{{ $fileHref }}" download="{{ $name }}">{{ if $en }}Download{{ else }}下载{{ end }}</a>
+    </span>
+  </figcaption>
+</figure>
+{{- end -}}

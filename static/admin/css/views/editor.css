@@ -282,6 +282,28 @@
 .ed-doc-item .list-item-title { font-size: 14px; }
 .ed-doc-empty { padding: 28px 12px; }
 
+/* PDF 的插入方式：在线预览链接 / 嵌入阅读器 */
+.ed-doc-choice-files { margin: 0; overflow-wrap: anywhere; }
+.ed-doc-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ed-doc-choice:hover, .ed-doc-choice:focus-visible { border-color: var(--primary); background: var(--primary-soft); }
+.ed-doc-choice > .icon { flex: none; width: 20px; height: 20px; margin-top: 1px; color: var(--primary-text); }
+.ed-doc-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ed-doc-choice-title { font-weight: 600; font-size: 14.5px; }
+.ed-doc-choice-desc { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
 /* ---------- 手机预览 ---------- */
 .modal.ed-preview-modal { width: min(500px, 100%); }
 .ed-preview { display: flex; flex-direction: column; align-items: center; gap: 14px; }

@@ -5,6 +5,9 @@
  *   （永远不能是 static/admin/）。地址 #/files?dir=static/xxx。
  * - 列表：递归列出文件夹里的全部文件（按子文件夹分组），显示名称、大小、网址（/documents/x.pdf），
  *   操作：复制链接 · 打开 · 删除（确认；会提示哪些文章引用了它）。可按名称搜索。
+ *   PDF 的主要操作是「复制预览链接」：网站的在线阅读器 /viewer/?file=…（content.viewerUrlFor），
+ *   安卓手机和微信内置浏览器打不开 PDF 文件本身（只能下载），阅读器页面能直接看；
+ *   「打开」也打开阅读器；「复制文件链接」（文件本身的网址）作为次要操作保留。
  * - 上传：按钮 + 拖放（可多选）。提交前：
  *     压缩图片（勾选「压缩图片」时只处理 JPG / PNG）→ 大小检查（≥ 25 MB 提醒、≥ 95 MB 拒绝）
  *     → 同名文件（会被替换）、.gitignore 里的文件、HEIC 照片 → 合并成一个确认框 → 一次提交。
@@ -23,7 +26,7 @@ import {
   errorMessage, debounce, copyText,
 } from '../ui.js';
 import { safeFileName, extOf, compressImage } from '../images.js';
-import { sitePathFor } from '../content.js';
+import { sitePathFor, viewerUrlFor, isPdfPath, referencesSitePath } from '../content.js';
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -204,6 +207,16 @@ function fullUrl(siteUrl, staticPath) {
   return base + rel.split('/').map((seg) => encodeURIComponent(seg)).join('/');
 }
 
+/** PDF 的在线预览网址：'static/documents/a.pdf' → 'https://site/viewer/?file=%2Fdocuments%2Fa.pdf' */
+function previewUrl(siteUrl, staticPath) {
+  return viewerUrlFor(sitePathFor(staticPath), { absolute: true, siteUrl: String(siteUrl || '/') });
+}
+
+/** 这个文件用在线阅读器打开（目前只有 PDF；图片的文件链接在哪里都能直接显示）。 */
+function usesViewer(staticPath) {
+  return isPdfPath(staticPath) && !!viewerUrlFor(sitePathFor(staticPath));
+}
+
 function baseNameOf(p) {
   const i = p.lastIndexOf('/');
   return i >= 0 ? p.slice(i + 1) : p;
@@ -309,7 +322,10 @@ export default async function mount(container, params, ctx) {
   const header = h('div', { class: 'page-header' },
     h('div', { class: 'files-heading' },
       h('h1', {}, '资料'),
-      h('p', { class: 'page-desc' }, '上传 PDF、课件、图片等文件，得到一个可以分享或写进文章的网址。')));
+      h('p', { class: 'page-desc' }, '上传 PDF、课件、图片等文件，得到一个可以分享或写进文章的网址。'),
+      h('p', { class: 'page-desc files-viewer-note', dataset: { testid: 'files-viewer-note' } },
+        svgIcon('info', { size: 14 }),
+        h('span', {}, 'PDF 会在网页里直接打开（安卓手机和微信里也能看），页面上带「下载」按钮；用「复制预览链接」分享。'))));
 
   // ---- 文件夹选择 ----
   const folderTabs = h('div', { class: 'tabs tabs-pill files-folders', role: 'tablist', 'aria-label': '选择文件夹' },
@@ -601,6 +617,8 @@ export default async function mount(container, params, ctx) {
     const kind = typeKind(ext);
     const sitePath = sitePathFor(e.path);
     const url = fullUrl(ctx.siteUrl, e.path);
+    const viewer = usesViewer(e.path);
+    const openUrl = viewer ? previewUrl(ctx.siteUrl, e.path) : url;
 
     const thumb = h('div', { class: ['files-thumb', `files-type-${kind}`], 'aria-hidden': 'true' },
       kind === 'image' ? svgIcon('image') : h('span', { class: 'files-ext' }, (ext || '文件').slice(0, 4).toUpperCase()));
@@ -613,15 +631,29 @@ export default async function mount(container, params, ctx) {
       else queueThumb(thumb);
     }
 
+    // PDF：「复制预览链接」（在线阅读器）是主要操作，文件本身的链接是次要的
+    const previewBtn = viewer ? h('button', {
+      type: 'button', class: 'btn btn-ghost btn-primary btn-sm',
+      title: '复制在线预览的网址：点开直接在网页里看（安卓手机和微信里也能看），页面上可以下载',
+      'aria-label': `复制「${name}」的预览链接`,
+      dataset: { testid: 'files-copy-preview' },
+    }, svgIcon('eye'), h('span', { class: 'files-action-label' }, '复制预览链接')) : null;
+    if (previewBtn) previewBtn.addEventListener('click', () => copyLink(e.path, { preview: true }));
+
     const copyBtn = h('button', {
-      type: 'button', class: 'btn btn-ghost btn-sm', title: '复制完整网址', 'aria-label': `复制「${name}」的链接`,
+      type: 'button', class: ['btn btn-ghost btn-sm', viewer && 'files-copy-secondary'],
+      title: viewer ? '复制文件本身的网址（安卓手机和微信里点开通常只能下载）' : '复制完整网址',
+      'aria-label': viewer ? `复制「${name}」的文件链接` : `复制「${name}」的链接`,
       dataset: { testid: 'files-copy' },
-    }, svgIcon('link'), h('span', { class: 'files-action-label' }, '复制链接'));
+    }, svgIcon('link'), h('span', { class: 'files-action-label' }, viewer ? '复制文件链接' : '复制链接'));
     copyBtn.addEventListener('click', () => copyLink(e.path));
 
     const openLink = h('a', {
-      class: 'btn btn-ghost btn-sm', href: url, target: '_blank', rel: 'noopener noreferrer',
-      title: '在网站上打开（刚上传的文件需要等部署完成，约 1–2 分钟）', 'aria-label': `在网站上打开「${name}」`,
+      class: 'btn btn-ghost btn-sm', href: openUrl, target: '_blank', rel: 'noopener noreferrer',
+      title: viewer
+        ? '在网站的在线阅读器里打开（刚上传的文件需要等部署完成，约 1–2 分钟）'
+        : '在网站上打开（刚上传的文件需要等部署完成，约 1–2 分钟）',
+      'aria-label': viewer ? `在线预览「${name}」` : `在网站上打开「${name}」`,
       dataset: { testid: 'files-open' },
     }, svgIcon('external'), h('span', { class: 'files-action-label' }, '打开'));
 
@@ -646,14 +678,15 @@ export default async function mount(container, params, ctx) {
           h('span', { class: 'files-size' }, formatBytes(e.size)),
           h('code', { class: 'files-link', title: url, dataset: { testid: 'files-link' } }, sitePath))),
       h('div', { class: 'list-item-actions' },
-        h('div', { class: 'files-actions hide-mobile' }, copyBtn, openLink, delBtn),
+        h('div', { class: 'files-actions hide-mobile' }, previewBtn, copyBtn, openLink, delBtn),
         moreBtn));
   }
 
   /** 手机上的操作面板（底部抽屉样式的 modal）。 */
   function actionSheet(e, anchor) {
     const name = baseNameOf(e.path);
-    const url = fullUrl(ctx.siteUrl, e.path);
+    const viewer = usesViewer(e.path);
+    const url = viewer ? previewUrl(ctx.siteUrl, e.path) : fullUrl(ctx.siteUrl, e.path);
     let m = null;
     const item = (icon, text, testid, onClick, extra = {}) => h(extra.href ? 'a' : 'button', {
       type: extra.href ? undefined : 'button',
@@ -669,9 +702,11 @@ export default async function mount(container, params, ctx) {
         h('div', { class: 'files-sheet-meta muted small' },
           h('span', {}, formatBytes(e.size)),
           h('code', { class: 'files-code' }, sitePathFor(e.path))),
+        viewer ? h('p', { class: 'files-sheet-note muted small' }, '预览链接在网页里直接打开 PDF，安卓手机和微信里也能看。') : null,
         h('div', { class: 'files-sheet-list' },
-          item('link', '复制链接', 'files-sheet-copy', () => { m.close(); copyLink(e.path); }),
-          item('external', '在网站上打开', 'files-sheet-open', () => { m.close(); }, { href: url }),
+          viewer ? item('eye', '复制预览链接', 'files-sheet-copy-preview', () => { m.close(); copyLink(e.path, { preview: true }); }) : null,
+          item('link', viewer ? '复制文件链接' : '复制链接', 'files-sheet-copy', () => { m.close(); copyLink(e.path); }),
+          item('external', viewer ? '在线预览' : '在网站上打开', 'files-sheet-open', () => { m.close(); }, { href: url }),
           item('trash', '删除', 'files-sheet-delete', () => {
             m.close();
             withBusy(anchor, () => deleteFile(e)).catch(() => {});
@@ -714,11 +749,11 @@ export default async function mount(container, params, ctx) {
 
   // ---- 复制 / 删除 ----
 
-  async function copyLink(path) {
-    const url = fullUrl(ctx.siteUrl, path);
+  async function copyLink(path, { preview = false } = {}) {
+    const url = preview ? previewUrl(ctx.siteUrl, path) : fullUrl(ctx.siteUrl, path);
     try {
       await copyText(url);
-      toast(`已复制链接：${url}`, { type: 'success' });
+      toast(preview ? `已复制预览链接：${url}` : `已复制链接：${url}`, { type: 'success' });
     } catch (err) {
       toast(`${errorMessage(err)}：${url}`, { type: 'error', timeout: 9000 });
     }
@@ -728,11 +763,11 @@ export default async function mount(container, params, ctx) {
   async function findReferences(sitePath) {
     const mds = repo.list(PATHS.content + '/').filter((e) => e.path.endsWith('.md'));
     if (!mds.length || mds.length > 400) return [];
-    const needles = [sitePath, encodeURI(sitePath)];
     const work = mapLimit(mds, 6, async (e) => {
       try {
         const text = await repo.readText(e.path);
-        return needles.some((n) => text.includes(n)) ? e.path : null;
+        // 直接链接、在线预览链接（/viewer/?file=…）、{{< pdf >}} 短代码都算
+        return referencesSitePath(text, sitePath) ? e.path : null;
       } catch { return null; }
     }).then((r) => r.filter(Boolean));
     return Promise.race([work, sleep(5000).then(() => [])]);
@@ -751,7 +786,7 @@ export default async function mount(container, params, ctx) {
         ? h('div', { class: 'banner banner-warning', dataset: { testid: 'files-delete-refs' } },
           svgIcon('warning'),
           h('div', { class: 'banner-text' },
-            h('div', {}, `有 ${refs.length} 篇文章或页面引用了它，删除后那里的链接或图片会打不开：`),
+            h('div', {}, `有 ${refs.length} 篇文章或页面引用了它，删除后那里的链接、图片或嵌入的阅读器会打不开：`),
             h('ul', { class: 'files-name-list' }, refs.slice(0, 8).map((p) => h('li', {}, h('code', {}, p)))),
             refs.length > 8 ? h('div', { class: 'muted' }, `…等 ${refs.length} 个`) : null))
         : null,
@@ -1093,10 +1128,13 @@ export default async function mount(container, params, ctx) {
         st === 'compressing' || st === 'uploading' ? h('span', { class: 'spinner spinner-sm', 'aria-hidden': 'true' }) : null,
         done ? svgIcon('check', { size: 14 }) : null,
         STATUS_TEXT[st] || st);
+      const viewer = done && it.path && usesViewer(it.path);
       const copy = done && it.path ? h('button', {
-        type: 'button', class: 'btn btn-ghost btn-sm', dataset: { testid: 'files-batch-copy' },
-        'aria-label': `复制「${it.name}」的链接`, on: { click: () => copyLink(it.path) },
-      }, svgIcon('link'), h('span', { class: 'files-action-label' }, '复制链接')) : null;
+        type: 'button', class: ['btn btn-ghost btn-sm', viewer && 'btn-primary'], dataset: { testid: 'files-batch-copy' },
+        'aria-label': viewer ? `复制「${it.name}」的预览链接` : `复制「${it.name}」的链接`,
+        title: viewer ? '复制在线预览的网址（安卓手机和微信里也能看）' : undefined,
+        on: { click: () => copyLink(it.path, { preview: !!viewer }) },
+      }, svgIcon(viewer ? 'eye' : 'link'), h('span', { class: 'files-action-label' }, viewer ? '复制预览链接' : '复制链接')) : null;
       return h('li', { class: 'files-batch-item', dataset: { testid: 'files-batch-item', status: st, name: it.name } },
         h('div', { class: ['files-thumb', 'files-thumb-sm', `files-type-${kind}`], 'aria-hidden': 'true' },
           kind === 'image' ? svgIcon('image') : h('span', { class: 'files-ext' }, (extOf(it.name) || '文件').slice(0, 4).toUpperCase())),
