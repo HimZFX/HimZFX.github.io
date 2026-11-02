@@ -268,7 +268,8 @@ async function main() {
       assert.match(await page.textContent('[data-testid="editor-slug-error"]'), /同名/);
       await page.fill('[data-testid="editor-slug"]', SLUG);
       // explain line
-      assert.match(await page.textContent('[data-testid="editor-explain"]'), /中文站显示：共用版本.*英文站显示：共用版本/);
+      // languages in languages.toml order: English (default, /) first, then Chinese (/zh/)
+      assert.match(await page.textContent('[data-testid="editor-explain"]'), /英文站显示：共用版本.*中文站显示：共用版本/);
       await page.screenshot({ path: path.join(SHOTS, 'new-post-empty-desktop.png') });
     });
 
@@ -347,12 +348,13 @@ async function main() {
       assert.equal(await page.locator('[data-testid="editor-body"] .vditor-wysiwyg img[src^="blob:"]').count(), 2);
     });
 
-    await test('build: new shared post exists on both /posts/<slug>/ and /en/posts/<slug>/', async () => {
+    await test('build: new shared post exists on both /posts/<slug>/ (English) and /zh/posts/<slug>/ (Chinese)', async () => {
       const repoDir = mock.exportTo(path.join(OUT, 'export1'));
       const out = path.join(OUT, 'build1');
       await buildSite({ repoDir, outDir: out });
-      const zh = fs.readFileSync(path.join(out, 'posts', SLUG, 'index.html'), 'utf8');
-      const en = fs.readFileSync(path.join(out, 'en', 'posts', SLUG, 'index.html'), 'utf8');
+      const en = fs.readFileSync(path.join(out, 'posts', SLUG, 'index.html'), 'utf8');
+      const zh = fs.readFileSync(path.join(out, 'zh', 'posts', SLUG, 'index.html'), 'utf8');
+      assert.ok(!fs.existsSync(path.join(out, 'en', 'posts', SLUG, 'index.html')));
       assert.match(zh, /Hello Math World/);
       assert.match(en, /Hello Math World/);
       assert.ok(fs.existsSync(path.join(out, 'images', 'posts', SLUG, imgName1)), 'image deployed');
@@ -416,6 +418,9 @@ async function main() {
     });
 
     await test('add 英文版 tab → 发表 → <slug>.en.md with copied front matter', async () => {
+      // a shared-only post offers a separate version for every language (labels from ctx.langName, in languages.toml order)
+      assert.deepEqual(await page.$$eval('[data-testid^="editor-add-"]', (els) => els.map((e) => [e.dataset.testid, e.textContent.trim()])),
+        [['editor-add-en', '单独写英文版'], ['editor-add-zh', '单独写中文版']]);
       await page.click('[data-testid="editor-add-en"]');
       await page.waitForSelector('[data-testid="editor-tab-en"].active');
       assert.equal(await page.inputValue('[data-testid="editor-title"]'), 'Hello Math World');
@@ -443,15 +448,16 @@ async function main() {
       assert.match(body, /English paragraph\./);
       assert.match(body, /\$E=mc\^2\$/);
       assert.equal((await page.textContent('[data-testid="editor-status"]')).trim(), '已发表');
-      assert.match(await page.textContent('[data-testid="editor-explain"]'), /中文站显示：共用版本 · 英文站显示：英文专属$/);
+      assert.match(await page.textContent('[data-testid="editor-explain"]'), /英文站显示：英文专属 · 中文站显示：共用版本$/);
+      assert.match(await page.textContent('.ed-tabs'), /共用版本.*英文专属.*单独写中文版/);
     });
 
-    await test('build: /en/ shows the English version, / keeps the shared one', async () => {
+    await test('build: / (English) shows the English version, /zh/ keeps the shared one', async () => {
       const repoDir = mock.exportTo(path.join(OUT, 'export2'));
       const out = path.join(OUT, 'build2');
       await buildSite({ repoDir, outDir: out });
-      const zh = fs.readFileSync(path.join(out, 'posts', SLUG, 'index.html'), 'utf8');
-      const en = fs.readFileSync(path.join(out, 'en', 'posts', SLUG, 'index.html'), 'utf8');
+      const en = fs.readFileSync(path.join(out, 'posts', SLUG, 'index.html'), 'utf8');
+      const zh = fs.readFileSync(path.join(out, 'zh', 'posts', SLUG, 'index.html'), 'utf8');
       assert.match(en, /Hello Math World \(EN\)/);
       assert.match(en, /English paragraph/);
       assert.ok(!/Hello Math World \(EN\)/.test(zh));
@@ -461,8 +467,9 @@ async function main() {
     await test('more menu: view-on-site links per language', async () => {
       await page.click('[data-testid="editor-more"]');
       await page.waitForSelector('[data-testid="editor-more-menu"]');
-      assert.equal(await page.getAttribute('[data-testid="editor-view-zh"]', 'href'), `${mock.url}/posts/${SLUG}/`);
-      assert.equal(await page.getAttribute('[data-testid="editor-view-en"]', 'href'), `${mock.url}/en/posts/${SLUG}/`);
+      assert.equal(await page.getAttribute('[data-testid="editor-view-en"]', 'href'), `${mock.url}/posts/${SLUG}/`);
+      assert.equal(await page.getAttribute('[data-testid="editor-view-zh"]', 'href'), `${mock.url}/zh/posts/${SLUG}/`);
+      assert.deepEqual(await page.$$eval('[data-testid^="editor-view-"]', (els) => els.map((e) => e.textContent.trim())), ['在英文站查看', '在中文站查看']);
       assert.equal(await page.getAttribute('[data-testid="editor-view-en"]', 'target'), '_blank');
       await page.keyboard.press('Escape');
       await page.waitForSelector('[data-testid="editor-more-menu"]', { state: 'detached' });
@@ -614,6 +621,11 @@ async function main() {
       await mp.screenshot({ path: path.join(SHOTS, 'post-mobile-settings.png') });
       await mp.click('[data-testid="editor-preview"]');
       await mp.waitForSelector('[data-testid="preview-iframe"][data-state="ready"]', { timeout: 30000 });
+      // editing the shared version: the preview opens on a site that shows it — the default (English) site has its
+      // own version, so the Chinese site
+      assert.equal(await mp.getAttribute('[data-testid="preview-iframe"]', 'data-lang'), 'zh');
+      const fr0 = await (await mp.$('[data-testid="preview-iframe"]')).contentFrame();
+      assert.equal(await fr0.textContent('.post-title'), 'Hello Math World');
       await mp.click('[data-testid="preview-lang-en"]');
       await mp.waitForFunction(() => {
         const f = document.querySelector('[data-testid="preview-iframe"]');
@@ -752,7 +764,11 @@ async function main() {
     });
 
     await test('new section page (#/edit?new=page&dir=…) → _index.md with menu', async () => {
+      // content/talks/ ships with the site now (academic modules): asking for a new page there opens the existing one
       await gotoEdit(page, '#/edit?new=page&dir=' + encodeURIComponent('content/talks'));
+      assert.equal(await page.textContent('.topbar-title'), '编辑页面');
+      assert.equal(await page.inputValue('[data-testid="editor-title"]'), 'Talks & Posters');
+      await gotoEdit(page, '#/edit?new=page&dir=' + encodeURIComponent('content/seminars'));
       assert.equal(await page.textContent('.topbar-title'), '新建页面');
       await page.waitForFunction(() => document.querySelector('[data-testid="editor-weight"]') && document.querySelector('[data-testid="editor-weight"]').value !== '');
       const w = Number(await page.inputValue('[data-testid="editor-weight"]'));
@@ -761,7 +777,7 @@ async function main() {
       await page.fill('[data-testid="editor-linktitle"]', '报告');
       await vditor.insert(page, '这里写栏目介绍。\n');
       await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
-      const { fm, body } = splitMd(mock.readFile('content/talks/_index.md'));
+      const { fm, body } = splitMd(mock.readFile('content/seminars/_index.md'));
       assert.match(fm, /^title: "学术报告"$/m);
       assert.match(fm, /^linkTitle: "报告"$/m);
       assert.match(fm, new RegExp(`^menu: \\{ main: \\{ weight: ${w} \\} \\}$`, 'm'));
@@ -1362,7 +1378,7 @@ async function main() {
       const repoDir = mock.exportTo(path.join(OUT, 'export-mark'));
       const out = path.join(OUT, 'build-mark');
       await buildSite({ repoDir, outDir: out });
-      for (const parts of [['posts', MARK_SLUG], ['en', 'posts', MARK_SLUG]]) {
+      for (const parts of [['posts', MARK_SLUG], ['zh', 'posts', MARK_SLUG]]) {
         const html = fs.readFileSync(path.join(out, ...parts, 'index.html'), 'utf8');
         assert.match(html, /请记住 <mark>KEYWORD<\/mark> 这个词/, `/${parts.join('/')}/ renders the highlight`);
         assert.equal((html.match(/<mark>/g) || []).length, 1);
@@ -1621,11 +1637,13 @@ async function main() {
         const repoDir = mock.exportTo(path.join(OUT, 'export-pdf'));
         const out = path.join(OUT, 'build-pdf');
         await buildSite({ repoDir, outDir: out });
-        for (const [dir, lang] of [['posts', null], ['en/posts', 'en']]) {
+        // English at /, Chinese at /zh/; the shortcode always passes the page language to the viewer
+        for (const [dir, lang] of [['posts', 'en'], ['zh/posts', 'zh']]) {
           const html = fs.readFileSync(path.join(out, ...dir.split('/'), 'pdf-reader', 'index.html'), 'utf8');
           assert.match(html, /<iframe[^>]+\/viewer\/\?file=%2[Ff]documents%2[Ff]%E8%AE%B2%E4%B9%89-%E7%AC%AC3%E7%AB%A0\.pdf/, `${dir}: embedded viewer`);
           assert.match(html, /embed=1/, `${dir}: embed=1`);
-          if (lang) assert.match(html, /lang=en/, `${dir}: English viewer`);
+          assert.match(html, new RegExp(`<iframe[^>]+lang=${lang}&`), `${dir}: viewer in the page language`);
+          assert.doesNotMatch(html, new RegExp(`<iframe[^>]+lang=${lang === 'en' ? 'zh' : 'en'}&`));
           assert.ok(html.includes(`href=${PDF_VIEWER}`) || html.includes(`href="${PDF_VIEWER}"`), `${dir}: viewer link`);
         }
       } else {

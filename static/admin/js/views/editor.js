@@ -2233,7 +2233,7 @@ class Editor {
       C.variantLabel(v.key, this.ctx),
       dirty ? h('span', { class: 'ed-dot', title: '有未发表的修改', 'aria-label': '有未发表的修改' }) : null));
     }
-    // 「＋ 单独写英文版」
+    // 「＋ 单独写中文版」等：每个还没有专属版本的语言一个（文字来自 ctx.langName，不写死语言）
     const canTranslate = !this.isNewGroup && [...this.variants.values()].some((v) => v.exists);
     if (canTranslate) {
       const hasShared = this.variants.has('shared');
@@ -2825,9 +2825,10 @@ class Editor {
     if (C.isPdfPath(sitePath)) {
       if (how === 'embed' && canEmbedPdf(sitePath)) return `{{< pdf "${sitePath}" >}}`;
       if (how === 'link' || how === 'embed') {
-        // 英文专属版本（xxx.en.md）里的链接打开英文界面的阅读器；共用版本 / 中文版用默认的中文界面
+        // 语言专属版本（xxx.en.md / xxx.zh.md）里的链接写 lang=<该语言>（默认语言也写）；
+        // 共用版本 xxx.md 两个站点都显示，不写 lang，由阅读器按来源页面（/zh/… → 中文）判断（content.viewerUrlFor 的约定）
         const key = this.activeKey;
-        const lang = key && key !== 'shared' && key !== this.ctx.defaultLang ? key : undefined;
+        const lang = key && key !== 'shared' ? key : undefined;
         const url = C.viewerUrlFor(sitePath, { lang });
         if (url) return `[${linkText(text)}](${url})`;
       }
@@ -3540,7 +3541,7 @@ class Editor {
       if (!v || !v.exists || !v.published) return null;
       fm = v.fm || {};
     }
-    const prefix = lang === this.ctx.defaultLang ? '' : `${lang}/`;
+    const prefix = C.langPrefix(lang, this.ctx.defaultLang);
     let rel;
     if (typeof fm.url === 'string' && fm.url.trim()) {
       const raw = fm.url.trim();
@@ -3706,7 +3707,12 @@ class Editor {
   openPreview() {
     this.syncActive();
     const multi = this.langs.length > 1 && this.variants.size > 1;
-    let lang = this.activeKey === 'shared' ? this.ctx.defaultLang : this.activeKey;
+    // 共用版本：先看显示它的站点（默认语言优先；默认语言有自己的专属版本时换成另一个仍显示共用版本的语言）
+    let lang = this.activeKey;
+    if (lang === 'shared') {
+      const showsShared = (l) => !this.variants.has(l);
+      lang = showsShared(this.ctx.defaultLang) ? this.ctx.defaultLang : this.langs.find(showsShared) || this.ctx.defaultLang;
+    }
     let dark = this.isDarkUI();
     const iframe = h('iframe', {
       class: 'ed-phone-frame', sandbox: 'allow-same-origin', title: '手机预览', referrerpolicy: 'no-referrer',

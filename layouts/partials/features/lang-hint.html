@@ -1,0 +1,27 @@
+{{- /*
+  语言提示：读者浏览器的首选语言是另一种站点语言、而这一页正好有那种语言的版本时，在页面底部中间显示一条小提示，
+  例如英文页上对中文读者显示「本页有中文版 →」（反过来，中文页上对英文读者显示 "This page is also available in English →"）。
+  只是提示，从不自动跳转。
+
+  - 只在这一页有其他语言版本（.Translations）时输出；判断读者语言、显示提示的逻辑在 assets/js/lang-hint.js（本站脚本，defer）。
+  - 提示文字写在「当前页面语言」的 i18n 文件里、用「提示指向的语言」写：i18n/en.yaml 的 lang_hint_zh = 「本页有中文版」，
+    i18n/zh.yaml 的 lang_hint_en = "This page is also available in English"。没写时显示那种语言的名字（languages.toml 的 languageName）。
+  - 点 × 关闭后记在 localStorage['lang-hint-dismissed']（只是网站自己的键，和后台的 admin.* 无关），以后不再提示这种语言。
+  - 固定定位，不占文档流：出现时页面不会跳动；颜色只用主题变量，深浅色自动（assets/css/extended/lang-hint.css）。
+*/ -}}
+{{- $hints := slice }}
+{{- range .Translations }}
+  {{- if .RelPermalink }}
+    {{- $text := i18n (printf "lang_hint_%s" .Lang) | default .Language.LanguageName | default .Lang }}
+    {{- $close := i18n (printf "lang_hint_close_%s" .Lang) | default "×" }}
+    {{- $hints = $hints | append (dict "lang" .Lang "code" (.Language.LanguageCode | default .Lang) "url" .RelPermalink "text" $text "close" $close) }}
+  {{- end }}
+{{- end }}
+{{- if $hints }}
+  {{- $js := resources.Get "js/lang-hint.js" }}
+  {{- if hugo.IsProduction }}
+    {{- $js = $js | minify | fingerprint }}
+  {{- end }}
+<script defer src="{{ $js.RelPermalink }}" data-lang="{{ .Lang }}" data-hints="{{ $hints | jsonify }}"
+  {{- with $js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
+{{- end }}

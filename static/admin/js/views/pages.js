@@ -5,8 +5,8 @@
  *   每行显示各语言的菜单名称（linkTitle || title）、网址、语言情况、菜单顺序（menu.main.weight）。
  * - 导航栏里的页面可以直接改顺序（数字输入 + 上移/下移），「保存菜单顺序」= 一个提交，
  *   只修改顺序变了的那些文件的 menu（frontmatter.setFields，块状写法和注释原样保留）。
- * - 「新建栏目」：中文名称、英文名称（可选）、网址、菜单顺序 → content/<网址>/_index.md
- *   （有英文名称时再加 _index.en.md）→ 打开编辑器。
+ * - 「新建栏目」：英文名称（必填，默认语言）、中文名称（可选）、网址、菜单顺序 → content/<网址>/_index.md
+ *   （有中文名称时再加 _index.zh.md）→ 打开编辑器。
  *
  * @module views/pages
  */
@@ -16,7 +16,7 @@ import {
   errorState, errorMessage,
 } from '../ui.js';
 import {
-  groupPages, languageStatus, statusText, isPost, isDraftFm, isValidSlug, slugify, variantPath,
+  groupPages, languageStatus, statusText, isPost, isDraftFm, isValidSlug, slugify, variantPath, langSitePath,
 } from '../content.js';
 import { splitDocument, parseFrontMatter, setFields, FrontMatterError } from '../frontmatter.js';
 import { listDrafts } from '../drafts.js';
@@ -25,6 +25,10 @@ import { isCourseDir, collectCourses } from '../courses.js';
 import {
   readFrontMatters, pagePath, pageUrl, editHash, draftsCard, draftIsPost, skeletonRows,
 } from './posts.js';
+
+/** 新建栏目对话框里各语言名称的示例、新文件正文的占位文字（按这一栏的语言，不按哪个是默认语言）。 */
+const SECTION_EXAMPLE = { zh: '例如：项目', en: 'e.g. Projects' };
+const SECTION_INTRO = { zh: '这里写栏目介绍…', en: 'Write the section introduction here…' };
 
 /** 不能用作栏目网址的名字（Hugo 自带的页面、语言代码、static/ 下已有的网址等）。 */
 const RESERVED_SLUGS = new Set([
@@ -544,7 +548,7 @@ export default async function mount(container, params, ctx) {
     const nameFields = [ctx.defaultLang, ...others].map((lang) => {
       const input = h('input', {
         class: 'input', type: 'text', autocomplete: 'off', maxlength: 60,
-        placeholder: lang === ctx.defaultLang ? '例如：项目' : lang === 'en' ? 'e.g. Projects' : '',
+        placeholder: SECTION_EXAMPLE[lang] || '',
         dataset: { testid: `new-section-name-${lang}` }, 'data-autofocus': lang === ctx.defaultLang ? true : undefined,
       });
       nameInputs[lang] = input;
@@ -571,7 +575,7 @@ export default async function mount(container, params, ctx) {
     const updatePreview = () => {
       const s = slugInput.value.trim();
       if (!s) { urlPreview.textContent = ''; return; }
-      urlPreview.textContent = '网站上的地址：' + langs.map((l) => `/${l === ctx.defaultLang ? '' : l + '/'}${s}/`).join('  ·  ');
+      urlPreview.textContent = '网站上的地址：' + langs.map((l) => langSitePath(`${s}/`, l, ctx.defaultLang)).join('  ·  ');
     };
     const suggest = () => {
       if (slugTouched) return;
@@ -654,10 +658,11 @@ export default async function mount(container, params, ctx) {
     const dir = `${PATHS.content}/${slug}`;
     const changes = [];
     const mainPath = variantPath(dir, '_index', null);
-    changes.push({ path: mainPath, content: joinDocument(sectionFrontMatter(names[ctx.defaultLang], weight), '\n这里写栏目介绍…\n'), baseSha: null });
+    const intro = (lang) => SECTION_INTRO[lang] || SECTION_INTRO.zh;
+    changes.push({ path: mainPath, content: joinDocument(sectionFrontMatter(names[ctx.defaultLang], weight), `\n${intro(ctx.defaultLang)}\n`), baseSha: null });
     for (const lang of langs) {
       if (lang === ctx.defaultLang || !names[lang]) continue;
-      const placeholder = lang === 'en' ? 'Write the section introduction here…' : '这里写栏目介绍…';
+      const placeholder = intro(lang);
       changes.push({ path: variantPath(dir, '_index', lang), content: joinDocument(sectionFrontMatter(names[lang], weight), `\n${placeholder}\n`), baseSha: null });
     }
     let res;

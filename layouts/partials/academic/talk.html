@@ -1,0 +1,46 @@
+{{- /*
+  一个报告（talks 列表里的一项）。参数：dict "t" <academic/talks.html 返回的一项> "lang" <页面语言>
+  标题、会议、地点、摘要、备注都是纯文本（转义后显示，$…$ 公式由 KaTeX 渲染）；
+  slides 是网站路径时用在线预览页打开（lang = 页面语言），也可以是网址；video、url 只接受 http(s) 网址或网站路径。
+*/ -}}
+{{- $t := .t -}}
+{{- $lang := .lang -}}
+{{- $where := printf "data/talks/%s" $t.key -}}
+{{- $chips := slice -}}
+{{- range slice (slice "slides" (i18n "talk_slides")) (slice "video" (i18n "talk_video")) (slice "url" (i18n "talk_event")) -}}
+  {{- $field := index . 0 -}}
+  {{- $label := index . 1 -}}
+  {{- with index $t $field -}}
+    {{- $u := partial "academic/url.html" (dict "url" . "lang" $lang "kind" (cond (eq $field "slides") "file" "page") "where" (printf "%s %s" $where $field)) -}}
+    {{- with $u.href }}{{ $chips = $chips | append (dict "cls" $field "label" $label "href" . "external" $u.external) }}{{ end -}}
+  {{- end -}}
+{{- end -}}
+{{- $place := slice -}}
+{{- with $t.event }}{{ $place = $place | append . }}{{ end -}}
+{{- with $t.location }}{{ $place = $place | append . }}{{ end -}}
+<li class="talk" id="talk-{{ anchorize $t.id }}" data-kind="{{ $t.kind }}">
+  <div class="talk-head">
+    {{- with $t.date }}<time class="talk-date" datetime="{{ . }}">{{ time.Format ":date_medium" (time.AsTime .) }}</time>{{ end -}}
+    {{- if ne $t.kind "other" }}<span class="pub-badge talk-kind talk-kind-{{ $t.kind }}">{{ i18n (printf "talk_kind_%s" $t.kind) }}</span>{{ end -}}
+  </div>
+  <div class="talk-title">{{ $t.title }}</div>
+  {{- with $place }}
+  <div class="talk-place">{{ delimit . " · " }}</div>
+  {{- end }}
+  {{- with $t.note }}
+  <div class="pub-note">{{ . }}</div>
+  {{- end }}
+  {{- if or $chips $t.abstract }}
+  <div class="pub-links">
+    {{- range $chips }}
+    <a class="pub-chip pub-chip-{{ .cls }}" href="{{ .href }}"{{ if .external }} target="_blank" rel="noopener noreferrer"{{ end }}>{{ .label }}</a>
+    {{- end }}
+    {{- with $t.abstract }}
+    <details class="pub-abstract">
+      <summary class="pub-chip">{{ i18n "talk_abstract" }}</summary>
+      <p>{{ . }}</p>
+    </details>
+    {{- end }}
+  </div>
+  {{- end }}
+</li>

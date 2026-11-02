@@ -1,4 +1,4 @@
-// static/viewer/viewer.js — 资料在线预览：/viewer/?file=/documents/讲义.pdf[&lang=en][&embed=1][&page=N]
+// static/viewer/viewer.js — 资料在线预览：/viewer/?file=/documents/讲义.pdf[&lang=zh|en][&embed=1][&page=N]
 //
 // PDF → PDF.js (vendor/pdfjs, legacy build so it also works in old Android / WeChat WebViews), pages are
 // rendered lazily near the viewport and freed when far away; images → <img>; anything else → download.
@@ -87,7 +87,10 @@ const STRINGS = {
 // ---------------------------------------------------------------------------------------------- setup
 
 const params = new URLSearchParams(window.location.search);
-const LANG = params.get('lang') === 'en' ? 'en' : 'zh';
+// Interface language, picked by lang.js before this module runs: ?lang= → the page the visitor came from →
+// the browser's languages → the site's default language (see lang.js). Fallback if lang.js did not load.
+const uiLang = (l) => (Object.prototype.hasOwnProperty.call(STRINGS, l) ? l : null);
+const LANG = uiLang(window.VIEWER_LANG) || uiLang(params.get('lang')) || 'en';
 const EMBED = params.get('embed') === '1';
 const START_PAGE = /^[1-9][0-9]{0,5}$/.test(params.get('page') || '') ? parseInt(params.get('page'), 10) : 1;
 const T = STRINGS[LANG];
@@ -175,8 +178,11 @@ function applyStrings() {
   document.title = T.viewerTitle;
 }
 
-/** The site's home page ("/" or "/en/"), resolved relative to /viewer/ so a sub-path baseURL also works. */
-const HOME_URL = new URL(LANG === 'en' ? '../en/' : '../', window.location.href).href;
+/**
+ * The site's home page in the interface language ("/" for the default language, "/zh/" …; prefixes come from
+ * site.js, see lang.js), resolved relative to /viewer/ so a sub-path baseURL also works.
+ */
+const HOME_URL = new URL(window.ViewerLang ? window.ViewerLang.homePath(LANG, window.SITE_LANGUAGES) : '../', window.location.href).href;
 
 /** Decode the few HTML character references that can appear in an attribute / <title> (no DOM parsing). */
 function decodeEntities(s) {

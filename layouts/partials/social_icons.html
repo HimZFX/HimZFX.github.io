@@ -1,0 +1,21 @@
+{{- /*
+  首页头像下方的社交图标（覆盖 PaperMod 的 social_icons.html，输出格式不变）。
+  图标在 params.toml 的 [[socialIcons]] 里配置：name = 图标名，url = 链接（title 可选，鼠标悬停时显示）。
+
+  PaperMod 自带的学术图标直接可用：orcid、googlescholar、researchgate、cv、linkedin、bluesky、mastodon、github、email …
+  （完整列表见 themes/PaperMod/layouts/partials/svg.html）；本站另外加了两个（layouts/partials/academic/icon.html）：
+    ads    NASA ADS（例如你的 ADS 作者检索或 ADS 文献库的网址）
+    arxiv  arXiv（例如 https://arxiv.org/a/<你的 arXiv 作者 ID>）
+  这几个学术图标没写 title 时用正确的大小写作为提示文字（NASA ADS、arXiv、ORCID、Google Scholar …），
+  其他图标和 PaperMod 一样（名字首字母大写）。
+*/ -}}
+{{- $titles := dict "ads" "NASA ADS" "arxiv" "arXiv" "orcid" "ORCID" "googlescholar" "Google Scholar" "researchgate" "ResearchGate" "linkedin" "LinkedIn" "cv" "CV" -}}
+<div class="social-icons" {{ with .align}}align="{{.}}" {{- end }}>
+    {{- range site.Params.socialIcons }}
+    {{- $name := trim .name " " | lower }}
+    <a href="{{ trim .url " " | safeURL }}" target="_blank" rel="noopener noreferrer me"
+        title="{{ .title | default (index $titles $name) | default (.name | title) }}">
+        {{ if in (slice "ads" "arxiv") $name }}{{ partial "academic/icon.html" $name }}{{ else }}{{ partial "svg.html" . }}{{ end }}
+    </a>
+    {{- end }}
+</div>

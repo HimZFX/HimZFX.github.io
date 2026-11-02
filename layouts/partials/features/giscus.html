@@ -1,7 +1,7 @@
 {{- /*
   giscus 评论区（基于 GitHub Discussions）。
   所有仓库 / 分类 ID 都在 params.toml 的 [giscus] 中配置；
-  界面语言随站点语言切换（英文站的覆盖见 languages.toml）。
+  界面语言随站点语言切换（params.toml 里是英文站的 lang = "en"，中文站在 languages.toml 的 [zh.params.giscus] 里覆盖为 zh-CN）。
 */ -}}
 {{- $cfg := site.Params.giscus }}
 {{- if and $cfg $cfg.repo }}

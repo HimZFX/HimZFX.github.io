@@ -1,0 +1,57 @@
+{{- /*
+  报告与海报 /talks/（content/talks/_index*.md；覆盖 PaperMod 的 list.html，只作用于这个栏目）。
+  数据：data/talks/<id>.yaml，每个报告一个文件（字段见 layouts/partials/academic/talks.html 和 SITE_GUIDE.md）。
+  页面顺序：页首 → _index 的正文 → 「即将进行」（最近的在前）→ 往期按年份分组（最新的在前）→ 没写日期的。
+  没有报告时显示一句提示。
+*/ -}}
+{{- define "main" }}
+{{- $lang := .Language.Lang }}
+<header class="page-header">
+  {{- partial "breadcrumbs.html" . }}
+  <h1>{{ .Title }}</h1>
+  {{- if .Description }}
+  <div class="post-description">
+    {{ .Description | markdownify }}
+  </div>
+  {{- end }}
+</header>
+
+{{- if .Content }}
+<div class="post-content">
+  {{- if not (.Param "disableAnchoredHeadings") }}
+  {{- partial "anchored_headings.html" .Content -}}
+  {{- else }}{{ .Content }}{{ end }}
+</div>
+{{- end }}
+
+{{- $talks := partial "academic/talks.html" . }}
+{{- if not (or $talks.upcoming $talks.past) }}
+<p class="academic-empty">{{ i18n "talk_empty" }}</p>
+{{- else }}
+<div class="talk-index">
+  {{- with $talks.upcoming }}
+  <section class="pub-group talk-group talk-upcoming">
+    <h2 class="pub-group-title" id="upcoming">{{ i18n "talk_upcoming" }}</h2>
+    <ol class="pub-list talk-list">
+      {{- range . }}
+      {{ partial "academic/talk.html" (dict "t" . "lang" $lang) }}
+      {{- end }}
+    </ol>
+  </section>
+  {{- end }}
+  {{- $years := slice }}
+  {{- range $talks.past }}{{ if not (in $years .year) }}{{ $years = $years | append .year }}{{ end }}{{ end }}
+  {{- range $years }}
+  {{- $y := . }}
+  <section class="pub-group talk-group">
+    <h2 class="pub-group-title" id="{{ cond (gt $y 0) (printf "y%d" $y) "undated" }}">{{ cond (gt $y 0) (string $y) (i18n "talk_undated") }}</h2>
+    <ol class="pub-list talk-list">
+      {{- range where $talks.past "year" $y }}
+      {{ partial "academic/talk.html" (dict "t" . "lang" $lang) }}
+      {{- end }}
+    </ol>
+  </section>
+  {{- end }}
+</div>
+{{- end }}
+{{- end }}{{- /* end main */ -}}

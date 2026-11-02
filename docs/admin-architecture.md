@@ -19,7 +19,7 @@
 | **永不丢失用户的修改** | 编辑器、首页设置、背景动画都会在本机自动保存；发布失败、冲突、令牌过期时修改都保留。 |
 | **永不写坏文件** | YAML front matter 和 TOML 配置只做"外科手术式"修改，并在写入前重新解析校验（见第 5 节）。 |
 | **一次操作 = 一个提交** | 每次发布用 Git Data API 生成一个原子提交，带冲突检查（见第 3 节）。 |
-| **界面全中文、手机可用** | ≤ 760px 时左侧导航变成底部标签栏；所有面向用户的报错都是中文。 |
+| **界面全中文、手机可用** | ≤ 760px 时左侧导航变成底部标签栏（文章 / 页面 / 课程 / 学术 /「更多」，首页设置 / 背景动画 / 资料在「更多」的底部抽屉里）；所有面向用户的报错都是中文。 |
 
 ---
 
@@ -31,7 +31,7 @@ static/admin/
 ├── cassette-frame.html     背景动画预览的沙箱页面（无内联脚本，只引入 js/cassette-frame.js）
 ├── css/
 │   ├── admin.css           设计变量（颜色、间距、深浅色）+ 公共组件（按钮、卡片、对话框、标签页、徽章……）
-│   └── views/*.css         每个界面自己的样式（editor / posts（也用于 pages）/ profile / background / files / courses）
+│   └── views/*.css         每个界面自己的样式（editor / posts（也用于 pages）/ profile / background / files / courses / academic）
 ├── js/
 │   ├── config.js           全局常量：REPO、apiBase()、STORAGE_KEYS、PATHS、LIMITS、站点与语言名称、令牌创建页地址
 │   ├── main.js             入口：登录状态、启动加载、整体布局、传给视图的 ctx、ctx.publish（含冲突对话框）、
@@ -43,7 +43,10 @@ static/admin/
 │   ├── frontmatter.js      YAML front matter 的拆分 / 解析 / 精确修改 / 拼装
 │   ├── tomlpatch.js        保留注释的 TOML 精确修改
 │   ├── content.js          双语内容模型（纯函数）：页面组、各语言显示哪个文件、网址 slug、图片目录；
+│   │                       各语言站点的网址 langPrefix / langSitePath / langSiteUrl（默认语言在 /，其他在 /<语言>/）；
 │   │                       资料在线预览链接 viewerUrlFor / isViewerFilePath（规则与网站 static/viewer/path.js 一致）
+│   ├── academic.js         「学术」的内容模型（纯函数）：BibTeX 解析、LaTeX 解码、作者名规范化、ADS 期刊宏、
+│   │                       数据文件的确定性 YAML 写法（entryFileText）、id、分组排序、社交链接网址补全（第 15 节）
 │   ├── courses.js          「课程」的内容模型（纯函数）：collectCourses、排序 / 分组 / reweight / nextWeights、
 │   │                       文件名 → 标题 / 网址、资料目录、新文件模板、批量上传的子推文正文、草稿课程的 cascade（第 13 节）
 │   ├── uploads.js          往 static/ 上传的共用逻辑：拒绝会执行脚本的类型（uploadBlockReason）、.gitignore 匹配、
@@ -57,8 +60,9 @@ static/admin/
 │       ├── posts.js        「文章」列表、本机草稿卡片；也导出列表页共用的工具（pages.js 使用）
 │       ├── pages.js        「页面」列表、导航菜单排序、「新建栏目」
 │       ├── editor.js       文章 / 页面编辑器（Vditor），多语言版本标签页、图片 / 资料、自动保存、发表
-│       ├── profile.js      「首页设置」：头像裁剪、名字简介、按钮、社交链接、节日图标
+│       ├── profile.js      「首页设置」：头像裁剪、名字简介、按钮、简历 CV（立即发布）、社交链接（含学术图标）、节日图标
 │       ├── background.js   「背景动画」：卡带列表、实时预览、参数微调
+│       ├── academic.js     「学术」：论文 / 报告与海报 / 近况（data/*.yaml）、顶部菜单开关、设置（第 15 节）
 │       ├── courses.js      「课程」：课程列表（分组、顺序）、新建课程、一门课的子推文 / 资料、批量上传、删除课程（第 13 节）
 │       └── files.js        「资料」：static/ 下文件的上传、复制链接（PDF：复制预览链接 /viewer/?file=…）、删除（上传 / 删除逻辑在 uploads.js）
 └── vendor/                 第三方库本地副本（见第 10 节）
@@ -74,6 +78,7 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
 | `#/edit` | `views/editor.js` | `path=<仓库路径>` 打开已有文件；`new=post`；`new=page&dir=<目录>`（`<目录>` 是已有介绍页的课程 `content/courses/<课程>` 时 = 新子推文）；`draft=<草稿 key>` |
 | `#/pages` | `views/pages.js` | |
 | `#/courses` | `views/courses.js` | `course=<课程网址名>`（可选；有 = 打开这门课） |
+| `#/academic` | `views/academic.js` | `tab=publications\|talks\|news`（可选，默认论文；切换标签页用 `history.replaceState`，不重新挂载） |
 | `#/profile` | `views/profile.js` | |
 | `#/background` | `views/background.js` | |
 | `#/files` | `views/files.js` | `dir=<static 下的目录>`（可选） |
@@ -91,7 +96,8 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
    → GitHubClient：getUser() + getRepo()（要求 permissions.push）
    → checkWriteAccess()：POST 一个空 blob，确认细粒度令牌真的有 Contents 写权限
    → Repo.load()：读 main 的 head 提交 + 递归文件树（只保留文件，记住子模块）
-   → 读 languages.toml / hugo.toml 得到语言列表和默认语言（失败回退 ['zh','en'] / 'zh'）
+   → 读 languages.toml / hugo.toml 得到语言列表（按 weight）和默认语言（现在是 ['en','zh'] / 'en'；
+     读不到时回退 ['en','zh']，没写 defaultContentLanguage 时和 Hugo 一样是 'en'）
    → router.start()，视图挂载
 
 编辑（各视图）
@@ -216,13 +222,17 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 | `xxx.en.md` | 英文专属 | 英文站（整体替换共用版本，含 front matter） |
 | `xxx.zh.md` | 中文专属 | 中文站 |
 
-- 语言列表来自 `languages.toml` 的顶层表（按 `weight` 排序），默认语言来自 `hugo.toml` 的 `defaultContentLanguage`。语言后缀只有在是站点语言时才算数（站点没有 `fr` 时，`a.fr.md` 是名为 `a.fr` 的共用页面）。
+- 语言列表来自 `languages.toml` 的顶层表（按 `weight` 排序），默认语言来自 `hugo.toml` 的 `defaultContentLanguage`（现在是英文：英文站在 `/`，中文站在 `/zh/`；以前是中文在 `/`、英文在 `/en/`）。语言后缀只有在是站点语言时才算数（站点没有 `fr` 时，`a.fr.md` 是名为 `a.fr` 的共用页面）。
+- **网址一律从 `ctx.defaultLang` 推出来**：`content.js` 的 `langPrefix(lang, defaultLang)`（默认语言 `''`，其他 `'<语言>/'`）、`langSitePath(rel, lang, defaultLang)`（`'/zh/posts/a/'`）、`langSiteUrl(siteUrl, rel, lang, defaultLang)`。`posts.js` 的 `langPrefix(lang, ctx)` / `pagePath` / `pageUrl`、编辑器的 `siteUrlFor` / `publishedUrlFor`、「课程」的 `siteCourseUrl`、新建栏目 / 课程对话框的网址预览都用它们。视图里不要写死 `'/en/'`、`'/zh/'`，也不要假设哪种语言在根路径（`e2e-shell.mjs` 会把 `hugo.toml` 改成中文默认再检查一次 `ctx`）。
+- 列表（文章 / 页面 / 课程）显示的标题、「编辑」先打开的文件、「查看」链接，都是**默认语言站点实际显示的那个版本**（`resolveForLang(group, ctx.defaultLang)`，没有就取第一个有这一页的语言）。
+- 语言状态的简称里「中」总在最前（`statusText`：languages.toml 是英文在前，也仍然显示「中英共用」「中英分开」）。
 - `groupPages()` 把同一页面的各版本归成一个"页面组"；`resolveForLang()` = 专属版本 > 共用版本 > 无；`languageStatus()` / `statusText()` 给出「中英共用 / 中英分开 / 仅中文 / 仅英文」。
 - `shadowWarnings()`：专属版本是 `draft: true` 而共用版本已发表 → 该语言站点上这一页会消失，列表和编辑器都会警告。
-- 编辑器「单独写英文版」= 复制当前内容新建 `xxx.en.md`（发表时才创建文件）；删除专属版本 = 该语言改回显示共用版本。
-- 首页设置里「英文站单独设置」写入 `languages.toml` 的 `[en.params.profileMode]`；留空 = 删除该键，表空了就删表头。
-- 新建栏目：`content/<网址>/_index.md`，填了英文名称时再加 `_index.en.md`。
-- 课程：同样的规则（新建课程填了英文名称 → `_index.en.md`；批量上传的子推文只写共用版本）。网站读 `group`、`weight`、`materialsDir`、`showMaterials` 时，
+- 编辑器「单独写英文版」/「单独写中文版」= 复制当前内容新建 `xxx.en.md` / `xxx.zh.md`（发表时才创建文件；每个还没有专属版本的语言一个按钮，文字来自 `ctx.langName`）；删除专属版本 = 该语言改回显示共用版本。手机预览打开共用版本时先显示「仍显示共用版本」的站点（默认语言优先）。
+- 首页设置：表单上的名字 / 简介是 `params.toml`（默认语言 = 英文站）的值；每个非默认语言一张「<站点>单独设置」卡片，现在是「中文站单独设置」，写入 `languages.toml` 的 `[zh.params.profileMode]`；留空 = 删除该键，表空了就删表头。首页按钮的链接以 `/` 开头时提示「在中文站不会自动加 /zh/」。
+- 新建栏目：必填的是默认语言（英文）名称 → `content/<网址>/_index.md`；填了另一种语言（中文）名称时再加 `_index.zh.md`。输入框的 testid 带语言代码（`new-section-name-en` / `-zh`），示例文字按这一栏的语言。
+- 课程：同样的规则（新建课程：英文名称必填 → `_index.md`，中文名称可选 → `_index.zh.md`；testid `new-course-name-<语言>`、`new-course-desc`（默认语言）/ `new-course-desc-<另一种语言>`；网址建议优先用英文那一栏）。批量上传的子推文只写共用版本。
+- `new_post.py` 的文件命名不随默认语言变：两个标题 = 共用版本 `xxx.md`（第一个标题）+ 英文专属 `xxx.en.md`（第二个标题）；`--translate <语言>`、`--status` 照旧，`--status` 的列按 languages.toml 的顺序（英文站、中文站）。网站读 `group`、`weight`、`materialsDir`、`showMaterials` 时，
   语言专属版本没写就沿用共用版本（`layouts/partials/courses/param.html`），反过来不行；后台改分组时，其他语言版本自己写了不同的分组名就不动它。
 
 ---
@@ -262,7 +272,7 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 | 字段 | 说明 |
 |---|---|
 | `client` / `repo` / `user` | GitHubClient、已加载的 Repo、`{ login, avatarUrl }` |
-| `langs` / `defaultLang` | 例如 `['zh', 'en']` / `'zh'` |
+| `langs` / `defaultLang` | 现在是 `['en', 'zh']` / `'en'`（来自 languages.toml 的 weight 和 hugo.toml）。网址用 `content.js` 的 `langPrefix` / `langSitePath` / `langSiteUrl` |
 | `siteLabel(lang)` / `langName(lang)` | 「中文站 / 英文站」/「中文 / 英文」 |
 | `siteUrl` | `location.origin + '/'` |
 | `navigate(hash, { replace })` | 跳转；跳到当前地址时重新挂载 |
@@ -278,7 +288,7 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 
 ```bash
 # 在仓库根目录
-node --test tests/admin/            # 单元测试：content / courses（含 uploads）/ formats / github / mark / mock（index.js 负责加载全部 *.test.mjs）
+node --test tests/admin/            # 单元测试：academic / content / courses（含 uploads）/ formats / github / mark / mock / viewer-lang（index.js 负责加载全部 *.test.mjs）
 
 node tests/admin/e2e-shell.mjs       # 登录、导航、退出、401、CSP、手机布局
 node tests/admin/e2e-editor.mjs      # 编辑器：发表 / 更新、英文版、自动保存与恢复、冲突、手机预览、高亮
@@ -289,17 +299,20 @@ node tests/admin/e2e-files.mjs       # 资料上传 / 删除（含拒绝 .html /
 node tests/admin/e2e-courses.mjs     # 「课程」：新建课程、批量上传（一个提交）、只放进资料、顺序、分组、冲突、新子推文、删除课程，最后 Hugo 构建
 node tests/admin/e2e-courses-site.mjs # 网站的课程资料模板：总页分组与顺序、单元页、构建时的资料列表、面包屑、课程内上一篇 / 下一篇、英文站
 node tests/admin/e2e-journey.mjs     # 跨界面的完整使用流程，最后用 Hugo 构建并检查两种语言的网站（含访客打开资料预览 / 嵌入阅读器）
-node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/viewer/ 与 {{< pdf >}} 短代码
+node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/viewer/ 与 {{< pdf >}} 短代码（含界面语言的判断顺序）
+node tests/admin/e2e-lang.mjs        # 网站的语言：英文在 /、中文在 /zh/、hreflang、旧 /en/ 链接的跳转（404.html）、语言提示条
+node tests/admin/e2e-academic.mjs    # 「学术」：粘贴 BibTeX → 论文 YAML（逐字）+ PDF、手填（含 arXiv / DOI 格式校验）、修改、冲突、设置、菜单开关、报告 / 近况增删改、简历 CV（上传 / 更换 / 移除，被引用时保留旧文件）、学术社交图标、手机、删除最后一篇、Hugo 构建
+node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗、截断、链接过滤、无效日期（报告的无效日期不再让构建失败）、近况 Markdown 链接里的 &、首页近况与 CV、空站点、背景动画按钮
 ```
 
 | 环境变量 | 作用 |
 |---|---|
 | `HUGO_BIN` | Hugo 可执行文件，需与 CI 相同（0.147.4 extended）；找不到时依赖 Hugo 的测试自动跳过 |
 | `ADMIN_TEST_TMP` | 测试输出的根目录（默认系统临时目录）；`ADMIN_TEST_KEEP=1` 让 `mock.test.mjs` 保留导出 / 构建结果 |
-| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
-| `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files` / `e2e-courses` / `e2e-courses-site`；编辑器和课程的后续用例依赖前面的，只用来调试） |
+| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`、`LANG_E2E_DIR`、`ACADEMIC_E2E_DIR`、`ACADEMIC_SITE_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
+| `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files` / `e2e-courses` / `e2e-courses-site` / `e2e-viewer` / `e2e-lang` / `e2e-academic` / `e2e-academic-site`；编辑器、课程和 `e2e-academic` 的后续用例依赖前面的，只用来调试） |
 | `SKIP_BUILD=1` | 复用上一次的初始构建（`e2e-shell` / `e2e-lists` / `e2e-profile`） |
-| `DEBUG=1` | 打印浏览器控制台输出（`e2e-editor` / `e2e-journey` / `e2e-courses`） |
+| `DEBUG=1` | 打印浏览器控制台输出（`e2e-editor` / `e2e-journey` / `e2e-courses` / `e2e-viewer` / `e2e-academic`） |
 
 注意：不要用 `hugo -d /dev/null` 之类的命令做构建检查；e2e 脚本会把构建结果放到上面的目录里。
 
@@ -337,7 +350,8 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
    ```
 
 2. 在 `main.js` 里登记：`ROUTES` 加 `stats: 'stats'`（路由名 → `views/` 下的模块名），`ROUTE_TITLES` 加 `stats: '统计'`；
-   要出现在左侧 / 底部导航里，再往 `NAV` 加一项（`route`、`label`、`short`、`icon`（`ui.svgIcon` 已有的图标名）、`testid`）。
+   要出现在左侧 / 底部导航里，再往 `NAV` 加一项（`route`、`label`、`short`、`icon`（`ui.svgIcon` 已有的图标名）、`testid`；
+   不常用的加 `more: true`：手机上不占底部标签，放进「更多」的底部抽屉）。手机底部最多 5 个标签（360px 宽时每个 ≥ 56px，`e2e-shell.mjs` 检查）。
 3. 需要样式就建 `static/admin/css/views/stats.css`，并在 `index.html` 里加一行 `<link rel="stylesheet">`；尽量复用 `admin.css` 的公共组件。
 4. 写入仓库只能通过 `ctx.publish()`，每个修改的文件都带读取时的 `baseSha`；改 TOML 用 `tomlpatch`，改 front matter 用 `frontmatter.setFields`。
 5. 遵守第 4 节的规则：界面用 `h()` / `textContent` 生成，不把仓库内容写进 `innerHTML`，不引入外部脚本。
@@ -359,6 +373,8 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 | `static/viewer/index.html` | 页面骨架 + CSP；不经过 Hugo 模板，不加载主题、KaTeX、giscus、背景动画 |
 | `static/viewer/viewer.js` | 主逻辑（ES 模块）：参数校验、PDF 懒加载渲染、缩放、页码、图片、中英文界面、错误提示 |
 | `static/viewer/path.js` | `?file=` 的校验 `parseFileParam`（纯函数）和 `viewerHref` |
+| `static/viewer/lang.js` | 界面语言（经典脚本，ES5，Node 里可 `require`）：`pick({ search, referrer, location, languages, site })`、`homePath(lang, site)`；结果在 `window.VIEWER_LANG` |
+| `/viewer/site.js`（构建时生成） | `layouts/partials/features/viewer-site.html` 在首页渲染时用 `resources.FromString` 写出：`window.SITE_LANGUAGES = {"defaultLang":"en","languages":[{"lang":"en","prefix":""},{"lang":"zh","prefix":"zh"}]}`。不在 `static/` 里 |
 | `static/viewer/theme.js`、`nomodule.js`、`viewer.css` | 深浅色（只读 `pref-theme`）、老浏览器提示、样式 |
 | `static/viewer/vendor/pdfjs/` | PDF.js 本地副本，见下文 |
 | `layouts/shortcodes/pdf.html` + `assets/css/extended/pdf-embed.css` | 嵌入短代码：`iframe`（`embed=1`、`lang` = 页面语言、`loading="lazy"`）+「在新页面打开」「下载」 |
@@ -366,21 +382,28 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 **URL 约定**（网站和后台必须一致）
 
 ```
-/viewer/?file=<encodeURIComponent(网站路径)>[&lang=en][&embed=1][&page=N]
+/viewer/?file=<encodeURIComponent(网站路径)>[&lang=zh|en][&embed=1][&page=N]
 ```
 
-- 后台只通过 `content.js` 的 `viewerUrlFor(sitePath, { lang, embed, absolute, siteUrl, page })` 生成链接，
+- **`lang` 的约定**（网站模板、后台、阅读器三方一致）：链接属于某一种语言时写 `lang=<该语言>`，**默认语言也写**——
+  `{{< pdf >}}` 和课程资料列表总是写页面语言（英文站 `lang=en`、中文站 `lang=zh`）；后台编辑器在语言专属版本（`xxx.en.md` / `xxx.zh.md`）里插入的预览链接写该语言；
+  所有语言共用的链接（共用版本 `xxx.md` 里的、「复制预览链接」得到的）**不写** `lang`。阅读器的「在新页面打开」总是带上当前界面语言。
+- 没有 `lang`（或不认识）时阅读器按顺序判断（`static/viewer/lang.js`）：同源的来源页面（`document.referrer`）在 `/zh/` 下 → 中文、在网站其他页面 → 默认语言（`/admin/`、`/viewer/` 不算）→
+  `navigator.languages` 里第一个阅读器支持的语言 → 网站默认语言（`site.js` 里的 `defaultLang`，读不到时英文）。左上角「主页」= `homePath(语言)`：默认语言 `../`，其他 `../<前缀>/`。
+- 后台只通过 `content.js` 的 `viewerUrlFor(sitePath, { lang, embed, absolute, siteUrl, page })` 生成链接（给了 `lang` 就写进网址），
   `isViewerFilePath` 判断路径能否预览；规则与 `path.js` 一致，改一边必须同步另一边（`content.test.mjs` 和 `e2e-viewer.mjs` 都有覆盖）。
 - `file` 接受：以 `/` 开头且不是 `//`；没有反斜杠、控制字符；解码前后（最多 3 轮）都没有空段、`.`、`..`、编码的 `/`；
   不在 `/admin/`、`/viewer/` 下（不区分大小写）。`.pdf` → PDF.js；`.png .jpg .jpeg .gif .webp .avif .svg` → `<img>`；
   其他 → 下载提示。不合格时只显示错误，**不发请求、不跳转**。
-- 后台引用检查（删除资料前的提示）把直接链接、预览链接、`{{< pdf >}}` 都算作引用。
+- 后台引用检查（删除资料前的提示，`uploads.findReferences`）把直接链接、预览链接、`{{< pdf >}}` 都算作引用；查找范围是 `content/**/*.md`、
+  `data/**/*.yaml`（论文的 pdf、报告的 slides、近况的 link）和 `config/**/*.toml`（简历 `cv`、`[zh.params]` 覆盖、首页按钮）。
+  「首页设置」的简历卡片在更换 / 移除时也用它：旧文件还被别处用到时列出来，「同时删除旧文件」默认不勾。
 
 **安全加固**（后台的令牌可能在同源 `localStorage` 里，见第 4 节）
 
 - CSP：`default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` 等。
   比后台更严：没有 `'unsafe-eval'`、`'unsafe-inline'`，没有内联脚本。不需要 `'wasm-unsafe-eval'`——WebAssembly 解码器只在 Worker 里运行。
-- 只读 `localStorage['pref-theme']`，不碰其他存储；`<meta name="referrer" content="no-referrer">`。
+- 只读 `localStorage['pref-theme']`，不碰其他存储（`lang.js` 也不碰存储）；`<meta name="referrer" content="no-referrer">`。
 - PDF.js：不带 `pdf.sandbox`、`quickjs-eval`（不执行 PDF 里的脚本），`enableXfa: false`、`isEvalSupported: false`；
   PDF 里的链接只保留 `http(s)`、`mailto` 和文档内跳转，外链 `target=_blank` + `noopener noreferrer`。
 - 页面内容一律用 DOM API / `textContent` 生成，不用 `innerHTML`（文件名可能含 HTML 字符）。
@@ -410,7 +433,7 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 | 路径 | 内容 |
 |---|---|
 | `content/courses/_index.md`（+ `.en.md`） | 「课程资料」总页：用户写的说明文字 + 导航菜单项。属于「页面」，不属于「课程」 |
-| `content/courses/<课程>/_index.md`（+ 可选 `_index.en.md`） | 课程单元页。`title`、`description`（一句话，卡片上显示）、可选 `group`（自由文字，原样显示）、`weight`（课程之间的顺序）；可选 `materialsDir`（默认 `static/documents/courses/<课程>/`）、`showMaterials`（默认 `true`）。**没有 `menu`** |
+| `content/courses/<课程>/_index.md`（+ 可选 `_index.<语言>.md`，现在是 `_index.zh.md`） | 课程单元页。`title`、`description`（一句话，卡片上显示）、可选 `group`（自由文字，原样显示）、`weight`（课程之间的顺序）；可选 `materialsDir`（默认 `static/documents/courses/<课程>/`）、`showMaterials`（默认 `true`）。**没有 `menu`** |
 | `content/courses/<课程>/<篇>.md` | 子推文：`title`、`weight`（课程里的顺序）、可选 `description`、`draft: false`。不需要 `date`（课程里不显示日期） |
 | `static/documents/courses/<课程>/` | 资料文件夹，网址 `/documents/courses/<课程>/…` |
 
@@ -431,7 +454,7 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 | `assets/css/extended/courses.css` | 样式（只用主题的颜色变量，深浅色自动） |
 
 资料列表在**构建时**生成：`os.ReadDir` 读资料文件夹（相对项目根目录，在 Hugo 0.147.4 和 mock 导出的仓库副本里都可用），
-跳过子文件夹和以 `.` 开头的文件，按文件名排序。PDF / 图片链接到 `/viewer/?file=…`（非默认语言加 `&lang=`），其他文件直接链接（逐段编码）；
+跳过子文件夹和以 `.` 开头的文件，按文件名排序。PDF / 图片链接到 `/viewer/?file=…&lang=<页面语言>`（每种语言都写），其他文件直接链接（逐段编码）；
 某篇子推文的正文引用了这个文件（原样路径、编码路径、预览链接）时显示「收录于」那一篇。所以后台上传资料**不需要改任何 .md**。
 
 **后台：`views/courses.js`**
@@ -440,7 +463,7 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
   ↑ ↓ 只在组内交换，分组的 ↑ ↓ 整组移动；「保存顺序」用 `reweight`（原 weight 都是不同的有效数字时只是重新分配这些数字，交换两项只改两个文件；否则按 10、20、30… 重编）
   → 一个提交，每个文件只用 `patchFields`（= `frontmatter.setFields` + 正文不变校验）改 `weight` 那一行，所有语言版本一起改。
   「分组」= 改 `group`（`canonicalGroup`：只差大小写 / 空白时沿用已有写法）；分组「改名」= 所有分组名等于旧名字的文件一起改。
-- 「新建课程」：`_index.md`（+ 填了英文名称时 `_index.en.md`），`weight` = `nextWeights` 接在最大值后面，`baseSha: null`（网址被占用 → 冲突提示换网址）。
+- 「新建课程」：`_index.md`（默认语言 = 英文名称，必填）+ 填了另一种语言（中文）名称时 `_index.zh.md`，`weight` = `nextWeights` 接在最大值后面，`baseSha: null`（网址被占用 → 冲突提示换网址）。
 - 详情页 `#/courses?course=<课程>`：子推文（顺序、编辑、删除全部语言版本）、资料（复制预览链接 / 复制链接、打开、删除——`uploads.deleteStaticFile`，先列出引用）、
   「删除课程」（`courseDeletionPlan`：课程文件夹全部文件 + `static/images/pages/courses/<课程>/`；资料文件夹只在勾选、且是默认文件夹时删除；一个提交）。
 - 编辑器配合（`editor.js`）：`#/edit?new=page&dir=content/courses/<课程>` 在课程已有介绍页时 = 新子推文（填文件名；第一次发表时 `weight` = 本课最大值之后；
@@ -488,3 +511,72 @@ node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/vie
 - `node tests/admin/e2e-courses.mjs`（`COURSES_E2E_DIR`）：后台「课程」页的完整流程，检查提交内容（字节级的 PDF、精确的 front matter、只改 weight 那一行），最后用 Hugo 构建导出的仓库。
 - `node tests/admin/e2e-courses-site.mjs`（`COURSES_SITE_E2E_DIR`）：只测网站模板，用 mock 写入固定的课程夹具（不碰真实 `content/`），构建「有分组」「无分组」两个版本和一个边界情况版本（草稿课程、嵌套子栏目、`materialsDir`、只差大小写的分组名……），并要求构建没有 WARN / ERROR。
 - 拒绝上传的类型：`e2e-files.mjs`、`e2e-courses.mjs`、`e2e-editor.mjs` 都有用例；`e2e-journey.mjs` 里也有新建「近代物理实验」并批量上传两份实验报告的步骤。
+
+---
+
+## 14. 网站的语言（默认英文：英文在 `/`，中文在 `/zh/`）
+
+网站和后台**共同遵守**的语言约定。改其中一处要同步其他地方（`e2e-lang.mjs`、`e2e-viewer.mjs`、`viewer-lang.test.mjs`、`content.test.mjs` 都有覆盖）。
+
+| 规则 | 实现 |
+|---|---|
+| 默认语言来自 `hugo.toml` 的 `defaultContentLanguage = "en"`，`defaultContentLanguageInSubdir = false`：英文在 `/`，中文在 `/zh/`。`languages.toml`：`[en]` weight 1、`[zh]` weight 2 | Hugo 原生；文件命名不变（`xxx.md` 共用、`xxx.en.md`、`xxx.zh.md`） |
+| `params.toml` 是默认语言（英文站）的值；中文站的差异写在 `[zh.params.…]`（现在只有 giscus 的 `lang = "zh-CN"`；后台「中文站单独设置」写 `[zh.params.profileMode]`） | `languages.toml` |
+| 旧的英文网址 `/en/<路径>` → `/<路径>`（保留 `?查询` 和 `#锚点`，`location.replace`）；`/en`、`/en/` 由 Hugo 自己生成的跳转页处理 | `layouts/404.html`（PaperMod 原样 + 一段内联脚本；默认语言代码和网站根路径从配置读，默认语言放子目录时不输出脚本）。GitHub Pages 和 mock 的静态服务器都对不存在的路径返回 `/404.html` |
+| 语言提示：`navigator.languages` 里第一个站点语言不是这一页的语言、且这一页有那种语言的版本（`.Translations`）→ 页面底部「本页有中文版 →」/ "This page is also available in English →"。从不跳转；刚从那个版本过来（referrer）不显示；× 关闭后写 `localStorage['lang-hint-dismissed']`（空格分隔的语言代码，不是 `admin.*`） | `layouts/partials/features/lang-hint.html`（只在有翻译时输出 `<script defer data-lang data-hints>`）、`assets/js/lang-hint.js`、`assets/css/extended/lang-hint.css`（`position: fixed`，不推动版面；只用主题变量）；文字在 `i18n/<页面语言>.yaml` 的 `lang_hint_<目标语言>` / `lang_hint_close_<目标语言>`，用目标语言写 |
+| 资料预览页的界面语言（第 12 节）：`?lang=` → 来源页面 → 浏览器语言 → 默认语言 | `static/viewer/lang.js` + 构建时生成的 `/viewer/site.js`（`layouts/partials/features/viewer-site.html`） |
+| 后台的网址、标签、表单都跟 `ctx.defaultLang`（第 6 节） | `content.js` 的 `langPrefix` / `langSitePath` / `langSiteUrl` |
+
+不做的事：没有加任何搜索引擎相关的东西（robots、sitemap、JSON-LD 都和以前一样，`hreflang` 仍是 PaperMod 原有的输出），也没有加第三方脚本。
+
+---
+
+## 15. 学术（#/academic）：论文 / 报告与海报 / 近况
+
+网站的论文、报告、近况页面（`layouts/publications|talks|news/`、`layouts/partials/academic/`）读 `data/` 下的 YAML，
+后台的「学术」界面负责写这些文件。**数据约定（后台和网站模板共用，两边都按它来）**：
+
+| 目录 | 文件名 | 字段 |
+|---|---|---|
+| `data/publications/` | `<id>.yaml`（id = 文件名：ADS bibcode 转小写 + `-`，如 `2024apj-960-101z`；否则 `arxiv-2603-01234`；否则「第一作者姓 + 年 + 标题第一个实词」） | `id title authors(列表，"Zhong, F." 写法) year(整数) month(整数) venue volume pages status(published\|accepted\|submitted\|in-prep) kind(refereed\|proceedings\|preprint\|thesis\|other) selected(只在 true 时写) arxiv ads doi pdf code slides note bibtex` |
+| `data/talks/` | `<日期>-<会议或标题>.yaml` | `id title event location date("YYYY-MM-DD") kind(talk\|poster\|seminar\|invited\|outreach\|other) slides video url abstract note` |
+| `data/news/` | `<日期>-<英文前几个词>.yaml`（中文转不出来时 `-news`） | `date text text_en text_zh link`（`text_<语言>` 覆盖该语言；`link` 写 `posts/x/` 跟随语言，或 https 网址） |
+
+- 目录里只有 `.gitkeep`（Hugo 不读以点开头的文件；放 README.md 会让构建失败）。`academic.idFromPath` 只认 `.yaml` / `.yml`。
+- 设置在 `params.toml`：`[publications] myNames / ads / orcid / scholar / groupBy("kind"|"year")`、`[news] homeCount`、顶层 `cv`（简历 PDF 的网站路径，空 = 没有 CV 按钮）。后台用 `tomlpatch.setValue` 只改这几行；键不存在且值是默认（空 / kind / 5）时不写。ORCID / Google 学术在离开输入框时补成完整网址（网站也接受只写编号）；ADS 原样保存（网站把署名转成 ADS 作者检索）。
+- 页面：`content/<栏目>/_index.md`（英文，共用）+ `_index.zh.md`，默认**不在菜单里**。
+
+**YAML 写法（`academic.js`）**
+
+- `entryFileText(kind, values, oldText)`：新文件 → `dumpYaml(cleanEntry(…))`：键按 `FIELD_ORDER`，字符串一律双引号（JSON 转义，和 frontmatter.js 同样处理 U+2028 等），作者每行 `  - "…"`，多行文字（摘要、备注、BibTeX 原文）用 `|-` 块（有制表符 / 行尾空白 / 开头空格时改用双引号），空值不写，结尾换行；写完用 js-yaml 重新解析校验。
+- 改已有文件：如果它正是 `dumpYaml` 的标准写法 → 整份重写（不认识的键保留在后面）；否则（手改过、有注释）→ `frontmatter.setFields` 只改变化的键，其余行逐字不动。表单值和文件一样时返回原文（不产生提交）。
+- 日期写成带引号的字符串（CORE_SCHEMA 读出来也是字符串）；网站的 `academic/date.html` 两种都认。
+
+**BibTeX（`parseBibtex` / `bibToPublication`）**：纯前端解析，容错（条目外的文字、`%` 注释、`@comment` / `@preamble` 忽略；`@string` 宏、`#` 拼接、`( )` 括号、嵌套 `{}`、引号值；坏的条目记进 `errors` 并跳到下一个行首 `@`）。
+`decodeLatex` 处理重音（`\'{e}` `\"o` `{\o}` `\v{c}` `\'{\i}` …，结果 NFC）、转义、`--`、`~`、保护括号、`\textit{}` 等、ADS 的 `\ion{H}{i}` / `{\sc ii}`，`$…$` 原样保留。
+作者 → `Last, F.`（名缩写；`J. -P.` → `J.-P.`；中日韩名字不缩写；`{整个括起来}` 的合作组原样；`and others` → `et al.`）。期刊宏 `JOURNAL_MACROS`（`\apj` → ApJ、`\aap` → A&A …）。
+`eprint` / `pages = {arXiv:…}` → arxiv（去掉版本号），`adsurl` → bibcode（`%26` 解码），`journal = {arXiv e-prints}` → preprint / submitted。原文（只这一条）存进 `bibtex`。粘贴多条时让用户选一条。
+不是标识符的值（例如 `eprint = {javascript:…}`、乱写的 doi）在 `bibToPublication` 里直接丢掉；表单保存前 `identifierError` 检查 arXiv / ADS / DOI：
+编号或 http(s) 网址才行（规则和网站模板 `academic/pub.html` 一致，网站会忽略的值后台不让保存）。
+
+**界面（`views/academic.js`）**
+
+- 三个标签页，每页：「在顶部菜单显示」开关 → 设置卡片（论文：署名写法 / ADS / ORCID / Scholar / 分组；近况：首页显示几条）→ 列表 + 添加。论文列表的分组和网站一致（同行评审 / 已投稿与准备中 / 会议论文与其他，或按年份），`myNames` 加粗。报告分「即将进行 / 过去的」。近况在页面上直接快速添加。
+- **一次保存 = 一个提交**：`data/<目录>/<id>.yaml`（新文件 `baseSha: null`，改 / 删带读取时的 sha）＋本次上传的 PDF（论文 → `static/documents/papers/`，报告 → `static/documents/talks/`，只收 PDF，经过 `uploads.checkUploads` 的检查和确认）。删除时可勾选「同时删除文件」（只限本后台上传目录里、没有别的记录在用的文件）。
+- 冲突：外壳 `repo.load()` 后重新读这一类记录；正在编辑的那条做字段级三方合并（用户没改过的字段换成最新值），再点一次保存。
+- 菜单开关：打开 = 给 `content/<栏目>/_index.md` 和 `_index.<语言>.md` 设 `menu.main.weight`（`pages.patchMenuWeight`，值 = 其他菜单项的最大值取整 + 10）；文件不存在时按网站的中性文字新建；关闭 = `setFields` 去掉 `menu` 里的 main（其他菜单保留，空了删键）。开着但没有条目时显示提醒。
+
+**首页设置里的相关部分（`views/profile.js`）**
+
+- 「简历 CV」卡片：上传 PDF（`safeFileName` 保留原文件名，放进 `static/documents/cv/`）→ 一个提交：PDF + `params.toml` 的 `cv = "/documents/cv/…"`；换一份时默认删除旧文件；移除 = `cv = ""`。这张卡片**立即发布**，不经过「保存并发布」；发布后只更新 `st.files.params` 的基准，表单里未发布的修改不受影响。显示在线预览链接，首页预览里多一个 CV 按钮。
+- 社交链接：学术图标排在前面（ORCID、Google 学术、NASA ADS `ads`、arXiv `arxiv`、ResearchGate、简历 CV、LinkedIn、Bluesky、Mastodon）；`ads` / `arxiv` 是网站 `layouts/partials/social_icons.html` 自己加的图标。网址框的提示随图标变（`SOCIAL_HINTS`），离开输入框时补全（`normalizeSocialUrl`：ORCID 号 → https://orcid.org/…，`@me@host` → Mastodon 主页 …），格式不对时提醒（`socialUrlWarning`，含 ORCID 校验位），不阻止保存。
+
+**导航**：`main.js` 的 `NAV` 里「学术」排在「课程」后面（`route: 'academic'`、图标 `academic`、testid `nav-academic`）。手机底部只放 `more` 不为 true 的四项（文章 / 页面 / 课程 / 学术）+「更多」按钮（`nav-more`），
+首页设置 / 背景动画 / 资料是 `more: true`，在「更多」打开的底部抽屉（`more-sheet`，链接 testid `more-<路由>`）里；当前页面在抽屉里时「更多」高亮，`aria-label` 写出当前页。电脑上「更多」隐藏，左侧照常列出全部七项。
+
+**测试**
+
+- 单元：`tests/admin/academic.test.mjs`（BibTeX 解析器、LaTeX 解码、作者名、期刊宏、YAML 写法与改已有文件、id、分组 / 排序、社交链接补全与 ORCID 校验位、菜单小工具）。
+- `node tests/admin/e2e-academic.mjs`（`ACADEMIC_E2E_DIR`）：后台「学术」与首页设置的简历 / 学术图标，检查提交内容（逐字的 YAML、PDF 字节），最后用 Hugo 构建。
+- `node tests/admin/e2e-academic-site.mjs`（`ACADEMIC_SITE_E2E_DIR`）：只测网站模板（固定夹具，不碰真实 `data/`），并检查构建输出的 WARN / ERROR（故意写错的夹具只能产生预期的警告）。
+- 手机导航：`e2e-shell.mjs`（底部 5 个标签、360px 宽、「更多」抽屉）；语言：`e2e-lang.mjs`（第 14 节）。

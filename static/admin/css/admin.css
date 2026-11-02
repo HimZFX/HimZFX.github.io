@@ -339,6 +339,24 @@ p:last-child { margin-bottom: 0; }
 .nav-icon { display: inline-flex; }
 .nav-icon .icon { width: 20px; height: 20px; }
 .nav-label-short { display: none; }
+/* 「更多」只在手机底部标签栏出现（电脑上左侧导航全部列出） */
+.nav-more { display: none; }
+.more-sheet-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
+.more-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 16px;
+  text-decoration: none;
+}
+.more-sheet-item:hover { background: var(--hover); text-decoration: none; }
+.more-sheet-item.active { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+.more-sheet-item .nav-icon .icon { width: 22px; height: 22px; }
+.more-sheet-item > .icon-chevron-right { margin-left: auto; color: var(--muted); }
 .sidenav-footer {
   margin-top: auto;
   padding: 12px 14px 0;
@@ -1096,7 +1114,21 @@ a.list-item-title:hover { color: var(--primary-text); text-decoration: none; }
   }
   .nav-new, .sidenav-footer { display: none; }
   .nav-list { flex: 1; flex-direction: row; gap: 0; }
-  .nav-item {
+  /* 不常用的几项收进「更多」：底部最多 5 个标签，360px 宽时每个仍有 72px */
+  .nav-item.nav-item-more { display: none; }
+  .nav-more {
+    display: flex;
+    align-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    cursor: pointer;
+  }
+  .nav-more.active { color: var(--primary-text); font-weight: 600; }
+  .nav-more.active .nav-icon .icon { stroke-width: 2.2; }
+  .nav-item, .nav-more {
     flex: 1 1 0;
     flex-direction: column;
     justify-content: center;
@@ -1109,6 +1141,7 @@ a.list-item-title:hover { color: var(--primary-text); text-decoration: none; }
   }
   .nav-item:hover { background: transparent; }
   .nav-item.active { background: transparent; }
+  .nav-more:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
   .nav-item.active .nav-icon .icon { stroke-width: 2.2; }
   .nav-icon .icon { width: 22px; height: 22px; }
   .nav-label { display: none; }

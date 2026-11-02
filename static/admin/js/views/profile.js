@@ -3,8 +3,8 @@
  *
  * 读取 params.toml / languages.toml / hugo.toml，用表单编辑首页的：
  *   - 头像（裁剪成正方形 JPEG；可同时生成浏览器标签页图标 favicon）
- *   - 名字、简介、网站标题；非默认语言（英文站）可单独设置名字 / 简介
- *     （写到 languages.toml 的 [en.params.profileMode]，留空 = 删除该键，表空了就删表头）
+ *   - 名字、简介、网站标题；非默认语言（默认语言是英文时 = 中文站）可单独设置名字 / 简介
+ *     （写到 languages.toml 的 [<语言>.params.profileMode]，例如 [zh.params.profileMode]；留空 = 删除该键，表空了就删表头）
  *   - 首页按钮、社交链接（增删、上移下移）
  *   - 节日图标（开关 + 规则）
  * 所有修改只用 tomlpatch 做「外科手术式」修改：没改的行（包括注释）一个字节都不动。
@@ -21,21 +21,29 @@ import {
   errorState, errorMessage, formatDate,
 } from '../ui.js';
 import { parseToml, getIn, setValue, replaceArrayOfTables, removeTableIfEmpty } from '../tomlpatch.js';
-import { loadImage, cropToBlob, extOf } from '../images.js';
+import { loadImage, cropToBlob, extOf, safeFileName } from '../images.js';
 import { PATHS, LIMITS } from '../config.js';
+import { normalizeSocialUrl, socialUrlWarning, SOCIAL_HINTS, CV_DIR } from '../academic.js';
+import { sitePathFor, viewerUrlFor, referencesSitePath } from '../content.js';
+import { checkUploads, needsReview, gitignoreMatcher, uploadReviewSections, refusedContent, findReferences } from '../uploads.js';
 
 // ---------------------------------------------------------------------------
 // 常量
 
-/** 社交图标下拉框里的常用选项（名字必须是 PaperMod svg.html 支持的）。 */
+/**
+ * 社交图标下拉框里的常用选项（名字必须是 PaperMod svg.html 支持的，或网站 layouts/partials/social_icons.html
+ * 自己加的 ads / arxiv）。学术相关的放在前面。
+ */
 const SOCIAL_CHOICES = [
-  ['github', 'GitHub'], ['email', '邮箱'], ['googlescholar', 'Google Scholar'], ['orcid', 'ORCID'],
-  ['researchgate', 'ResearchGate'], ['linkedin', 'LinkedIn'], ['x', 'X'], ['twitter', 'Twitter'],
+  ['github', 'GitHub'], ['email', '邮箱'],
+  ['orcid', 'ORCID'], ['googlescholar', 'Google 学术（Google Scholar）'], ['ads', 'NASA ADS'], ['arxiv', 'arXiv'],
+  ['researchgate', 'ResearchGate'], ['cv', '简历 CV'], ['linkedin', '领英（LinkedIn）'],
+  ['bluesky', 'Bluesky'], ['mastodon', 'Mastodon（长毛象）'], ['x', 'X'], ['twitter', 'Twitter'],
   ['zhihu', '知乎'], ['bilibili', '哔哩哔哩'], ['wechat', '微信'], ['douban', '豆瓣'], ['juejin', '掘金'],
   ['qq', 'QQ'], ['telegram', 'Telegram'], ['discord', 'Discord'], ['youtube', 'YouTube'],
-  ['instagram', 'Instagram'], ['facebook', 'Facebook'], ['mastodon', 'Mastodon'], ['bluesky', 'Bluesky'],
+  ['instagram', 'Instagram'], ['facebook', 'Facebook'],
   ['medium', 'Medium'], ['stackoverflow', 'Stack Overflow'], ['kaggle', 'Kaggle'], ['leetcode', 'LeetCode'],
-  ['gitlab', 'GitLab'], ['cv', '简历 CV'], ['rss', 'RSS 订阅'],
+  ['gitlab', 'GitLab'], ['rss', 'RSS 订阅'],
 ];
 const SOCIAL_LABELS = Object.fromEntries(SOCIAL_CHOICES);
 const OTHER = '__other__';
@@ -51,7 +59,9 @@ const PAPERMOD_ICONS = new Set(('123rf 500px adobestock anilist ao3 archiveofour
   'qq reddit raycast researchgate rootme rss serverfault sessionmessenger shutterstock signal sketchfab slack snapchat soundcloud ' +
   'sourcehut spacehey spotify stackoverflow steam strava substack tableau telegram thingiverse threads threema tidal tiktok ' +
   'tryhackme tumblr twitch twitter unity unsplash vimeo vk vkontakte wantedly wechat whatsapp wikipedia wiki wordpress x xda xing ' +
-  'xmpp ycombinator yeswehack youtube zcal zhihu jamendo').split(' '));
+  'xmpp ycombinator yeswehack youtube zcal zhihu jamendo ' +
+  // 网站自己加的图标（layouts/partials/social_icons.html → academic/icon.html）
+  'ads arxiv').split(' '));
 
 const BUTTON_KEYS = ['name', 'url'];
 const SOCIAL_KEYS = ['name', 'url'];
@@ -444,7 +454,11 @@ function graphemes(s) {
 
 const BAD_SCHEME = /^\s*(javascript|data|vbscript):/i;
 
-function validateButton(it) {
+/**
+ * @param {{ name: string, url: string }} it
+ * @param {Array<{ lang: string, label: string }>} [prefixed] 网址带前缀的语言（非默认语言），例如 [{ lang: 'zh', label: '中文站' }]
+ */
+function validateButton(it, prefixed = []) {
   const errors = {};
   const warnings = {};
   if (!it.name.trim()) errors.name = '请填写按钮名称';
@@ -452,7 +466,9 @@ function validateButton(it) {
   if (!u) errors.url = '请填写链接';
   else if (BAD_SCHEME.test(u)) errors.url = '不支持这种链接';
   else if (/\s/.test(u)) errors.url = '链接里不能有空格';
-  else if (u.startsWith('/') && !u.startsWith('//')) warnings.url = '以 / 开头的站内链接在英文站不会自动加 /en/，建议写成「' + u.replace(/^\/+/, '') + '」';
+  else if (u.startsWith('/') && !u.startsWith('//') && prefixed.length) {
+    warnings.url = `以 / 开头的站内链接在${prefixed.map((p) => p.label).join('、')}不会自动加 ${prefixed.map((p) => `/${p.lang}/`).join('、')}，建议写成「${u.replace(/^\/+/, '')}」`;
+  }
   else if (/^(www\.|[a-z0-9-]+\.(com|cn|org|net|io|edu)(\/|$))/i.test(u)) warnings.url = '外部网址请以 https:// 开头，否则会被当成站内路径';
   return { errors, warnings };
 }
@@ -470,6 +486,10 @@ function validateSocial(it) {
   else if (/\s/.test(u)) errors.url = '链接里不能有空格';
   else if (name === 'email' && !/^mailto:/i.test(u)) warnings.url = '邮箱链接要以 mailto: 开头，例如 mailto:me@example.com';
   else if (name !== 'email' && !/^(https?:|mailto:|tel:)/i.test(u) && !u.startsWith('/')) warnings.url = '外部网址请以 https:// 开头';
+  else {
+    const w = socialUrlWarning(name, u);
+    if (w) warnings.url = w;
+  }
   return { errors, warnings };
 }
 
@@ -718,7 +738,7 @@ export default async function mount(container, params, ctx) {
     ui.cards = {};
     ui.restoreHost = h('div', { class: 'pf-restore-host' });
     const main = h('div', { class: 'pf-main stack' },
-      avatarCard(), namesCard(), buttonsCard(), socialCard(), holidayCard());
+      avatarCard(), namesCard(), buttonsCard(), cvCard(), socialCard(), holidayCard());
     const side = h('aside', { class: 'pf-side' }, previewCard());
     render(root,
       h('div', { class: 'page-header' },
@@ -1026,6 +1046,7 @@ export default async function mount(container, params, ctx) {
           clear(msgs);
           let errCount = 0;
           for (const f of fields) {
+            if (f.placeholderFor && inputs[f.key]) inputs[f.key].placeholder = f.placeholderFor(it);
             const e = errors[f.key];
             const isRequired = e && !str(it[f.key]).trim();
             const show = e && (!isRequired || st.showRequired || touched.has(f.key));
@@ -1094,7 +1115,7 @@ export default async function mount(container, params, ctx) {
         { key: 'name', label: '名称', placeholder: '如 My Research' },
         { key: 'url', label: '链接', placeholder: '如 research/ 或 https://…', normalize: (v) => v.trim() },
       ],
-      validate: validateButton,
+      validate: (it) => validateButton(it, overrideLangsAll.map((lang) => ({ lang, label: ctx.siteLabel(lang) }))),
       newItem: () => ({ name: '', url: '' }),
       prefix: 'button',
       itemName: '按钮',
@@ -1110,6 +1131,180 @@ export default async function mount(container, params, ctx) {
         h('code', { class: 'kbd' }, 'https://'), ' 开头，邮箱用 ', h('code', { class: 'kbd' }, 'mailto:'), '。'));
   }
 
+  // ---------- 简历 CV ----------
+  // 和其他卡片不同：上传 / 更换 / 移除是「立即发布」的独立提交（PDF + params.toml 的 cv 一行），
+  // 不经过下面的「保存并发布」；发布后只更新 st.files.params 的基准，表单里未发布的修改不受影响。
+  function cvCard() {
+    const host = h('div', { class: 'pf-cv', dataset: { testid: 'cv-body' } });
+    const input = h('input', { type: 'file', accept: 'application/pdf,.pdf', hidden: true, dataset: { testid: 'cv-file' } });
+    input.addEventListener('change', () => {
+      const f = input.files && input.files[0];
+      input.value = '';
+      if (f) withBusy(host.querySelector('[data-testid="cv-upload"], [data-testid="cv-replace"]'), () => uploadCv(f));
+    });
+    ui.cv = { host, input };
+    renderCv();
+    return cardShell('cv', '简历 CV', 'post', '首页按钮后面会多一个「CV」按钮，点开是在线阅读器', host, input);
+  }
+
+  function currentCv() {
+    const v = st.cfg && st.cfg.params ? st.cfg.params.cv : undefined;
+    return typeof v === 'string' ? v.trim() : '';
+  }
+
+  function renderCv() {
+    if (!ui.cv) return;
+    const cv = currentCv();
+    const pick = (testid, text, icon, kind = '') => {
+      const b = h('button', { type: 'button', class: ['btn', kind], dataset: { testid } }, svgIcon(icon), text);
+      b.addEventListener('click', () => ui.cv.input.click());
+      return b;
+    };
+    if (!cv) {
+      render(ui.cv.host,
+        h('p', { class: 'muted small pf-cv-text', dataset: { testid: 'cv-empty' } }, '还没有简历。上传一份 PDF，网站首页的按钮后面就会多一个「CV」按钮（访客点开是在线阅读器，手机上也能看）。'),
+        h('div', { class: 'row' }, pick('cv-upload', '上传简历 PDF', 'upload', 'btn-primary')),
+        h('p', { class: 'hint muted small' }, `文件放在 ${CV_DIR}/，保留原来的文件名。点了就立即发布，不用再点下面的「保存并发布」。`));
+      return;
+    }
+    const isSite = cv.startsWith('/') && !cv.startsWith('//');
+    const exists = isSite && repo.has('static' + cv);
+    const url = isSite ? viewerUrlFor(cv, { absolute: true, siteUrl: ctx.siteUrl }) : (/^https?:\/\//i.test(cv) ? cv : null);
+    const remove = h('button', { type: 'button', class: 'btn btn-ghost btn-danger', dataset: { testid: 'cv-remove' } }, svgIcon('trash'), '移除');
+    remove.addEventListener('click', () => withBusy(remove, removeCv));
+    render(ui.cv.host,
+      h('div', { class: 'pf-cv-current' },
+        svgIcon('post'),
+        h('div', { class: 'pf-cv-info' },
+          h('code', { class: 'kbd pf-cv-path', dataset: { testid: 'cv-path' } }, cv),
+          url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', dataset: { testid: 'cv-preview' } }, svgIcon('eye'), ' 在线预览（访客看到的样子）') : null,
+          isSite && !exists ? h('div', { class: 'pf-warn', dataset: { testid: 'cv-missing' } }, svgIcon('warning'), '网站上没有这个文件，首页的 CV 按钮会打不开：请重新上传') : null)),
+      h('div', { class: 'row' }, pick('cv-replace', '换一份', 'upload'), remove),
+      h('p', { class: 'hint muted small' }, '点了就立即发布，不用再点下面的「保存并发布」。'));
+  }
+
+  /** 旧简历文件（在 static/documents/cv/ 下、仓库里有）。 */
+  function oldCvFile(cv) {
+    if (!cv || !cv.startsWith('/')) return null;
+    const p = 'static' + cv;
+    return p.startsWith(CV_DIR + '/') && repo.has(p) ? p : null;
+  }
+
+  /**
+   * 旧简历文件还在别处被用到吗（文章、页面、论文 / 报告数据、[zh.params] 的覆盖、params.toml 里 cv 以外的行，例如首页按钮）？
+   * 被用到时默认不删除旧文件，并在确认框里列出来。
+   */
+  async function oldCvRefs(oldFile) {
+    if (!oldFile) return [];
+    const sp = sitePathFor(oldFile);
+    const params = st.files.params;
+    const refs = (await findReferences(repo, sp)).filter((p) => p !== params.path);
+    const rest = params.text.split('\n').filter((l) => !/^\s*cv\s*=/.test(l)).join('\n');
+    if (referencesSitePath(rest, sp)) refs.unshift(params.path);
+    return refs;
+  }
+
+  function oldCvRefsNote(refs) {
+    if (!refs.length) return null;
+    return h('div', { class: 'banner banner-warning', dataset: { testid: 'cv-old-refs' } }, svgIcon('warning'),
+      h('div', { class: 'banner-text' },
+        h('div', {}, `旧简历还被 ${refs.length} 处用到，所以默认保留旧文件（删除后那里的链接会打不开）：`),
+        h('ul', {}, refs.slice(0, 6).map((p) => h('li', {}, h('code', {}, p))))));
+  }
+
+  async function uploadCv(file) {
+    if (st.disposed) return;
+    if (ctx.isPublishing && ctx.isPublishing()) { toast('正在发布，请稍候', { type: 'info' }); return; }
+    const name = safeFileName(file.name || 'cv.pdf');
+    if (extOf(name) !== 'pdf') { toast('简历请上传 PDF 文件', { type: 'warning' }); return; }
+    const path = `${CV_DIR}/${name}`;
+    const item = { name, path, size: file.size, origName: file.name };
+    const review = checkUploads(repo, [item], await gitignoreMatcher(repo));
+    if (review.refused.length) {
+      await new Promise((resolve) => modal({ title: '无法上传', content: refusedContent(review.refused), actions: [{ text: '知道了', kind: 'primary', testid: 'confirm-ok', autofocus: true }], onClose: resolve }));
+      return;
+    }
+    const sitePath = sitePathFor(path);
+    const old = currentCv();
+    const oldFile = oldCvFile(old);
+    const refs = oldFile && oldFile !== path ? await oldCvRefs(oldFile) : [];
+    if (st.disposed) return;
+    const delBox = oldFile && oldFile !== path ? h('input', { type: 'checkbox', checked: !refs.length, dataset: { testid: 'cv-delete-old' } }) : null;
+    const ok = await confirmDialog({
+      title: old ? '换一份简历？' : '上传简历？',
+      message: h('div', { class: 'stack-sm', dataset: { testid: 'cv-confirm' } },
+        needsReview(review) ? uploadReviewSections(review) : null,
+        h('p', {}, '上传 ', h('code', { class: 'kbd' }, path), '，首页的 CV 按钮指向 ', h('code', { class: 'kbd' }, sitePath), '。'),
+        delBox ? oldCvRefsNote(refs) : null,
+        delBox ? h('label', { class: 'checkbox' }, delBox, ` 同时删除旧文件 ${oldFile.split('/').pop()}`) : null),
+      okText: '发布',
+    });
+    if (!ok || st.disposed) return;
+    let text;
+    try { text = setValue(st.files.params.text, '', 'cv', sitePath); } catch (err) {
+      toast(`没能修改 params.toml，什么都没有改：${errorMessage(err)}`, { type: 'error', timeout: 9000 });
+      return;
+    }
+    const changes = [{ path, content: file, baseSha: item.existing ? item.existing.sha : null }];
+    if (text !== st.files.params.text) changes.push({ path: st.files.params.path, content: text, baseSha: st.files.params.sha });
+    if (delBox && delBox.checked) changes.push({ path: oldFile, delete: true, baseSha: repo.entry(oldFile).sha });
+    await publishCv(changes, text, `admin: ${old ? '更换' : '上传'}简历 CV（${name}）`);
+  }
+
+  async function removeCv() {
+    if (st.disposed) return;
+    if (ctx.isPublishing && ctx.isPublishing()) { toast('正在发布，请稍候', { type: 'info' }); return; }
+    const old = currentCv();
+    const oldFile = oldCvFile(old);
+    const refs = await oldCvRefs(oldFile);
+    if (st.disposed) return;
+    const delBox = oldFile ? h('input', { type: 'checkbox', checked: !refs.length, dataset: { testid: 'cv-delete-old' } }) : null;
+    const ok = await confirmDialog({
+      title: '移除简历？',
+      message: h('div', { class: 'stack-sm' },
+        h('p', {}, '首页上的 CV 按钮会消失（params.toml 里的 cv 改成空）。'),
+        oldCvRefsNote(refs),
+        delBox ? h('label', { class: 'checkbox' }, delBox, ` 同时删除文件 ${oldFile.split('/').pop()}`) : null),
+      okText: '移除', danger: true,
+    });
+    if (!ok || st.disposed) return;
+    let text;
+    try { text = setValue(st.files.params.text, '', 'cv', ''); } catch (err) {
+      toast(`没能修改 params.toml，什么都没有改：${errorMessage(err)}`, { type: 'error', timeout: 9000 });
+      return;
+    }
+    const changes = [];
+    if (text !== st.files.params.text) changes.push({ path: st.files.params.path, content: text, baseSha: st.files.params.sha });
+    if (delBox && delBox.checked) changes.push({ path: oldFile, delete: true, baseSha: repo.entry(oldFile).sha });
+    if (!changes.length) return;
+    await publishCv(changes, text, 'admin: 移除简历 CV');
+  }
+
+  async function publishCv(changes, paramsText, message) {
+    let res;
+    try {
+      res = await ctx.publish({ message, changes, summary: changes.map((c) => c.path), viewUrl: ctx.siteUrl, viewLabel: '打开首页' });
+    } catch { return; }
+    if (st.disposed) return;
+    if (res && res.conflict) {
+      if (res.reloaded) {
+        await reloadKeepingEdits();
+        toast('已读取网站上的最新设置，请再试一次', { type: 'info', timeout: 7000 });
+      }
+      return;
+    }
+    const f = st.files.params;
+    if (paramsText !== f.text) {
+      f.text = paramsText;
+      const e = repo.entry(f.path);
+      f.sha = (res && res.shas && res.shas[f.path]) || (e && e.sha) || f.sha;
+      try { st.cfg = { ...st.cfg, params: parseToml(paramsText) }; } catch { /* 刚刚验证过 */ }
+    }
+    renderCv();
+    refreshPreview();
+    flushLocal(); // 本机记录里的文件版本跟着更新
+  }
+
   // ---------- 社交链接 ----------
   function socialCard() {
     const editor = listEditor({
@@ -1119,11 +1314,9 @@ export default async function mount(container, params, ctx) {
         { key: 'name', label: '图标', kind: 'icon' },
         {
           key: 'url', label: '链接', placeholder: 'https://…',
-          // 选了「邮箱」又只填了邮箱地址时，自动补上 mailto:
-          normalize: (v, it) => {
-            const t = v.trim();
-            return it.name === 'email' && /^[^@\s:/]+@[^@\s/]+\.[^@\s/]+$/.test(t) ? 'mailto:' + t : t;
-          },
+          placeholderFor: (it) => SOCIAL_HINTS[it.name] || 'https://…',
+          // 按图标补全网址：邮箱 → mailto:；ORCID 号 → https://orcid.org/…；Bluesky / Mastodon 账号 → 主页网址 …
+          normalize: (v, it) => normalizeSocialUrl(it.name, v),
         },
       ],
       validate: validateSocial,
@@ -1252,7 +1445,9 @@ export default async function mount(container, params, ctx) {
     render(p.social, socList.filter((x) => x.name.trim()).map((x) =>
       h('span', { class: 'pf-pv-icon', title: x.url }, SOCIAL_LABELS[x.name] || x.name)));
     render(p.buttons, btnList.filter((x) => x.name.trim()).map((x) =>
-      h('span', { class: 'pf-pv-btn', title: x.url }, x.name, /:\/\//.test(x.url) ? svgIcon('external', { size: 12 }) : null)));
+      h('span', { class: 'pf-pv-btn', title: x.url }, x.name, /:\/\//.test(x.url) ? svgIcon('external', { size: 12 }) : null)),
+      // 设置了简历时，网站在按钮后面加一个「CV」按钮（layouts/partials/index_profile.html）
+      currentCv() ? h('span', { class: 'pf-pv-btn', title: currentCv(), dataset: { testid: 'preview-cv' } }, 'CV') : null);
   }
 
   // ---------- 状态刷新 ----------

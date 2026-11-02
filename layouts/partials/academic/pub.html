@@ -1,0 +1,91 @@
+{{- /*
+  一篇论文（publications 列表里的一项）。参数：dict "p" <academic/publications.html 返回的一项> "lang" <页面语言> "showKind" <bool>
+
+  标题是纯文本（会转义 & < > 等），不当作 Markdown；$…$ 里的公式由全站的 KaTeX 渲染（params.toml math = true 时），
+  例如 "$\Lambda$CDM" 显示成 ΛCDM；KaTeX 没加载时原样显示 TeX，不会弄乱页面。作者、期刊、备注同样是纯文本。
+  链接只接受 http(s) 网址和网站路径（见 academic/url.html），arXiv / ADS / DOI 可以只写编号：
+    arxiv  2603.01234 / arXiv:2603.01234v2 / astro-ph/0601001 → https://arxiv.org/abs/<编号>
+    ads    2024MNRAS.527.1234Z（bibcode）                     → https://ui.adsabs.harvard.edu/abs/<bibcode>/abstract
+    doi    10.1093/mnras/stad123 / doi:10.… / https://doi.org/10.… → https://doi.org/<doi>
+  也可以直接写完整网址。pdf / slides 是网站路径时用在线预览页打开（lang = 页面语言）。
+*/ -}}
+{{- $p := .p -}}
+{{- $lang := .lang -}}
+{{- $where := printf "data/publications/%s" $p.key -}}
+
+{{- /* ---------- 链接 ---------- */ -}}
+{{- $chips := slice -}}
+{{- with $p.arxiv -}}
+  {{- $v := replaceRE `^(?i)arxiv:\s*` "" . -}}
+  {{- if findRE `^(\d{4}\.\d{4,5}|[a-z][a-z.-]*(\.[A-Z]{2})?/\d{7})(v\d+)?$` $v -}}
+    {{- $chips = $chips | append (dict "cls" "arxiv" "label" "arXiv" "href" (printf "https://arxiv.org/abs/%s" $v) "external" true) -}}
+  {{- else -}}
+    {{- $u := partial "academic/url.html" (dict "url" $v "lang" $lang "where" (printf "%s arxiv" $where)) -}}
+    {{- if $u.external }}{{ $chips = $chips | append (dict "cls" "arxiv" "label" "arXiv" "href" $u.href "external" true) }}{{ else if $u.href }}{{ warnf "%s：arxiv %q 不是 arXiv 编号或网址，已忽略" $where . }}{{ end -}}
+  {{- end -}}
+{{- end -}}
+{{- with $p.ads -}}
+  {{- if findRE `^(?i)https?://` . -}}
+    {{- $u := partial "academic/url.html" (dict "url" . "lang" $lang "where" (printf "%s ads" $where)) -}}
+    {{- with $u.href }}{{ $chips = $chips | append (dict "cls" "ads" "label" "ADS" "href" . "external" true) }}{{ end -}}
+  {{- else if findRE `^\d{4}[A-Za-z0-9&.:+]{14}[A-Za-z.]$` . -}}
+    {{- $chips = $chips | append (dict "cls" "ads" "label" "ADS" "href" (printf "https://ui.adsabs.harvard.edu/abs/%s/abstract" (urlquery .)) "external" true) -}}
+  {{- else -}}
+    {{- warnf "%s：ads %q 不是 19 位的 bibcode 或网址，已忽略" $where . -}}
+  {{- end -}}
+{{- end -}}
+{{- with $p.doi -}}
+  {{- $v := replaceRE `^(?i)(doi:\s*|https?://(dx\.)?doi\.org/)` "" . -}}
+  {{- if and (findRE `^10\.\d{4,9}/\S+$` $v) (not (findRE `^(?i)https?://` .)) -}}
+    {{- $enc := slice -}}
+    {{- range split $v "/" }}{{ $enc = $enc | append (replace (urlquery .) "+" "%20") }}{{ end -}}
+    {{- $chips = $chips | append (dict "cls" "doi" "label" "DOI" "href" (printf "https://doi.org/%s" (delimit $enc "/")) "external" true) -}}
+  {{- else if findRE `^10\.\d{4,9}/\S+$` $v -}}
+    {{- /* 写的是 https://doi.org/… 完整网址：原样使用 */ -}}
+    {{- $u := partial "academic/url.html" (dict "url" . "lang" $lang "where" (printf "%s doi" $where)) -}}
+    {{- with $u.href }}{{ $chips = $chips | append (dict "cls" "doi" "label" "DOI" "href" . "external" true) }}{{ end -}}
+  {{- else -}}
+    {{- warnf "%s：doi %q 不是 10.xxxx/… 格式，已忽略" $where . -}}
+  {{- end -}}
+{{- end -}}
+{{- range slice (slice "pdf" "PDF") (slice "code" (i18n "pub_code")) (slice "slides" (i18n "pub_slides")) -}}
+  {{- $field := index . 0 -}}
+  {{- $label := index . 1 -}}
+  {{- with index $p $field -}}
+    {{- $u := partial "academic/url.html" (dict "url" . "lang" $lang "kind" "file" "where" (printf "%s %s" $where $field)) -}}
+    {{- with $u.href }}{{ $chips = $chips | append (dict "cls" $field "label" $label "href" . "external" $u.external "viewer" $u.viewer) }}{{ end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- /* ---------- 期刊、卷、页、年 ---------- */ -}}
+{{- $where2 := slice -}}
+{{- with $p.venue }}{{ $where2 = $where2 | append . }}{{ end -}}
+{{- with $p.volume }}{{ $where2 = $where2 | append . }}{{ end -}}
+{{- with $p.pages }}{{ $where2 = $where2 | append . }}{{ end -}}
+
+<li class="pub{{ if $p.selected }} pub-selected{{ end }}" id="pub-{{ anchorize $p.id }}" data-status="{{ $p.status }}" data-kind="{{ $p.kind }}">
+  <div class="pub-title">{{ $p.title }}</div>
+  {{- partial "academic/authors.html" (dict "authors" $p.authors "id" $p.id) }}
+  <div class="pub-meta">
+    {{- if or $where2 $p.year }}<span class="pub-venue">{{ delimit $where2 ", " }}{{ if and $where2 $p.year }} {{ end }}{{ with $p.year }}<span class="pub-year">{{ if $where2 }}({{ . }}){{ else }}{{ . }}{{ end }}</span>{{ end }}</span>{{ end -}}
+    {{- if ne $p.status "published" }} <span class="pub-badge pub-badge-{{ $p.status }}">{{ i18n (printf "pub_status_%s" (replace $p.status "-" "")) }}</span>{{ end -}}
+    {{- if and .showKind (in (slice "proceedings" "preprint" "thesis") $p.kind) }} <span class="pub-badge pub-badge-kind">{{ i18n (printf "pub_kind_%s" $p.kind) }}</span>{{ end -}}
+    {{- if $p.selected }} <span class="pub-badge pub-badge-selected">{{ i18n "pub_selected" }}</span>{{ end -}}
+  </div>
+  {{- with $p.note }}
+  <div class="pub-note">{{ . }}</div>
+  {{- end }}
+  {{- if or $chips $p.bibtex }}
+  <div class="pub-links">
+    {{- range $chips }}
+    <a class="pub-chip pub-chip-{{ .cls }}" href="{{ .href }}"{{ if .external }} target="_blank" rel="noopener noreferrer"{{ end }}>{{ .label }}</a>
+    {{- end }}
+    {{- with $p.bibtex }}
+    <details class="pub-bibtex">
+      <summary class="pub-chip">BibTeX</summary>
+      <pre><code>{{ . }}</code></pre>
+    </details>
+    {{- end }}
+  </div>
+  {{- end }}
+</li>

@@ -871,34 +871,51 @@ describe('tomlpatch: replaceArrayOfTables', () => {
 
 describe('tomlpatch: languages.toml 的语言覆盖', () => {
   const L = parseToml(LANGS);
-  const giscusLine = LANGS.split('\n').find((l) => /^\s*lang\s*=/.test(l) && /en/.test(l));
+  // 默认语言（hugo.toml，现在是英文）的值在 params.toml；可以单独设置的是另一种语言（现在是中文，[zh.params.…]）
+  const DEFAULT_LANG = parseToml(HUGO).defaultContentLanguage;
+  const OTHER = Object.keys(L).find((k) => k !== DEFAULT_LANG);
+  const FIRST_TABLE = Object.keys(L)[0];
+  const giscusLine = LANGS.split('\n').find((l) => /^\s*lang\s*=/.test(l) && l.includes(`"${L[OTHER].params.giscus.lang}"`));
 
-  test('新增 [en.params.profileMode] 的 title / subtitle', () => {
-    let t = setValue(LANGS, 'en.params.profileMode', 'subtitle', 'Peking University | Physics');
-    t = setValue(t, 'en.params.profileMode', 'title', 'Zhong Fangxiong');
+  test('默认语言是英文，中文站的评论区语言在 [zh.params.giscus]', () => {
+    assert.equal(DEFAULT_LANG, 'en');
+    assert.equal(OTHER, 'zh');
+    assert.deepEqual(Object.keys(L), ['en', 'zh'], '语言表按 weight 排列：英文在前');
+    assert.ok(L.en.weight < L.zh.weight);
+    assert.equal(L.zh.params.giscus.lang, 'zh-CN');
+    assert.equal(L.en.params, undefined, '英文（默认语言）的值都在 params.toml 里');
+    assert.equal(parseToml(PARAMS).giscus.lang, 'en');
+    assert.ok(giscusLine, 'giscus lang 行');
+  });
+
+  test(`新增 [${OTHER}.params.profileMode] 的 title / subtitle`, () => {
+    const T = `${OTHER}.params.profileMode`;
+    let t = setValue(LANGS, T, 'subtitle', '中文简介 | Physics');
+    t = setValue(t, T, 'title', '中文名字');
     const expected = clone(L);
-    expected.en.params.profileMode = { subtitle: 'Peking University | Physics', title: 'Zhong Fangxiong' };
+    expected[OTHER].params.profileMode = { subtitle: '中文简介 | Physics', title: '中文名字' };
     assert.deepEqual(clone(parseToml(t)), expected);
-    assert.deepEqual(parseToml(t).en.params.giscus, L.en.params.giscus);
+    assert.deepEqual(parseToml(t)[OTHER].params.giscus, L[OTHER].params.giscus);
     assert.ok(t.startsWith(LANGS.endsWith('\n') ? LANGS : LANGS + '\n'), '原有内容一个字节都不变');
     assert.ok(t.split('\n').includes(giscusLine));
-    assert.match(t, /\n {2}\[en\.params\.profileMode\]\n {4}subtitle = "Peking University \| Physics"\n {4}title = "Zhong Fangxiong"\n$/);
+    assert.match(t, new RegExp(`\\n {2}\\[${OTHER}\\.params\\.profileMode\\]\\n {4}subtitle = "中文简介 \\| Physics"\\n {4}title = "中文名字"\\n$`));
     assertCommentsKept(LANGS, t);
   });
 
   test('再删掉它们 + removeTableIfEmpty → 与原文件完全相同', () => {
-    let t = setValue(LANGS, 'en.params.profileMode', 'subtitle', 'x');
-    t = setValue(t, 'en.params.profileMode', 'title', 'y');
-    t = setValue(t, 'en.params.profileMode', 'subtitle', undefined);
-    assert.equal(removeTableIfEmpty(t, 'en.params.profileMode'), t, '还有键时不删');
-    t = setValue(t, 'en.params.profileMode', 'title', undefined);
-    t = removeTableIfEmpty(t, 'en.params.profileMode');
+    const T = `${OTHER}.params.profileMode`;
+    let t = setValue(LANGS, T, 'subtitle', 'x');
+    t = setValue(t, T, 'title', 'y');
+    t = setValue(t, T, 'subtitle', undefined);
+    assert.equal(removeTableIfEmpty(t, T), t, '还有键时不删');
+    t = setValue(t, T, 'title', undefined);
+    t = removeTableIfEmpty(t, T);
     assert.equal(t, LANGS);
   });
 
   test('removeTableIfEmpty：不存在的表 / 有键的表 → 原样', () => {
-    assert.equal(removeTableIfEmpty(LANGS, 'en.params.nope'), LANGS);
-    assert.equal(removeTableIfEmpty(LANGS, 'en.params.giscus'), LANGS);
+    assert.equal(removeTableIfEmpty(LANGS, `${OTHER}.params.nope`), LANGS);
+    assert.equal(removeTableIfEmpty(LANGS, `${OTHER}.params.giscus`), LANGS);
     assert.equal(removeTableIfEmpty(LANGS, ''), LANGS);
     const t = '[a]\n  x = 1\n\n[b]\n\n[c]\n  y = 2\n';
     assert.equal(removeTableIfEmpty(t, 'b'), '[a]\n  x = 1\n\n[c]\n  y = 2\n');
@@ -910,16 +927,18 @@ describe('tomlpatch: languages.toml 的语言覆盖', () => {
   test('根区域没有键时，新键插在第一个表头之前', () => {
     const out = setValue(LANGS, '', 'foo', 1);
     assert.deepEqual(clone(parseToml(out)), { ...clone(L), foo: 1 });
-    assert.match(out, /\nfoo = 1\n\n\[zh\]/);
+    assert.match(out, new RegExp(`\\nfoo = 1\\n\\n\\[${FIRST_TABLE}\\]`));
     assertCommentsKept(LANGS, out);
   });
 
   test('已有语言表里新增键', () => {
-    const out = setValue(LANGS, 'en', 'title', 'HimZFX Lab');
-    assert.equal(parseToml(out).en.title, 'HimZFX Lab');
-    const d = lineDiff(LANGS, out);
-    assert.equal(d.removed.length, 0);
-    assert.equal(d.addedLines[0], '  title = "HimZFX Lab"');
+    for (const lang of [DEFAULT_LANG, OTHER]) {
+      const out = setValue(LANGS, lang, 'title', 'HimZFX Lab');
+      assert.equal(parseToml(out)[lang].title, 'HimZFX Lab');
+      const d = lineDiff(LANGS, out);
+      assert.equal(d.removed.length, 0);
+      assert.equal(d.addedLines[0], '  title = "HimZFX Lab"');
+    }
   });
 });
 

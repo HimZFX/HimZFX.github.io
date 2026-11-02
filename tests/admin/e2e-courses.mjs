@@ -1,7 +1,7 @@
 // tests/admin/e2e-courses.mjs — Playwright end-to-end test for the 「课程」 view (views/courses.js) and the
 // course-related bits of the editor / 页面 / 文章 views.
 //
-// Covers: create a course (中文 + English → _index.md + _index.en.md, exact front matter, slug from the English name,
+// Covers: create a course (English, the default language + 中文 → _index.md + _index.zh.md, exact front matter, slug from the English name,
 // free-text group + datalist), batch upload (2 PDFs + 1 PNG, one PDF only into 资料) → ONE commit (PDFs byte-exact,
 // PNG compressed to JPEG, 2 sub-posts with the expected front matter / bodies / weights), the 资料 list (sorted by
 // name, 「用在」 links, preview links), refused file types (.html / .svg) with the Chinese explanation, reorder
@@ -9,8 +9,8 @@
 // ＋ 新子推文 via the editor (weight after the max, no menu, no date), editing the course intro keeps group / weight,
 // delete a sub-post, change a course's group + rename a group across courses, reorder courses (group order),
 // 页面 / 文章 not polluted, phone 390×844 + 360 without horizontal scroll, and finally a Hugo build of the exported
-// repo: /courses/<course>/ lists the sub-posts in order + the materials, and both /courses/<course>/<item>/ and
-// /en/courses/<course>/<item>/ embed the viewer.
+// repo: /courses/<course>/ lists the sub-posts in order + the materials, and both /courses/<course>/<item>/ (English,
+// the default language) and /zh/courses/<course>/<item>/ embed the viewer in the page language.
 //
 // Run from the repo root:   node tests/admin/e2e-courses.mjs
 // Env:
@@ -145,8 +145,13 @@ const BIG_PNG = makePng(2400, 300, 5);
 const SLUG = 'modern-physics-lab';
 const CDIR = `content/courses/${SLUG}`;
 const MDIR = `static/documents/courses/${SLUG}`;
-const ZH = `${CDIR}/_index.md`;
-const EN = `${CDIR}/_index.en.md`;
+// English is the default language (hugo.toml): the required name goes into the shared _index.md, the optional
+// Chinese name into _index.zh.md. The dialog's fields carry the language in their testid.
+const MAIN = `${CDIR}/_index.md`;
+const ZHV = `${CDIR}/_index.zh.md`;
+const NAME_MAIN = 'new-course-name-en';
+const NAME_ZH = 'new-course-name-zh';
+const TITLE = 'Modern Physics Lab';
 const ITEM1 = `${CDIR}/item-1.md`;
 const ITEM_PHOTO = `${CDIR}/setup-photo.md`;
 const NEW_ITEM = `${CDIR}/experiment-3-millikan.md`;
@@ -242,37 +247,43 @@ await test('课程 nav item → empty state + landing note', async () => {
   assert.equal(await page.getAttribute(sel('courses-edit-landing'), 'href'), '#/edit?path=' + encodeURIComponent('content/courses/_index.md'));
 });
 
-await test('create a course (中文 + English) → one commit, exact _index.md + _index.en.md', async () => {
+await test('create a course (English + 中文) → one commit, exact _index.md + _index.zh.md', async () => {
   await page.click(sel('courses-new'));
   await page.waitForSelector(sel('new-course'));
-  await page.fill(sel('new-course-name-zh'), '近代物理实验');
-  await page.fill(sel('new-course-name-en'), 'Modern Physics Lab');
+  // the default language (English) comes first and is required; Chinese is optional
+  assert.deepEqual(await page.$$eval(`${sel('new-course')} [data-testid^="new-course-name-"]`, (els) => els.map((e) => [e.dataset.testid, e.placeholder])),
+    [[NAME_MAIN, 'e.g. Modern Physics Lab'], [NAME_ZH, '例如：近代物理实验']]);
+  assert.match(await page.textContent(sel('new-course')), /英文名称.*中文名称（可选）/);
+  await page.fill(sel(NAME_ZH), '近代物理实验');
+  assert.equal(await page.inputValue(sel('new-course-slug')), '', 'a Chinese name alone suggests no address');
+  await page.fill(sel(NAME_MAIN), TITLE);
   assert.equal(await page.inputValue(sel('new-course-slug')), SLUG, 'address suggested from the English name');
-  assert.match(await page.textContent(sel('new-course-url')), /\/courses\/modern-physics-lab\/.*\/en\/courses\/modern-physics-lab\//);
+  assert.equal(await page.textContent(sel('new-course-url')), '网站上的地址：/courses/modern-physics-lab/  ·  /zh/courses/modern-physics-lab/');
   await page.fill(sel('new-course-group'), '实验课');
-  await page.fill(sel('new-course-desc'), '大三上学期，每个实验一篇报告');
-  await page.fill(sel('new-course-desc-en'), 'Junior year: one report per experiment');
+  await page.fill(sel('new-course-desc'), 'Junior year: one report per experiment');
+  await page.fill(sel('new-course-desc-zh'), '大三上学期，每个实验一篇报告');
   const c = await commitAfter(page, mock, () => page.click(sel('new-course-ok')));
-  assert.equal(c.message, 'admin: 新建课程《近代物理实验》');
-  assert.deepEqual(changedPaths(c), [EN, ZH].sort());
-  assert.equal(mock.readFile(ZH), '---\ntitle: "近代物理实验"\ndescription: "大三上学期，每个实验一篇报告"\ngroup: "实验课"\nweight: 10\n---\n');
-  assert.equal(mock.readFile(EN), '---\ntitle: "Modern Physics Lab"\ndescription: "Junior year: one report per experiment"\ngroup: "实验课"\nweight: 10\n---\n');
+  assert.equal(c.message, `admin: 新建课程《${TITLE}》`);
+  assert.deepEqual(changedPaths(c), [MAIN, ZHV].sort());
+  assert.equal(mock.readFile(MAIN), '---\ntitle: "Modern Physics Lab"\ndescription: "Junior year: one report per experiment"\ngroup: "实验课"\nweight: 10\n---\n');
+  assert.equal(mock.readFile(ZHV), '---\ntitle: "近代物理实验"\ndescription: "大三上学期，每个实验一篇报告"\ngroup: "实验课"\nweight: 10\n---\n');
+  assert.equal(mock.readFile(`${CDIR}/_index.en.md`), undefined);
   await waitCourses(page, 'detail');
   assert.equal(await page.evaluate(() => location.hash), '#/courses?course=' + SLUG);
-  assert.equal(await page.textContent(sel('course-heading')), '近代物理实验');
+  assert.equal(await page.textContent(sel('course-heading')), TITLE);
   assert.ok(await page.isVisible(sel('items-empty')));
   assert.ok(await page.isVisible(sel('materials-empty')));
   assert.equal(await page.getAttribute(sel('nav-courses'), 'aria-current'), 'page');
 });
 
-await test('second course without English / group: slug validation, list shows 实验课 + 其他 groups, datalist', async () => {
+await test('second course with only the required name / no group: slug validation, list shows 实验课 + 其他 groups, datalist', async () => {
   await go(page, '#/courses', 'list');
   await page.click(sel('courses-new'));
   await page.waitForSelector(sel('new-course'));
   // the existing group is offered in the datalist
   const options = await page.$$eval(`${sel('new-course')} datalist option`, (els) => els.map((o) => o.value));
   assert.deepEqual(options, ['实验课']);
-  await page.fill(sel('new-course-name-zh'), '光学');
+  await page.fill(sel(NAME_MAIN), '光学');
   assert.equal(await page.inputValue(sel('new-course-slug')), '', 'pure Chinese name → no suggestion');
   await page.click(sel('new-course-ok'));
   assert.match(await page.textContent(`${sel('new-course')} .error:not([hidden])`), /请填写网址/);
@@ -322,7 +333,7 @@ await test('batch upload 3 files (2 PDFs + 1 PNG, one PDF only into 资料) → 
   assert.match(await page.textContent(sel('batch-summary')), /将上传 3 个文件到 static\/documents\/courses\/modern-physics-lab\/，并生成 2 篇子推文/);
   await page.screenshot({ path: path.join(SHOTS, 'courses-batch-dialog.png') });
   const c = await commitAfter(page, mock, () => page.click(sel('batch-submit')));
-  assert.equal(c.message, 'admin: 课程《近代物理实验》上传 3 个文件，新增 2 篇子推文');
+  assert.equal(c.message, `admin: 课程《${TITLE}》上传 3 个文件，新增 2 篇子推文`);
   assert.deepEqual(changedPaths(c), [
     ITEM1, ITEM_PHOTO,
     `${MDIR}/Setup-Photo.jpg`, `${MDIR}/实验1-光电效应.pdf`, `${MDIR}/实验2_弗兰克-赫兹-原始数据.pdf`,
@@ -384,7 +395,7 @@ await test('refused types: .html / .svg (Chinese explanation, PNG suggestion); �
   assert.match(await page.textContent(sel('files-warn-refused')), /x\.svg.*转换成 PNG/);
   assert.deepEqual(await page.$$eval(sel('batch-row'), (els) => els.map((e) => [e.dataset.name, e.dataset.mode])), [['补充-材料.pdf', 'materials']]);
   const c = await commitAfter(page, mock, () => page.click(sel('batch-submit')));
-  assert.equal(c.message, 'admin: 课程《近代物理实验》上传资料 补充-材料.pdf');
+  assert.equal(c.message, `admin: 课程《${TITLE}》上传资料 补充-材料.pdf`);
   assert.deepEqual(changedPaths(c), [`${MDIR}/补充-材料.pdf`]);
   assert.ok(mock.readBytes(`${MDIR}/补充-材料.pdf`).equals(PDF3));
   assert.equal(mock.readFile(`${MDIR}/x.svg`), undefined);
@@ -405,7 +416,7 @@ await test('reorder sub-posts → one commit, weights patched surgically (commen
   assert.deepEqual(await page.$$eval(sel('item-row'), (els) => els.map((e) => e.dataset.path)), [ITEM_PHOTO, ITEM1]);
   assert.match(await page.textContent(sel('items-savebar')), /调整了 2 篇的顺序/);
   const c = await commitAfter(page, mock, () => page.click(sel('items-save-order')));
-  assert.equal(c.message, 'admin: 调整课程《近代物理实验》的子推文顺序');
+  assert.equal(c.message, `admin: 调整课程《${TITLE}》的子推文顺序`);
   assert.deepEqual(changedPaths(c), [ITEM1, ITEM_PHOTO].sort());
   assert.equal(mock.readFile(ITEM1), a.replace('weight: 10 # 第一个实验', 'weight: 20 # 第一个实验'));
   assert.equal(mock.readFile(ITEM_PHOTO), b.replace('weight: 20 # 照片', 'weight: 10 # 照片'));
@@ -460,7 +471,7 @@ await test('＋ 新子推文 via the editor → weight after the max, no menu, n
 });
 
 await test('edit course info in the editor keeps group / weight (and their comments) untouched', async () => {
-  mock.setFile(ZH, '---\ntitle: "近代物理实验"\ndescription: "大三上学期，每个实验一篇报告"\ngroup: "实验课"  # 分组\nweight: 10 # 课程顺序\n---\n');
+  mock.setFile(MAIN, '---\ntitle: "Modern Physics Lab"\ndescription: "Junior year: one report per experiment"\ngroup: "实验课"  # 分组\nweight: 10 # 课程顺序\n---\n');
   await page.click(sel('courses-refresh'));
   await page.waitForSelector(sel('toast-success'));
   await closeToasts(page);
@@ -468,14 +479,15 @@ await test('edit course info in the editor keeps group / weight (and their comme
   await waitEditor(page);
   assert.ok(await page.isVisible(sel('editor-course-note')));
   assert.equal(await page.$(sel('editor-inmenu')), null);
-  await page.fill(sel('editor-description'), '大三上学期，每个实验一篇报告（2026 秋）');
+  // 编辑课程介绍 opens the version the default-language (English) site shows: the shared _index.md
+  await page.fill(sel('editor-description'), 'Junior year: one report per experiment (fall 2026)');
   await typeAtEnd(page, '课程介绍：实验安排见下。');
   const c = await commitAfter(page, mock, () => page.click(sel('editor-publish')));
-  assert.deepEqual(changedPaths(c), [ZH]);
-  const { fm, body } = splitMd(mock.readFile(ZH));
-  assert.equal(fm, 'title: "近代物理实验"\ndescription: "大三上学期，每个实验一篇报告（2026 秋）"\ngroup: "实验课"  # 分组\nweight: 10 # 课程顺序');
+  assert.deepEqual(changedPaths(c), [MAIN]);
+  const { fm, body } = splitMd(mock.readFile(MAIN));
+  assert.equal(fm, 'title: "Modern Physics Lab"\ndescription: "Junior year: one report per experiment (fall 2026)"\ngroup: "实验课"  # 分组\nweight: 10 # 课程顺序');
   assert.match(body, /课程介绍：实验安排见下。/);
-  assert.equal(mock.readFile(EN), '---\ntitle: "Modern Physics Lab"\ndescription: "Junior year: one report per experiment"\ngroup: "实验课"\nweight: 10\n---\n', 'English version untouched');
+  assert.equal(mock.readFile(ZHV), '---\ntitle: "近代物理实验"\ndescription: "大三上学期，每个实验一篇报告"\ngroup: "实验课"\nweight: 10\n---\n', 'Chinese version untouched');
   await page.click(sel('editor-back'));
   await waitCourses(page, 'detail');
 });
@@ -493,7 +505,7 @@ await test('delete a sub-post (all versions) after confirm; its materials stay',
   assert.ok(mock.readBytes(`${MDIR}/实验1-光电效应.pdf`));
 });
 
-await test('change a course group; rename a group across zh + en in one commit', async () => {
+await test('change a course group; rename a group across en (shared) + zh in one commit', async () => {
   await go(page, '#/courses', 'list');
   await page.click(`${courseRow('optics')} ${sel('course-group')}`);
   await page.waitForSelector(sel('course-group-dialog'));
@@ -509,9 +521,9 @@ await test('change a course group; rename a group across zh + en in one commit',
   await page.fill(sel('prompt-input'), '实验');
   c = await commitAfter(page, mock, () => page.click(sel('prompt-ok')));
   assert.equal(c.message, 'admin: 课程分组「实验课」改名为「实验」');
-  assert.deepEqual(changedPaths(c), [EN, ZH].sort());
-  assert.match(mock.readFile(ZH), /^group: "实验"  # 分组$/m, 'comment kept');
-  assert.match(mock.readFile(EN), /^group: "实验"$/m);
+  assert.deepEqual(changedPaths(c), [MAIN, ZHV].sort());
+  assert.match(mock.readFile(MAIN), /^group: "实验"  # 分组$/m, 'comment kept');
+  assert.match(mock.readFile(ZHV), /^group: "实验"$/m);
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="courses-group"]')].map((e) => e.dataset.name).join('|') === '实验|理论课');
 });
 
@@ -521,9 +533,9 @@ await test('reorder courses: move a whole group → weights swapped in every lan
   assert.match(await page.textContent(sel('courses-savebar')), /调整了 2 门课的顺序/);
   const c = await commitAfter(page, mock, () => page.click(sel('courses-save-order')));
   assert.equal(c.message, 'admin: 调整课程顺序');
-  assert.deepEqual(changedPaths(c), [EN, ZH, 'content/courses/optics/_index.md'].sort());
-  assert.match(mock.readFile(ZH), /^weight: 20 # 课程顺序$/m);
-  assert.match(mock.readFile(EN), /^weight: 20$/m);
+  assert.deepEqual(changedPaths(c), [MAIN, ZHV, 'content/courses/optics/_index.md'].sort());
+  assert.match(mock.readFile(MAIN), /^weight: 20 # 课程顺序$/m);
+  assert.match(mock.readFile(ZHV), /^weight: 20$/m);
   assert.match(mock.readFile('content/courses/optics/_index.md'), /^weight: 10$/m);
   await page.waitForSelector(sel('courses-savebar'), { state: 'detached' });
   assert.deepEqual(await page.$$eval(sel('course-row'), (els) => els.map((e) => e.dataset.slug)), ['optics', SLUG]);
@@ -543,7 +555,7 @@ await test('页面 shows only the 课程资料 landing (with a link), 文章 has
   await page.waitForSelector('body[data-view-ready="posts"]', { state: 'attached' });
   await page.waitForSelector('[data-testid="post-row"]');
   const posts = await page.$$eval('[data-testid="post-row"]', (els) => els.map((e) => e.textContent).join('\n'));
-  assert.ok(!/光电效应|实验装置照片|近代物理实验/.test(posts), 'no course pages among posts');
+  assert.ok(!/光电效应|实验装置照片|近代物理实验|Modern Physics Lab/.test(posts), 'no course pages among posts');
   // the landing page's own text is untouched by all of the above
   assert.equal(mock.readFile('content/courses/_index.md'), LANDING_ZH);
   assert.equal(mock.readFile('content/courses/_index.en.md'), LANDING_EN);
@@ -584,11 +596,14 @@ await test('phone 390×844 and 360: list, detail and batch dialog without horizo
   await m.close();
 });
 
-await test('exported repo builds: course page lists sub-posts in order + materials; zh + en sub-posts embed the viewer', async () => {
+await test('exported repo builds: course page lists sub-posts in order + materials; en (/) + zh (/zh/) sub-posts embed the viewer', async () => {
   mock.exportTo(EXPORT_DIR);
   await buildSite({ repoDir: EXPORT_DIR, outDir: BUILD2_DIR, baseURL: mock.url + '/' });
   const read = (...p) => fs.readFileSync(path.join(BUILD2_DIR, ...p, 'index.html'), 'utf8');
+  assert.equal(fs.existsSync(path.join(BUILD2_DIR, 'en', 'courses', SLUG, 'index.html')), false, 'no /en/ copy: English is at /');
   const unit = read('courses', SLUG);
+  assert.match(unit, /<html lang="?en"? /);
+  assert.ok(unit.includes(`<h1>${TITLE}</h1>`), 'English unit page uses the shared _index.md');
   // sub-posts in weight order (实验1 = 10, 照片 = 20), linked
   const i1 = unit.indexOf('实验1 光电效应');
   const i2 = unit.indexOf('实验装置照片');
@@ -600,29 +615,36 @@ await test('exported repo builds: course page lists sub-posts in order + materia
   const pos = names.map((n) => unit.lastIndexOf(n));
   assert.ok(pos.every((p) => p > 0), 'all materials listed: ' + pos.join(','));
   assert.deepEqual([...pos].sort((a, b) => a - b), pos, 'materials sorted by name');
-  assert.match(unit, /\/viewer\/\?file=%2[Ff]documents%2[Ff]courses%2[Ff]modern-physics-lab%2[Ff]/, 'materials open in the viewer');
+  assert.match(unit, /\/viewer\/\?file=%2[Ff]documents%2[Ff]courses%2[Ff]modern-physics-lab%2[Ff][^"> ]*&(amp;)?lang=en/, 'materials open in the viewer (English interface on the English site)');
   assert.ok(unit.includes('课程介绍：实验安排见下。'), 'the intro written in the editor');
-  // sub-post: embedded viewer (zh default UI) / English site: lang=en
-  const zhItem = read('courses', SLUG, 'item-1');
-  assert.match(zhItem, /<iframe[^>]+\/viewer\/\?file=%2[Ff]documents%2[Ff]courses%2[Ff]modern-physics-lab%2[Ff]/, 'zh sub-post embeds the viewer');
-  assert.ok(!/<iframe[^>]+lang=en/.test(zhItem));
-  const enItem = read('en', 'courses', SLUG, 'item-1');
+  const zhUnit = read('zh', 'courses', SLUG);
+  assert.ok(zhUnit.includes('近代物理实验'), 'the Chinese site uses _index.zh.md');
+  assert.match(zhUnit, /\/viewer\/\?file=%2[Ff]documents%2[Ff]courses%2[Ff]modern-physics-lab%2[Ff][^"> ]*&(amp;)?lang=zh/, 'materials: Chinese interface on the Chinese site');
+  // sub-post: embedded viewer in the page language (English at /, Chinese at /zh/)
+  const enItem = read('courses', SLUG, 'item-1');
   assert.match(enItem, /<iframe[^>]+\/viewer\/\?file=%2[Ff]documents%2[Ff]courses%2[Ff]modern-physics-lab%2[Ff][^"]*lang=en/, 'en sub-post embeds the English viewer');
+  assert.ok(!/<iframe[^>]+lang=zh/.test(enItem));
+  const zhItem = read('zh', 'courses', SLUG, 'item-1');
+  assert.match(zhItem, /<iframe[^>]+\/viewer\/\?file=%2[Ff]documents%2[Ff]courses%2[Ff]modern-physics-lab%2[Ff][^"]*lang=zh/, 'zh sub-post embeds the Chinese viewer');
+  assert.ok(!/<iframe[^>]+lang=en/.test(zhItem));
   const photo = read('courses', SLUG, 'setup-photo');
   assert.ok(photo.includes('/documents/courses/modern-physics-lab/Setup-Photo.jpg'), 'photo sub-post shows the image');
   assert.ok(fs.readFileSync(path.join(BUILD2_DIR, 'documents', 'courses', SLUG, '实验1-光电效应.pdf')).equals(PDF1), 'PDF served byte-exact');
-  // the landing page lists both courses (理论课 group first after the reorder), keeping the user's text
-  const landing = read('courses');
-  // (the user's intro text above the cards also mentions 光学, so look for the card links)
-  const lo = landing.search(/href="?\/courses\/optics\/"?/);
-  const ll = landing.search(/href="?\/courses\/modern-physics-lab\/"?/);
-  assert.ok(lo > 0 && ll > 0 && lo < ll, `landing lists 光学 before 近代物理实验 (${lo}, ${ll})`);
-  const g1 = landing.search(/>\s*理论课\s*</);
-  const g2 = landing.search(/>\s*实验\s*</);
-  assert.ok(g1 > 0 && g1 < lo && g2 > lo && g2 < ll, `group headings in order (${g1}, ${g2})`);
-  assert.ok(landing.includes('资料使用说明'), "the user's intro text is kept");
-  const enLanding = read('en', 'courses');
-  assert.ok(enLanding.includes('Modern Physics Lab'), 'English course title on the English landing');
+  // the landing pages list both courses (理论课 group first after the reorder), keeping the user's text
+  for (const [pre, lang] of [['', 'en'], ['/zh', 'zh']]) {
+    const landing = pre ? read('zh', 'courses') : read('courses');
+    // (the user's intro text above the cards also mentions 光学, so look for the card links)
+    const lo = landing.search(new RegExp(`href="?${pre}/courses/optics/"?`));
+    const ll = landing.search(new RegExp(`href="?${pre}/courses/modern-physics-lab/"?`));
+    assert.ok(lo > 0 && ll > 0 && lo < ll, `${lang}: landing lists 光学 before ${TITLE} (${lo}, ${ll})`);
+    const g1 = landing.search(/>\s*理论课\s*</);
+    const g2 = landing.search(/>\s*实验\s*</);
+    assert.ok(g1 > 0 && g1 < lo && g2 > lo && g2 < ll, `${lang}: group headings in order (${g1}, ${g2})`);
+  }
+  const zhLanding = read('zh', 'courses');
+  assert.ok(zhLanding.includes('资料使用说明'), "the user's (Chinese) intro text is kept");
+  assert.ok(zhLanding.includes('近代物理实验'), 'Chinese course title on the Chinese landing');
+  assert.ok(read('courses').includes(TITLE), 'English course title on the English landing');
 });
 
 // ---------------------------------------------------------------------------
@@ -672,10 +694,10 @@ await test('new course: slug collisions (existing course, loose page, language c
   await go(page, '#/courses', 'list');
   await page.click(sel('courses-new'));
   await page.waitForSelector(sel('new-course'));
-  await page.fill(sel('new-course-name-zh'), '大批量实验');
+  await page.fill(sel(NAME_MAIN), '大批量实验');
   assert.equal(await page.inputValue(sel('new-course-slug')), '', 'Chinese-only name → no suggested address');
   const err = () => page.textContent(`${sel('new-course')} .error:not([hidden])`);
-  for (const [slugTry, re] of [['handmade', /已经有一门课用了这个网址/], ['loose', /同名的页面/], ['en', /保留/], ['page', /保留/], ['-x', /只能用小写英文字母/]]) {
+  for (const [slugTry, re] of [['handmade', /已经有一门课用了这个网址/], ['loose', /同名的页面/], ['en', /保留/], ['zh', /保留/], ['page', /保留/], ['-x', /只能用小写英文字母/]]) {
     await page.fill(sel('new-course-slug'), slugTry);
     await page.click(sel('new-course-ok'));
     assert.match(await err(), re, slugTry);
@@ -740,7 +762,7 @@ await test('draft course via the editor: cascade hides its sub-posts too; badge 
   // a second small course, then make it a draft
   await go(page, '#/courses', 'list');
   await page.click(sel('courses-new'));
-  await page.fill(sel('new-course-name-zh'), '保密课程');
+  await page.fill(sel(NAME_MAIN), '保密课程');
   await page.fill(sel('new-course-slug'), SECRET);
   await commitAfter(page, mock, () => page.click(sel('new-course-ok')));
   await waitCourses(page, 'detail');
@@ -876,26 +898,30 @@ await test('adversarial build: grouping, 30 sub-posts, draft course + its sub-po
   const has = (...p) => fs.existsSync(path.join(BUILD3_DIR, ...p, 'index.html'));
   const read = (...p) => fs.readFileSync(path.join(BUILD3_DIR, ...p, 'index.html'), 'utf8');
   // draft course: neither the unit page nor its sub-posts, on either site; not in feeds / sitemaps
-  for (const pre of [[], ['en']]) {
+  for (const pre of [[], ['zh']]) {
     assert.equal(has(...pre, 'courses', SECRET), false, 'draft course hidden');
     assert.equal(has(...pre, 'courses', SECRET, 'secret-report'), false, 'draft course sub-post hidden');
     assert.equal(has(...pre, 'courses', `${SECRET}-tmp`), true, 'the re-published course is back');
   }
-  for (const f of ['index.xml', 'en/index.xml', 'sitemap.xml', 'en/sitemap.xml']) {
+  for (const f of ['index.xml', 'zh/index.xml', 'sitemap.xml', 'en/sitemap.xml', 'zh/sitemap.xml']) {
     const x = fs.readFileSync(path.join(BUILD3_DIR, f), 'utf8');
     assert.ok(!x.includes(`/courses/${SECRET}/`), `${f} does not mention the draft course`);
   }
   assert.equal(has('courses', 'broken'), false);
   assert.equal(has('courses', 'handmade'), false);
-  // landing: 理论课 (TOML weight 30 → min weight 10 from optics) → 实验 → 其他 (the loose page); ids unique
-  const landing = read('courses');
-  const groups = [...landing.matchAll(/<h2 class="?course-group-title"? id="?([^" >]+)"?>([^<]+)</g)].map((m) => [m[1], m[2].trim()]);
-  assert.deepEqual(groups.map((g) => g[1]), ['理论课', '实验', '其他']);
-  assert.equal(new Set(groups.map((g) => g[0])).size, groups.length, 'unique group ids');
-  const cards = [...landing.matchAll(/class="?course-card-title"?><a href="?([^" >]+)"?>/g)].map((m) => m[1]);
-  assert.deepEqual(cards, ['/courses/optics/', '/courses/tomlcourse/', `/courses/${BULK}/`, '/courses/caselab/', `/courses/${SLUG}/`, `/courses/${SECRET}-tmp/`, '/courses/loose/', '/courses/noindex/'],
-    'cards: ' + cards.join(' '));
-  assert.ok(landing.includes('资料使用说明'), "the user's intro text is kept");
+  // landing: 理论课 (TOML weight 30 → min weight 10 from optics) → 实验 → 其他 / Other (the loose page); ids unique.
+  // English (default language) at /courses/, Chinese at /zh/courses/ — same order on both.
+  for (const [pre, other] of [['', 'Other'], ['zh', '其他']]) {
+    const landing = pre ? read(pre, 'courses') : read('courses');
+    const groups = [...landing.matchAll(/<h2 class="?course-group-title"? id="?([^" >]+)"?>([^<]+)</g)].map((m) => [m[1], m[2].trim()]);
+    assert.deepEqual(groups.map((g) => g[1]), ['理论课', '实验', other]);
+    assert.equal(new Set(groups.map((g) => g[0])).size, groups.length, 'unique group ids');
+    const cards = [...landing.matchAll(/class="?course-card-title"?><a href="?([^" >]+)"?>/g)].map((m) => m[1]);
+    const P = pre ? `/${pre}` : '';
+    assert.deepEqual(cards, [`${P}/courses/optics/`, `${P}/courses/tomlcourse/`, `${P}/courses/${BULK}/`, `${P}/courses/caselab/`, `${P}/courses/${SLUG}/`, `${P}/courses/${SECRET}-tmp/`, `${P}/courses/loose/`, `${P}/courses/noindex/`],
+      'cards: ' + cards.join(' '));
+  }
+  assert.ok(read('zh', 'courses').includes('资料使用说明'), "the user's intro text is kept");
   // the nav menu still has only the site's own sections (no course got a menu entry)
   const menu = /<ul id="?menu"?[^>]*>([\s\S]*?)<\/ul>/.exec(read(''))[1];
   assert.deepEqual([...menu.matchAll(/href="?([^" >]+)/g)].map((m) => new URL(m[1], mock.url).pathname).sort(), ['/about/', '/courses/', '/posts/', '/research/']);
@@ -908,7 +934,8 @@ await test('adversarial build: grouping, 30 sub-posts, draft course + its sub-po
   assert.ok(oddRow && /course-material-post/.test(oddRow[0]), 'odd file name linked to its sub-post');
   const item = read('courses', BULK, 'lab-01');
   assert.match(item, /class="?paginav course-paginav"?/);
-  assert.ok(has('en', 'courses', BULK, 'lab-26'));
+  assert.ok(has('zh', 'courses', BULK, 'lab-26'));
+  assert.ok(!has('en', 'courses', BULK, 'lab-26'), 'no /en/ copy: English is at /');
 });
 
 await test('no page errors, nothing left the mock origin except blocked CDNs', async () => {

@@ -153,7 +153,8 @@ async function noHorizontalScroll(page) {
 }
 
 const SUB_NEW = 'PKU Physics · 测试简介 2026';
-const SUB_EN = 'English-only subtitle for the test';
+// English is the default language (params.toml); the per-language override card is the Chinese site's ([zh.params.profileMode])
+const SUB_ZH = '中文站单独的测试简介';
 const SITE_TITLE_NEW = "HimZFX's Lab Test";
 const ZHIHU = 'https://www.zhihu.com/people/himzfx-test';
 let FAVICON_VER = null;
@@ -205,7 +206,12 @@ async function main() {
       assert.equal(await page.inputValue(tid('profile-title')), 'Zhong Fangxiong');
       assert.equal(await page.inputValue(tid('profile-subtitle')), SUB_ORIG);
       assert.equal(await page.inputValue(tid('profile-site-title')), "HimZFX's Lab");
-      assert.equal(await page.inputValue(tid('profile-override-en-subtitle')), '');
+      assert.equal(await page.inputValue(tid('profile-override-zh-subtitle')), '');
+      assert.equal(await page.locator(tid('profile-override-en')).count(), 0, 'no override card for the default language');
+      assert.match(await page.textContent(tid('profile-override-zh')), /中文站单独设置/);
+      // the preview starts on the default-language (English) site
+      assert.equal(await page.getAttribute(tid('profile-preview-en'), 'aria-selected'), 'true');
+      assert.deepEqual(await page.$$eval('.pf-preview-tabs [data-testid^="profile-preview-"]', (els) => els.map((e) => e.textContent)), ['英文站', '中文站']);
       assert.equal(await page.locator(tid('button-row')).count(), 2);
       assert.equal(await page.locator(tid('social-row')).count(), 2);
       assert.equal(await page.locator(tid('rule-row')).count(), 4);
@@ -228,19 +234,28 @@ async function main() {
       assert.match(err, /请填写按钮名称/);
       assert.equal(await page.locator(tid('profile-confirm')).count(), 0, 'no confirm dialog while there are errors');
       assert.equal(mock.commits.length, n);
+      // a site link starting with / does not get the /zh/ prefix on the Chinese site → warning (not an error)
+      await page.fill(`${tid('button-row')}[data-index="2"] ${tid('button-name')}`, 'Research');
+      await page.fill(`${tid('button-row')}[data-index="2"] ${tid('button-url')}`, '/research/');
+      await page.click(tid('profile-save'));
+      await page.waitForFunction((s) => /不会自动加/.test(document.querySelector(s)?.textContent || ''), `${tid('button-row')}[data-index="2"] .pf-row-msgs`);
+      assert.match(await page.textContent(`${tid('button-row')}[data-index="2"] .pf-row-msgs`), /以 \/ 开头的站内链接在中文站不会自动加 \/zh\/，建议写成「research\/」/);
+      if (await page.locator(tid('profile-confirm')).count()) await page.click(tid('confirm-cancel'));
+      assert.equal(mock.commits.length, n);
       await page.click(`${tid('button-row')}[data-index="2"] ${tid('button-remove')}`);
       assert.equal(await page.locator(tid('button-row')).count(), 2);
       assert.ok(await page.isDisabled(tid('profile-save')), 'back to clean');
     });
 
-    await step('edit names, English override, buttons, social link, holiday switch', async () => {
+    await step('edit names, Chinese override, buttons, social link, holiday switch', async () => {
       await page.fill(tid('profile-subtitle'), SUB_NEW);
       await page.fill(tid('profile-site-title'), SITE_TITLE_NEW);
-      await page.fill(tid('profile-override-en-subtitle'), SUB_EN);
+      await page.fill(tid('profile-override-zh-subtitle'), SUB_ZH);
       assert.equal(await page.textContent(tid('profile-preview-subtitle')), SUB_NEW);
-      await page.click(tid('profile-preview-en'));
-      assert.equal(await page.textContent(tid('profile-preview-subtitle')), SUB_EN);
       await page.click(tid('profile-preview-zh'));
+      assert.equal(await page.textContent(tid('profile-preview-subtitle')), SUB_ZH);
+      await page.click(tid('profile-preview-en'));
+      assert.equal(await page.textContent(tid('profile-preview-subtitle')), SUB_NEW);
 
       // reorder: move "Email Me" up
       await page.click(`${tid('button-row')}[data-index="1"] ${tid('button-up')}`);
@@ -305,7 +320,7 @@ async function main() {
 
     await step('保存并发布 → one commit with all five files', async () => {
       const n = mock.commits.length;
-      const { confirmText, commit } = await publish(page, mock, ['头像', '简介', '网站标题', '英文站简介', '首页按钮', '社交链接', '节日图标：关闭']);
+      const { confirmText, commit } = await publish(page, mock, ['头像', '简介', '网站标题', '中文站简介', '首页按钮', '社交链接', '节日图标：关闭']);
       fs.writeFileSync(path.join(OUT, 'confirm-1.txt'), confirmText);
       assert.equal(mock.commits.length, n + 1, 'exactly one commit');
       const paths = commit.changes.map((c) => c.path).sort();
@@ -328,9 +343,11 @@ async function main() {
         ['github', 'https://github.com/HimZFX'], ['email', 'mailto:himzfx@stu.pku.edu.cn'], ['zhihu', ZHIHU]]);
       assert.equal(p.holidayFavicon.enabled, false);
       assert.equal(p.holidayFavicon.rules.length, 4);
-      assert.equal(l.en.params.profileMode.subtitle, SUB_EN);
-      assert.equal(l.en.params.profileMode.title, undefined);
-      assert.equal(l.en.params.giscus.lang, 'en');
+      assert.equal(l.zh.params.profileMode.subtitle, SUB_ZH);
+      assert.equal(l.zh.params.profileMode.title, undefined);
+      assert.equal(l.zh.params.giscus.lang, 'zh-CN');
+      assert.equal(l.en.params, undefined, 'nothing written for the default language');
+      assert.equal(p.giscus.lang, 'en');
       assert.equal(hg.title, SITE_TITLE_NEW);
 
       for (const [name, before, after] of [['params', ORIG.params, params], ['languages', ORIG.langs, langs], ['hugo', ORIG.hugo, hugo]]) {
@@ -357,7 +374,7 @@ async function main() {
       assert.deepEqual(dh.added, [`title = "${SITE_TITLE_NEW}"`]);
       const dl = lineDiff(ORIG.langs, langs);
       assert.deepEqual(dl.removed, []);
-      assert.deepEqual(dl.added.filter(Boolean), ['  [en.params.profileMode]', `    subtitle = "${SUB_EN}"`].sort());
+      assert.deepEqual(dl.added.filter(Boolean), ['  [zh.params.profileMode]', `    subtitle = "${SUB_ZH}"`].sort());
     });
 
     await step('avatar.jpg 512² and favicon.jpg 128² JPEGs of the cropped region', async () => {
@@ -376,30 +393,32 @@ async function main() {
       assert.equal(await page.isVisible(tid('profile-avatar-undo')), false);
     });
 
-    await step('Hugo build: zh/en home pages show the new subtitles, title and social link', async () => {
+    await step('Hugo build: en (/) and zh (/zh/) home pages show the new subtitles, title and social link', async () => {
       const exp = path.join(OUT, 'export-1');
       const site = path.join(OUT, 'site-1');
       fs.rmSync(exp, { recursive: true, force: true });
       mock.exportTo(exp);
       await buildSite({ repoDir: exp, outDir: site, baseURL: mock.url + '/' });
-      const zh = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
-      const en = fs.readFileSync(path.join(site, 'en', 'index.html'), 'utf8');
-      assert.ok(zh.includes(SUB_NEW), 'zh home shows new subtitle');
-      assert.ok(!zh.includes(SUB_EN), 'zh home does not show the English override');
-      assert.ok(en.includes(SUB_EN), 'en home shows English override');
-      assert.ok(!en.includes(SUB_NEW), 'en home does not show the zh subtitle');
+      const en = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
+      const zh = fs.readFileSync(path.join(site, 'zh', 'index.html'), 'utf8');
+      assert.match(en, /<html lang="?en"? /);
+      assert.match(zh, /<html lang="?zh"? /);
+      assert.ok(en.includes(SUB_NEW), 'en home (default language, /) shows the new subtitle from params.toml');
+      assert.ok(!en.includes(SUB_ZH), 'en home does not show the Chinese override');
+      assert.ok(zh.includes(SUB_ZH), 'zh home shows the Chinese override');
+      assert.ok(!zh.includes(SUB_NEW), 'zh home does not show the default subtitle');
       for (const html of [zh, en]) {
         assert.ok(html.includes(ZHIHU), 'social link present');
         assert.ok(html.includes('HimZFX&#39;s Lab Test') || html.includes("HimZFX's Lab Test"), 'new site title');
         assert.ok(html.indexOf('Email Me') < html.indexOf('My Research'), 'buttons reordered');
       }
       // holiday favicon disabled → its inline script is gone
-      assert.ok(!zh.includes('link[rel~=') && !zh.includes("link[rel~='icon']"), 'holiday favicon script removed');
+      for (const html of [zh, en]) assert.ok(!html.includes('link[rel~=') && !html.includes("link[rel~='icon']"), 'holiday favicon script removed');
       // the tab icon now has a new address on both sites
       for (const html of [zh, en]) {
         assert.ok(new RegExp(`<link rel=["']?icon["']?[^>]*favicon\\.jpg\\?v=${FAVICON_VER}`).test(html), 'versioned favicon link');
       }
-      fs.writeFileSync(path.join(OUT, 'site-1-index.html'), zh);
+      fs.writeFileSync(path.join(OUT, 'site-1-index.html'), en);
     });
 
     await step('after publishing a new avatar, this browser refreshes its cached copy once the site serves it', async () => {
@@ -413,7 +432,7 @@ async function main() {
       const t1 = Date.now();
       fs.writeFileSync(path.join(SITE_DIR, 'avatar.jpg'), newAvatar);
       await waitReload('/', t1, 40000);
-      await waitReload('/en/', t1, 40000);
+      await waitReload('/zh/', t1, 40000);
       // and then it stops polling
       const t2 = Date.now();
       await page.waitForTimeout(17000);
@@ -442,25 +461,25 @@ async function main() {
       assert.equal(p.profileMode.subtitle, SUB_NEW + '!');
     });
 
-    await step('remove the English override → languages.toml returns to its original text', async () => {
-      await page.fill(tid('profile-override-en-subtitle'), '');
-      await publish(page, mock, ['英文站简介：取消单独设置']);
+    await step('remove the Chinese override → languages.toml returns to its original text', async () => {
+      await page.fill(tid('profile-override-zh-subtitle'), '');
+      await publish(page, mock, ['中文站简介：取消单独设置']);
       assert.equal(mock.readFile(P_LANGS), ORIG.langs, 'languages.toml byte-identical to the original');
       const c = mock.commits[mock.commits.length - 1];
       assert.deepEqual(c.changes.map((x) => x.path), [P_LANGS]);
     });
 
-    await step('Hugo build after removing the override: en falls back to the shared subtitle', async () => {
+    await step('Hugo build after removing the override: zh falls back to the shared subtitle', async () => {
       const exp = path.join(OUT, 'export-2');
       const site = path.join(OUT, 'site-2');
       fs.rmSync(exp, { recursive: true, force: true });
       mock.exportTo(exp);
       await buildSite({ repoDir: exp, outDir: site, baseURL: mock.url + '/' });
-      const zh = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
-      const en = fs.readFileSync(path.join(site, 'en', 'index.html'), 'utf8');
+      const en = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
+      const zh = fs.readFileSync(path.join(site, 'zh', 'index.html'), 'utf8');
       for (const html of [zh, en]) {
         assert.ok(html.includes(SUB_NEW + '!'), 'shared subtitle on both sites');
-        assert.ok(!html.includes(SUB_EN), 'override gone');
+        assert.ok(!html.includes(SUB_ZH), 'override gone');
         assert.ok(html.includes(ZHIHU), 'social link still there');
       }
     });

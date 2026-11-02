@@ -1,0 +1,21 @@
+{{- /*
+  报告 / 近况的日期 → "YYYY-MM-DD"（无效或没写时返回 ""）。
+  YAML 里不加引号的 2026-03-05 会被读成时间，加引号的是文字，两种都可以。
+*/ -}}
+{{- $d := . -}}
+{{- $out := "" -}}
+{{- if eq (printf "%T" $d) "time.Time" -}}
+  {{- $out = $d.Format "2006-01-02" -}}
+{{- else if $d -}}
+  {{- $s := trim (string $d) " \t\r\n" -}}
+  {{- /* 先自己检查（time.AsTime 遇到 2026-02-30 这种日期会让整个构建失败） */ -}}
+  {{- if findRE `^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$` $s -}}
+    {{- $y := int (substr $s 0 4) -}}
+    {{- $m := int (strings.TrimLeft "0" (substr $s 5 2)) -}}
+    {{- $day := int (strings.TrimLeft "0" (substr $s 8 2)) -}}
+    {{- $leap := and (eq (mod $y 4) 0) (or (ne (mod $y 100) 0) (eq (mod $y 400) 0)) -}}
+    {{- $days := index (slice 31 (cond $leap 29 28) 31 30 31 30 31 31 30 31 30 31) (sub $m 1) -}}
+    {{- if le $day $days }}{{ $out = $s }}{{ end -}}
+  {{- end -}}
+{{- end -}}
+{{- return $out -}}

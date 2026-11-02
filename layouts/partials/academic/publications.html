@@ -1,0 +1,72 @@
+{{- /*
+  读取 data/publications/*.yaml（每篇论文一个文件，文件名 = id），整理后按时间从新到旧返回列表。每项是 dict：
+    id  title  authors  year(int, 没写为 0)  month(int)  venue  volume  pages  status  kind  note  selected(bool)
+    arxiv  ads  doi  pdf  code  slides  bibtex   （原值，链接在 academic/pub.html 里校验）
+    group   按 kind 分组时所在的组：refereed | pending | other
+    sort    排序键（没写年份的排在最前：通常是还在准备中的论文）
+
+  status：published | accepted | submitted | in-prep（没写 = published；in prep / in preparation / inprep 都算 in-prep）
+  kind：  refereed | proceedings | preprint | thesis | other
+         没写时：venue 是 arXiv e-prints 的当作 preprint，其余当作 refereed
+  分组（params.toml [publications] groupBy = "kind" 时）：
+    pending   status 是 submitted / in-prep 的（不论 kind）
+    refereed  kind = refereed 的（已发表 / 已接收）
+    other     其余：会议论文、预印本、学位论文等
+  同一个月的论文按标题排序。
+*/ -}}
+{{- $list := slice -}}
+{{- range $key, $p := site.Data.publications | default dict -}}
+  {{- if not (reflect.IsMap $p) -}}
+    {{- warnf "data/publications/%s：内容不是「键: 值」格式，已跳过" $key -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $id := trim (string ($p.id | default $key)) " " -}}
+  {{- $title := trim (string ($p.title | default "")) " \t\r\n" -}}
+  {{- if not $title -}}
+    {{- warnf "data/publications/%s：没有 title，已跳过" $key -}}
+    {{- continue -}}
+  {{- end -}}
+
+  {{- $year := 0 -}}
+  {{- with $p.year -}}
+    {{- $y := trim (string .) " " -}}
+    {{- if findRE `^\d{4}$` $y }}{{ $year = int (strings.TrimLeft "0" $y) }}{{ else }}{{ warnf "data/publications/%s：year %q 不是四位数年份，已忽略" $key $y }}{{ end -}}
+  {{- end -}}
+  {{- $month := 0 -}}
+  {{- with $p.month -}}
+    {{- $m := trim (string .) " " -}}
+    {{- if findRE `^(0?[1-9]|1[0-2])$` $m }}{{ $month = int (strings.TrimLeft "0" $m) }}{{ end -}}
+  {{- end -}}
+
+  {{- $status := lower (trim (string ($p.status | default "published")) " ") -}}
+  {{- $status = replaceRE `^in[\s_-]*prep(aration)?$` "in-prep" $status -}}
+  {{- if not (in (slice "published" "accepted" "submitted" "in-prep") $status) -}}
+    {{- warnf "data/publications/%s：status %q 无效（published / accepted / submitted / in-prep），按 published 处理" $key $status -}}
+    {{- $status = "published" -}}
+  {{- end -}}
+
+  {{- $venue := trim (string ($p.venue | default "")) " \t\r\n" -}}
+  {{- $kind := lower (trim (string ($p.kind | default "")) " ") -}}
+  {{- if not $kind -}}
+    {{- $kind = cond (eq (lower $venue) "arxiv e-prints") "preprint" "refereed" -}}
+  {{- else if not (in (slice "refereed" "proceedings" "preprint" "thesis" "other") $kind) -}}
+    {{- warnf "data/publications/%s：kind %q 无效（refereed / proceedings / preprint / thesis / other），按 other 处理" $key $kind -}}
+    {{- $kind = "other" -}}
+  {{- end -}}
+
+  {{- $group := "other" -}}
+  {{- if in (slice "submitted" "in-prep") $status }}{{ $group = "pending" }}{{ else if eq $kind "refereed" }}{{ $group = "refereed" }}{{ end -}}
+
+  {{- $sort := cond (gt $year 0) (printf "%04d-%02d" $year $month) "9999-99" -}}
+  {{- $str := dict -}}
+  {{- range slice "volume" "pages" "note" "arxiv" "ads" "doi" "pdf" "code" "slides" "bibtex" -}}
+    {{- $v := index $p . -}}
+    {{- $str = merge $str (dict . (cond (ne $v nil) (trim (string $v) " \t\r\n") "")) -}}
+  {{- end -}}
+  {{- $selected := in (slice true "true" "yes" 1) $p.selected -}}
+
+  {{- $list = $list | append (merge $str (dict
+      "id" $id "key" $key "title" $title "authors" $p.authors "year" $year "month" $month "venue" $venue
+      "status" $status "kind" $kind "group" $group "sort" $sort "selected" $selected)) -}}
+{{- end -}}
+{{- return sort (sort $list "title") "sort" "desc" -}}

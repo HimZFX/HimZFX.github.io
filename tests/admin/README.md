@@ -30,18 +30,36 @@ node tests/admin/e2e-courses.mjs
 node tests/admin/e2e-courses-site.mjs
 
 # 网站的资料在线预览页（static/viewer/，PDF.js）和 {{< pdf >}} 短代码：懒加载、缩放、中文非嵌入字体、
-# 链接过滤、错误提示、参数校验 / 绕过尝试、手机与微信、深色模式、令牌不可读、CSP
+# 链接过滤、错误提示、参数校验 / 绕过尝试、手机与微信、深色模式、令牌不可读、CSP、界面语言（?lang → 来源页面 → 浏览器语言 → 默认英文）
 node tests/admin/e2e-viewer.mjs
+
+# 网站的语言：英文（默认语言）在 /、中文在 /zh/，<html lang>、hreflang、语言切换、导航；旧的 /en/<路径>/ 链接由 404.html 转到 /<路径>/；
+# 中文浏览器打开有中文版的英文页面时底部的「本页有中文版 →」提示（反过来也有）、关闭后记住、深色模式、手机宽度
+node tests/admin/e2e-lang.mjs
+
+# 「学术」（论文 / 报告与海报 / 近况）：粘贴 ADS 导出的 BibTeX → 自动填表 → 上传论文 PDF → 保存后 data/publications/<id>.yaml 逐字检查；
+# 手填论文、修改、保存时冲突（别处改了同一个文件）、论文设置（params.toml 精确修改）、「在顶部菜单显示」开关（两个 _index 文件只改 menu）、
+# 报告 / 近况的增删改、首页设置里的简历 CV 上传 / 更换和 ORCID / NASA ADS 社交图标、手机 390 / 360，最后 Hugo 构建检查网站页面
+node tests/admin/e2e-academic.mjs
+
+# 网站这一侧的学术模块（layouts/publications|talks|news/、layouts/partials/academic/、首页的近况和 CV 按钮、ADS / arXiv 图标）：
+# 分组和排序、名字加粗、作者截断、链接过滤（javascript: 等丢弃并警告）、无效日期、近况的安全 Markdown、空站点、背景动画按钮在手机上不挡内容
+node tests/admin/e2e-academic-site.mjs
 
 # 跨界面的完整使用流程（登录 → 写文章 + 英文版 → 上传 PDF 并在两种语言的文章里插入预览链接和嵌入阅读器 →
 # 换头像和简介 → 换背景动画 → 调整菜单 → 删除草稿 → 新建课程「近代物理实验」并批量上传两份实验报告 →
-# Hugo 构建后检查两种语言的网站（课程总页的分组、单元页、子推文里的阅读器、课程内上一篇 / 下一篇），并以访客身份打开
-# 预览链接和嵌入的阅读器，确认 PDF 真的显示出来）
+# 学术：粘贴 BibTeX 添加论文（带 PDF）→ 论文设置 → 打开论文 / 报告的菜单 → 添加带幻灯片的报告 → 两条近况 → 上传简历 → ORCID / ADS 图标 →
+# Hugo 构建后检查两种语言的网站（课程总页的分组、单元页、子推文里的阅读器、课程内上一篇 / 下一篇；首页近况、CV 按钮、图标、
+# 论文页加粗的名字和 PDF、报告页的幻灯片），并以访客身份打开预览链接和嵌入的阅读器，确认 PDF 真的显示出来；
+# 旧的 /en/<路径>/（带 ?query#hash、/en/、/en/viewer/?file=…）跳到新网址；中文浏览器在英文页上看到语言提示）
 node tests/admin/e2e-journey.mjs
 ```
 
 每个 e2e 脚本都会把 Hugo 构建结果和截图放进自己的目录（默认在系统临时目录下），可以用环境变量指定：
-`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`。
+`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`、`LANG_E2E_DIR`、`ACADEMIC_E2E_DIR`、`ACADEMIC_SITE_E2E_DIR`。
+
+> 网站的默认语言是英文（`/`），中文在 `/zh/`。e2e 脚本里的网址按这个写：英文页 `/posts/x/`、中文页 `/zh/posts/x/`；
+> 内容文件的命名不变（`xxx.md` 共用、`xxx.en.md` 英文、`xxx.zh.md` 中文）。`viewer-lang.test.mjs` 是阅读器界面语言（`static/viewer/lang.js`）的单元测试；`academic.test.mjs` 是「学术」的 BibTeX 解析和数据文件写法的单元测试。
 
 > 说明：Node 22 的 `node --test <目录>` 并不会去目录里找测试文件，而是把目录当成模块运行，
 > 所以这里放了一个 `index.js`，由它依次加载本目录的全部 `*.test.mjs`。

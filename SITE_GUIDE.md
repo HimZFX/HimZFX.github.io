@@ -19,6 +19,7 @@
 5. [写博客文章](#5-写博客文章)
 6. [编辑各个页面](#6-编辑各个页面)
    - [课程资料（课程单元与子推文）](#课程资料课程单元与子推文)
+   - [论文、报告与海报、近况（学术模块）](#论文报告与海报近况学术模块)
 7. [导航菜单](#7-导航菜单)
 8. [配置文件速查](#8-配置文件速查)
 9. [上传文件（PDF、图片等）](#9-上传文件pdf图片等)
@@ -46,26 +47,34 @@
 │   │   ├── xxx.md            ← 某篇文章（共用版本）
 │   │   └── xxx.en.md         ← 该文章的英文专属版本（可选）
 │   ├── research/_index.md    ← 科研页
-│   └── courses/              ← 课程资料（见第 6 节「课程资料」）
-│       ├── _index.md         ← 课程资料总页：你的说明文字 + 自动列出的课程卡片（含菜单项）
-│       └── <课程>/           ← 一门课 = 一个文件夹：_index.md 是课程单元页，其他 .md 是子推文（可选）
+│   ├── courses/              ← 课程资料（见第 6 节「课程资料」）
+│   │   ├── _index.md         ← 课程资料总页：你的说明文字 + 自动列出的课程卡片（含菜单项）
+│   │   └── <课程>/           ← 一门课 = 一个文件夹：_index.md 是课程单元页，其他 .md 是子推文（可选）
+│   └── publications/ talks/ news/ ← 论文、报告与海报、近况三个页面（_index.md 英文 + _index.zh.md 中文，见第 6 节「学术模块」）
+├── data/                     ← 论文、报告、近况的内容：publications/ talks/ news/ 下每条一个 .yaml（第 6 节）
 ├── static/                   ← 原样发布的文件（头像、PDF、图片）
 │   ├── admin/                ← 网页版管理后台（第 3 节），发布在 /admin/
 │   ├── viewer/               ← 资料在线预览页（PDF.js），发布在 /viewer/（第 9 节）
-│   └── documents/courses/<课程>/ ← 这门课的资料，自动列在课程页上
+│   ├── documents/courses/<课程>/ ← 这门课的资料，自动列在课程页上
+│   └── documents/papers/ talks/ cv/ ← 后台「学术」上传的论文 PDF、幻灯片 / 海报，「首页设置」上传的简历
 ├── assets/                   ← 会被 Hugo 处理（打包、压缩）的资源
 │   ├── css/extended/         ← 自定义 CSS，自动并入主题样式表（courses.css 是课程资料的样式）
 │   └── js/background/        ← 背景动画：core.js 引擎 + effects/ 各效果
-├── i18n/                     ← 网站界面文字：zh.yaml / en.yaml（目前是课程资料用的「内容」「资料」「上一篇」等）
+├── i18n/                     ← 网站界面文字：zh.yaml / en.yaml（课程资料的「内容」「资料」、论文页的分组名、语言提示、「CV / 简历」按钮等）
 ├── layouts/                  ← 页面模板（一般不需要动）
 │   ├── courses/              ← 课程资料的模板：list.html（总页、课程单元页）、single.html（子推文）
+│   ├── publications/ talks/ news/ ← 论文、报告与海报、近况的列表页模板
+│   ├── 404.html              ← 找不到页面时显示；顺便把旧的 /en/… 链接转到新网址（第 4 节）
 │   ├── partials/
 │   │   ├── extend_head.html  ← PaperMod 钩子，只负责引入下面的功能
 │   │   ├── extend_footer.html← PaperMod 钩子（目前为空，见第 13 节的注意事项）
 │   │   ├── comments.html     ← PaperMod 钩子，引入评论区
 │   │   ├── post_nav_links.html ← 覆盖主题的「上一篇 / 下一篇」：课程子推文只在同一门课里切换，其他页面不变
+│   │   ├── index_profile.html← 首页头像区（覆盖主题）：在原样的基础上加了简历按钮和「近况」
+│   │   ├── social_icons.html ← 社交图标（覆盖主题）：多了 ads（NASA ADS）、arxiv 两个图标
 │   │   ├── courses/          ← 课程资料的零件：课程卡片、资料列表、面包屑、排序
-│   │   └── features/         ← 每个功能一个文件：math / background / giscus / holiday-favicon
+│   │   ├── academic/         ← 论文 / 报告 / 近况的零件：读 data/、作者加粗与截断、链接检查
+│   │   └── features/         ← 每个功能一个文件：math / background / giscus / holiday-favicon / lang-hint（语言提示）/ viewer-site
 │   └── shortcodes/           ← 短代码：gallery.html（图片画廊）、pdf.html（嵌入资料阅读器）
 ├── archetypes/default.md     ← `hugo new` 的文章模板
 ├── new_post.py               ← 新建文章 / 补翻译 / 查看双语状态
@@ -104,7 +113,7 @@ hugo server -D
 ```
 
 - `-D` 表示也显示 `draft: true` 的草稿
-- 浏览器访问 http://localhost:1313 ，英文站在 http://localhost:1313/en/
+- 浏览器访问 http://localhost:1313 （英文站，默认语言），中文站在 http://localhost:1313/zh/
 - 保存文件后浏览器自动刷新；按 `Ctrl+C` 停止
 
 ### 发布
@@ -152,7 +161,7 @@ git push
 
 ### 界面一览
 
-左侧（手机上是底部）有 6 个栏目：**文章 / 页面 / 课程 / 首页设置 / 背景动画 / 资料**。右上角是「查看网站」和部署状态。
+左侧有 7 个栏目：**文章 / 页面 / 课程 / 学术 / 首页设置 / 背景动画 / 资料**。手机上底部是「文章 / 页面 / 课程 / 学术 / 更多」，「更多」里是首页设置、背景动画和资料。右上角是「查看网站」和部署状态。
 
 **文章**——写博客，体验接近微信公众号后台：
 
@@ -161,7 +170,7 @@ git push
 - 底部按钮：
   - 「**发表**」：发布到网站。已发表的文章这个按钮叫「**更新**」。
   - 「**保存草稿**」：也会提交到 GitHub，但文章是 `draft: true`，网站上不显示。对已发表的文章，这个按钮叫「改为草稿」，点了文章会从网站上消失。
-  - 「**手机预览**」：用网站自己的样式预览，可以切换浅色 / 深色；有英文专属版本时还能切换中文站 / 英文站。
+  - 「**手机预览**」：用网站自己的样式预览，可以切换浅色 / 深色；有语言专属版本时还能切换英文站 / 中文站（编辑共用版本时先显示正在显示它的那个站点）。
   - 「⋯」（更多操作）：在网站上查看、删除此版本、删除整篇文章。
   - 快捷键 `Ctrl/⌘+S`：已发表的文章 = 更新，草稿 = 保存草稿。
 - **图片**：直接粘贴、拖进编辑区，或点工具栏的「插入图片」。图片会自动压缩（最宽 1920 像素），点「发表」时和文章一起上传到 `static/images/posts/<文件名>/`。工具栏还有「带说明的图片」（图片下方带一行说明）和「多图并排」（画廊）。
@@ -180,7 +189,7 @@ git push
 - 「课程资料」总页（`content/courses/_index.md`，你的说明文字和菜单项）还在这里；一门门课程不在这里，而是在「课程」里管理（这一行上有「n 门课程 · 在「课程」里管理」的链接）。
 
 - 「导航栏里的页面」：改「顺序」里的数字（数字越小越靠左）或点旁边的箭头移动，最后点「**保存菜单顺序**」，一次发布。
-- 「**新建栏目**」：填中文名称、英文名称（可选，填了会另外生成英文版）、网址、菜单顺序，点「创建并发布」，然后接着在编辑器里写栏目介绍。效果和第 7 节手动新建 `content/<网址>/_index.md` 相同。
+- 「**新建栏目**」：填英文名称（默认语言，必填）、中文名称（可选，填了会另外生成中文版 `_index.zh.md`）、网址、菜单顺序，点「创建并发布」，然后接着在编辑器里写栏目介绍。效果和第 7 节手动新建 `content/<网址>/_index.md` 相同。
 - 点「编辑」打开页面，编辑方式和文章一样（右侧是「页面设置」，可以改菜单名称、菜单顺序、是否显示在顶部菜单）。
 
 **课程**——网站「课程资料」里的一门门课，像博客一样：每门课是一个单元，里面可以有子推文（例如一个实验一篇报告）。详细用法和例子见[第 6 节「课程资料」](#课程资料课程单元与子推文)，这里是一览：
@@ -189,12 +198,21 @@ git push
 - 打开一门课：「子推文」卡片有「**批量上传**」（一次选好几个文件，每个文件生成一篇子推文，一次发布）和「新子推文」；「资料」卡片有「**上传资料**」（只放进资料列表，不生成子推文）。顶部是「分组」「查看网站」「编辑介绍」，页面最下面是「删除课程」。
 - 也可以直接把文件拖到一门课的页面上，等于「批量上传」。
 
+**学术**——论文、报告与海报、近况三个标签页，详细说明见[第 6 节「学术模块」](#论文报告与海报近况学术模块)：
+
+- **论文**：「添加论文」，把 NASA ADS（论文页 Export → BibTeX）或 arXiv（Export BibTeX Citation）导出的 BibTeX 粘贴进去，标题、作者、期刊、年月、arXiv / ADS / DOI 会自动填好（一次粘了好几篇时可以选其中一篇）；检查后可以「上传 PDF」，点「保存并发布」，论文文件和 PDF 一次发布。「论文设置」里写你的名字的各种写法（作者列表里会加粗）、ORCID / ADS / Google Scholar 和分组方式。
+- **报告与海报**：题目、日期、会议、地点、类型，可以上传幻灯片 / 海报 PDF。日期在今天以后的显示在「即将进行」里。
+- **近况**：顶部的「写一条近况」卡片：日期 + 一句话（可以用 `**粗体**` 和 `[链接](https://…)`）+ 可选的「详情」链接，点「**发布这条近况**」；中英文想写得不一样就展开「中英文分别写（可选）」。只支持 Markdown，写的 HTML 标签会原样显示成文字。「近况设置」里改首页显示几条。
+- 每个标签页都有「**在顶部菜单显示**」开关：有内容以后再打开，菜单里就会出现「论文 / Publications」等（排在现有菜单项后面）。开关只改这一栏 `_index.md` 和 `_index.zh.md` 的 `menu`，一次发布；关掉后页面仍然可以通过网址打开。
+- 列表里每条都能编辑、删除。论文和报告是「一次保存 = 一次发布」：数据文件和这次上传的 PDF 一起提交。删除时可以勾选「同时删除文件」（别的记录也在用的文件会提示保留）。
+
 **首页设置**——对应 `params.toml` 的 `[profileMode]` 等：
 
 - **头像**：点「更换头像」选一张照片，在「调整头像」里拖动、缩放（圆圈内是首页显示的范围），点「使用这张图片」。勾选「同时用作浏览器标签页图标」会一起更新 favicon。
-- **名字与简介**：名字、简介、网站标题。下面的「**英文站单独设置**」可以给英文首页另写名字 / 简介（留空 = 与上面相同），保存在 `languages.toml` 的 `[en.params.profileMode]`。
+- **名字与简介**：名字、简介、网站标题（这些是英文站——默认语言——的值，中文站也沿用）。下面的「**中文站单独设置**」可以给中文首页另写名字 / 简介（留空 = 与上面相同），保存在 `languages.toml` 的 `[zh.params.profileMode]`。
 - **首页按钮**：「添加按钮」、上移 / 下移、删除。站内页面写 `research/` 这种不以 `/` 开头的路径（两种语言会各自跳转），外部网址以 `https://` 开头。
-- **社交链接**：「添加社交链接」，从下拉框选图标（GitHub、邮箱、Google Scholar、ORCID、知乎……），填链接。邮箱要写成 `mailto:me@example.com`。
+- **社交链接**：「添加社交链接」，从下拉框选图标（ORCID、Google 学术、NASA ADS、arXiv、ResearchGate、简历、LinkedIn、Bluesky、Mastodon、GitHub、邮箱……），填链接。ORCID 可以只填 iD（`0000-0002-…`），NASA ADS 可以只填作者名（`Zhong, F.`），离开输入框时会自动变成完整网址。邮箱要写成 `mailto:me@example.com`。
+- **简历 CV**：「上传简历 PDF」后立即发布（PDF 放在 `static/documents/cv/`，`params.toml` 的 `cv` 指向它），首页按钮后面多一个「CV / 简历」按钮，访客点开是在线阅读器。「换一份」默认删除旧文件、「移除」让按钮消失；旧文件还被文章或别处用到时会列出来，并默认保留。这一张卡片是马上发布的，不需要再点「保存并发布」。
 - **节日图标**：「启用节日图标」开关 + 「添加节日」（emoji、开始 / 结束日期 `月-日`），规则同第 8 节。
 - 右侧「首页预览」是示意图。改完点「**保存并发布**」，会先列出将修改的内容让你确认。没发布就离开也不怕：修改（包括新头像）会保存在本机，下次打开时提示「恢复」。
 
@@ -212,7 +230,7 @@ git push
 - 点「上传文件」或把文件拖进来（可以多选）。勾选「压缩图片」会把 JPG / PNG 缩小到最宽 1920 像素；PDF 等原样上传。同名文件会提示「替换」（链接不变）。
 - 课程的资料在 `documents/courses/<课程>/` 里，这里也能看到；更方便的是在「课程」里打开那门课上传（见上面）。
 - 每个文件有「复制链接」「打开」「删除」。PDF 的第一个按钮是「**复制预览链接**」（`https://…/viewer/?file=…`，发到微信群里，同学点开就能直接看，页面上有「下载」），「复制文件链接」是文件本身的地址（安卓 / 微信里点开通常只能下载）；「打开」也是在线预览。手机上点文件那一行，弹出的菜单里是「复制预览链接」「复制文件链接」「在线预览」。图片和其他文件只有「复制链接」（文件本身的地址，图片在哪里都能直接显示）。
-- 删除前会提示哪些文章引用了它（包括预览链接和嵌入的阅读器）。
+- 删除前会提示哪些文章引用了它（包括预览链接和嵌入的阅读器），以及论文 / 报告 / 近况的数据文件和网站设置（例如简历）。
 
 ### 双语在后台里怎么体现
 
@@ -225,8 +243,9 @@ git push
 | 中文专属 | `xxx.zh.md` | 中文站（替换共用版本） |
 
 - 新文章默认只有「共用版本」，中英文站都显示——最省事。
-- 想给英文站单独写一版：点标签栏上的「**单独写英文版**」，会复制当前内容作为底稿，改好后点「发表」，英文站就换成这一版。
-- 不想要英文版了：切到「英文专属」，在「⋯」里点「删除此版本（英文专属）」，英文站会改回显示共用版本。
+- 想给某个语言单独写一版：点标签栏上的「**单独写英文版**」或「**单独写中文版**」，会复制当前内容作为底稿，改好后点「发表」，那个站点就换成这一版（文件名规则不变：英文版是 `xxx.en.md`，中文版是 `xxx.zh.md`）。
+- 不想要某个专属版本了：切到它（例如「英文专属」），在「⋯」里点「删除此版本（英文专属）」，那个站点会改回显示共用版本。
+- 文章列表、页面列表显示的标题和点「编辑」先打开的，是默认语言（英文站）实际显示的那个版本；其他版本在编辑器顶部的标签页里。
 - 后台会提醒第 4 节"要点 2"那种情况：专属版本是草稿时，该语言站点上这一页会**消失**，而不是退回显示共用版本。
 
 ### 发布之后
@@ -264,25 +283,37 @@ git push
 
 ## 4. ★ 双语机制
 
-网站有中文站（`/`）和英文站（`/en/`）。Hugo 靠**文件名后缀**决定一个文件属于哪种语言：
+网站有英文站（默认语言，在根路径 `/`）和中文站（`/zh/`）。默认语言在 `hugo.toml` 的 `defaultContentLanguage`。
+Hugo 靠**文件名后缀**决定一个文件属于哪种语言——这和哪种语言是默认语言无关：
 
-| 文件 | 含义 | 中文站显示 | 英文站显示 |
+| 文件 | 含义 | 英文站（`/…`）显示 | 中文站（`/zh/…`）显示 |
 |---|---|---|---|
 | `xxx.md` | **共用版本** | ✅ | ✅ |
-| `xxx.en.md` | 英文专属版本 | — | ✅（替换共用版本） |
-| `xxx.zh.md` | 中文专属版本 | ✅（替换共用版本） | — |
+| `xxx.en.md` | 英文专属版本 | ✅（替换共用版本） | — |
+| `xxx.zh.md` | 中文专属版本 | — | ✅（替换共用版本） |
+
+> **网址变了，文件没变**：以前中文站在 `/`、英文站在 `/en/`。现在英文站在 `/`（学术访客打开 himzfx.github.io
+> 直接看到英文），中文站在 `/zh/`。所有文件名、写法都和以前一样。旧的英文链接 `/en/xxx/` 会被自动转到 `/xxx/`
+> （`layouts/404.html` 里的一小段脚本，保留 `?…` 和 `#…`）；旧的中文链接 `/xxx/` 现在打开的是这一页的英文版，
+> 页面顶部的语言切换、以及下面的「语言提示」会把中文读者带回中文版。
+>
+> **语言提示**：浏览器首选中文的访客打开一个有中文版的英文页面时，页面底部会出现一条小提示「本页有中文版 →」
+> （反过来，英文读者打开有英文版的中文页面时显示 "This page is also available in English →"）。只是提示，不会自动跳转；
+> 点 × 关闭后这台设备上不再提示（记在浏览器的 `localStorage['lang-hint-dismissed']`，和后台无关）。
+> 提示文字在 `i18n/en.yaml` 的 `lang_hint_zh` 和 `i18n/zh.yaml` 的 `lang_hint_en`。
 
 规则只有一句话：**某个语言有专属版本就用专属版本，没有就用共用版本。**
 
 ### 常见场景
 
-| 你写了哪些文件 | 中文站 | 英文站 |
+| 你写了哪些文件 | 英文站 `/xxx/` | 中文站 `/zh/xxx/` |
 |---|---|---|
-| 只有 `xxx.md`（中文写的） | `xxx.md` | `xxx.md`（显示中文内容） |
-| 只有 `xxx.md`（英文写的） | `xxx.md`（显示英文内容） | `xxx.md` |
-| `xxx.md` + `xxx.en.md` | `xxx.md` | `xxx.en.md` |
-| `xxx.md` + `xxx.zh.md` | `xxx.zh.md` | `xxx.md` |
-| 只有 `xxx.en.md` | 没有这一页 | `xxx.en.md` |
+| 只有 `xxx.md`（中文写的） | `xxx.md`（显示中文内容） | `xxx.md` |
+| 只有 `xxx.md`（英文写的） | `xxx.md` | `xxx.md`（显示英文内容） |
+| `xxx.md` + `xxx.en.md` | `xxx.en.md` | `xxx.md` |
+| `xxx.md` + `xxx.zh.md` | `xxx.md` | `xxx.zh.md` |
+| 只有 `xxx.en.md` | `xxx.en.md` | 没有这一页 |
+| 只有 `xxx.zh.md` | 没有这一页 | `xxx.zh.md` |
 
 所以：
 
@@ -304,13 +335,17 @@ git push
 python new_post.py --status
 ```
 
-会列出每个页面在中文站、英文站分别显示的是哪个文件，并提示上面第 2 点那种"草稿占位"的情况。
+会列出每个页面在英文站、中文站分别显示的是哪个文件，并提示上面第 2 点那种"草稿占位"的情况。
 
 ### 它是怎么实现的
 
 `config/_default/module.toml` 把同一个 `content/` 目录同时挂载给中文和英文：不带后缀的文件在两种语言下各出现一次；带后缀的文件只属于对应语言，并且 Hugo 总是让它优先于共用文件。这完全是 Hugo 的原生行为，没有自定义模板逻辑，所以列表页、RSS、sitemap、hreflang、翻译链接都天然正确。
 
 以后如果要加第三种语言（比如日语）：在 `languages.toml` 里加上 `[ja]`，再在 `module.toml` 里照样加一条 `lang = "ja"` 的挂载即可。
+
+想换回「中文在 `/`」：把 `hugo.toml` 的 `defaultContentLanguage` 改成 `"zh"`，`languages.toml` 里把 `[zh]` 的 `weight` 调到最小，
+再把 `params.toml` 和 `[zh.params.…]` / `[en.params.…]` 里的语言差异项对调（例如 giscus 的 `lang`）。网站模板、管理后台、
+`new_post.py`、资料预览页都从配置里读默认语言，不需要改代码。
 
 ---
 
@@ -324,7 +359,8 @@ python new_post.py --status
 # 只写一份，中英文站都显示（最省事）
 python new_post.py dark-galaxy "暗星系中的中性氢"
 
-# 同时建中英两个版本
+# 同时建两个版本：第一个标题 → 共用版本 dark-galaxy.md（中文站 /zh/posts/dark-galaxy/ 显示），
+#               第二个标题 → 英文专属 dark-galaxy.en.md（英文站 /posts/dark-galaxy/ 显示）
 python new_post.py dark-galaxy "暗星系中的中性氢" "Neutral Hydrogen in Dark Galaxies"
 
 # 以后给已有文章补英文版（复制原文作为翻译底稿，只改标题）
@@ -376,15 +412,15 @@ tags: ["标签1", "标签2"]
 首页不是 `.md` 文件，而是在 `config/_default/params.toml` 的 `[profileMode]` 里配置：名字、简介、头像、按钮。管理后台的「首页设置」改的就是这些（见第 3 节）。
 
 - **换头像**：把图片放到 `static/`，修改 `imageUrl`
-- **按钮链接**：站内页面写成**不以 `/` 开头**的相对路径（如 `"research/"`），这样中文首页跳到 `/research/`，英文首页自动跳到 `/en/research/`
-- **中英文首页想显示不同的简介**：在 `languages.toml` 里覆盖，例如
+- **按钮链接**：站内页面写成**不以 `/` 开头**的相对路径（如 `"research/"`），这样英文首页跳到 `/research/`，中文首页自动跳到 `/zh/research/`
+- **中英文首页想显示不同的简介**：`params.toml` 里是英文站（默认语言）的值；中文站要不同，就在 `languages.toml` 里覆盖，例如
 
   ```toml
-  [en.params.profileMode]
-    subtitle = "Peking University | ..."
+  [zh.params.profileMode]
+    subtitle = "……"
   ```
 
-  只写要改的项，其余自动沿用 `params.toml`。
+  只写要改的项，其余自动沿用 `params.toml`。后台「首页设置」的「中文站单独设置」写的就是这里。
 
 ### 其他页面
 
@@ -398,6 +434,8 @@ tags: ["标签1", "标签2"]
 列表页（栏目首页）必须叫 `_index.md`，前面有下划线；普通文章不要用这个名字。
 
 想让某个页面中英文共用？删掉它的 `.en.md` 即可，英文站会自动显示共用版本。
+
+> 例如 `content/about.md` 是中文，`about.en.md` 是英文：英文站 `/about/` 显示 `about.en.md`，中文站 `/zh/about/` 显示 `about.md`。
 
 ### 课程资料（课程单元与子推文）
 
@@ -488,7 +526,7 @@ draft: false
 
 打开后台左侧（手机上是底部）的「**课程**」：
 
-- **新建课程**：填中文名称、英文名称（可选，填了会同时生成英文版 `_index.en.md`，并用它生成网址）、网址（小写英文、数字和 `-`，以后不能改）、分组（可选，输入时会提示已有的分组名）、一句话简介，点「**创建并发布**」。新课程排在最后，创建后直接打开这门课。
+- **新建课程**：填英文名称（默认语言，必填，写进 `_index.md`，网址根据它自动生成）、中文名称（可选，填了会同时生成中文版 `_index.zh.md`）、网址（小写英文、数字和 `-`，以后不能改）、分组（可选，输入时会提示已有的分组名）、一句话简介（中文简介写在「中文简介」里），点「**创建并发布**」。新课程排在最后，创建后直接打开这门课。
 - **调整课程顺序**：每行的 ↑ ↓ 在同一组里移动；有分组时，分组标题旁边的 ↑ ↓ 整组移动。改完点「**保存顺序**」一次发布（只改各文件里 `weight` 那一行），「撤销」放弃。
 - **分组**：每行的「分组」按钮（或课程页顶部的「分组」），留空 = 不分组。和已有分组只差大小写或空格时，会自动用已有的写法。分组标题旁边的「改名」= 这一组的课程一起改名。
 - 打开一门课后：
@@ -513,8 +551,8 @@ draft: false
 
 #### 课程资料的双语
 
-- 课程和子推文默认**中英文共用**（只写 `xxx.md`）。英文站的界面文字自动是英文：Contents、Materials、Other、Previous / Next、Download……；资料列表里的预览链接自动打开英文界面（`&lang=en`）。这些文字在 `i18n/zh.yaml` 和 `i18n/en.yaml` 里。
-- 想给英文站单独写，照第 4 节的规则加 `_index.en.md` 或 `<篇>.en.md`（后台：新建课程时填英文名称，或者在编辑器里点「单独写英文版」）。
+- 课程和子推文默认**中英文共用**（只写 `xxx.md`）。英文站的界面文字自动是英文：Contents、Materials、Other、Previous / Next、Download……；资料列表里的预览链接带上页面语言（英文站 `&lang=en`、中文站 `&lang=zh`），阅读器的界面和页面一致。这些文字在 `i18n/zh.yaml` 和 `i18n/en.yaml` 里。
+- 想给某个语言单独写，照第 4 节的规则加 `_index.en.md` / `_index.zh.md` 或 `<篇>.en.md` / `<篇>.zh.md`。后台「新建课程」：必填的是**英文名称**（默认语言，写进共用的 `_index.md`），可选的**中文名称**写进 `_index.zh.md`；编辑器里也可以点「单独写中文版」/「单独写英文版」。
 - `_index.en.md` 可以只写 `title`、`description` 和正文：没写的 `group`、`weight`、`materialsDir`、`showMaterials` 沿用共用版本 `_index.md` 的值。写了 `group: "Labs"`，英文站就用这个英文分组名；反过来，只写在 `_index.en.md` 里的设置不会影响中文站。后台改分组时，英文版自己写了别的分组名就不动它。
 - 第 4 节「要点 2」同样适用：英文专属版本是草稿时，英文站上这门课（或这篇）会消失。
 
@@ -522,7 +560,7 @@ draft: false
 
 用后台（大约一分钟）：
 
-1. 「课程」→「新建课程」：中文名称「近代物理实验」，英文名称「Modern Physics Lab」（网址自动变成 `modern-physics-lab`），分组「实验课」，简介「大三上学期，每个实验一篇报告」→「创建并发布」。
+1. 「课程」→「新建课程」：英文名称「Modern Physics Lab」（网址自动变成 `modern-physics-lab`），中文名称「近代物理实验」，分组「实验课」，简介「One report per experiment」，中文简介「大三上学期，每个实验一篇报告」→「创建并发布」（生成 `_index.md` 和 `_index.zh.md`）。
 2. 在这门课里点「批量上传」，选 `photoelectric.pdf`、`franck-hertz.pdf`、`实验数据.xlsx`。前两个保持「生成子推文」，标题分别改成「实验1 光电效应」「实验2 弗兰克-赫兹实验」；`实验数据.xlsx` 选「只放进资料列表」→「上传并发布」。
 3. 「编辑介绍」写几句课程介绍，发表。想给某个实验补心得：点那篇的「编辑」，在阅读器下面接着写。
 
@@ -536,11 +574,75 @@ content/courses/modern-physics-lab/photoelectric.md   ← title「实验1 光电
 content/courses/modern-physics-lab/franck-hertz.md    ← title「实验2 弗兰克-赫兹实验」，weight 20
 ```
 
-部署完成后：`/courses/` 的「实验课」组里出现「近代物理实验」卡片（「2 篇 · 3 份资料」）；`/courses/modern-physics-lab/` 上依次是介绍、两篇子推文、三份资料（两个 PDF 后面写着「收录于」对应的实验）；打开「实验1 光电效应」，正文里就是报告的阅读器，页尾「下一篇」是实验 2。英文站 `/en/courses/modern-physics-lab/` 显示「Modern Physics Lab」。
+部署完成后：中文站 `/zh/courses/` 的「实验课」组里出现「近代物理实验」卡片（「2 篇 · 3 份资料」）；`/zh/courses/modern-physics-lab/` 上依次是介绍、两篇子推文、三份资料（两个 PDF 后面写着「收录于」对应的实验）；打开「实验1 光电效应」，正文里就是报告的阅读器，页尾「下一篇」是实验 2。英文站 `/courses/modern-physics-lab/` 上同样的内容是英文界面。
+（手动建课程时，也可以反过来让 `_index.md` 写中文、`_index.en.md` 写英文——第 4 节的规则对两种写法都成立。）
 
 手动做也一样：建 `content/courses/modern-physics-lab/_index.md`，把 PDF 放进 `static/documents/courses/modern-physics-lab/`，再写两个子推文 `.md`（格式见上面「课程的设置」），`git push`。
 
 > 课程卡片是自动生成的，所以 `content/courses/_index.md` 里手写的「目录导航」（按年级列课程名）以后可以删掉或改成别的说明，免得两处都要更新。
+
+### 论文、报告与海报、近况（学术模块）
+
+三个页面：**论文** `/publications/`、**报告与海报** `/talks/`、**近况** `/news/`（中文站 `/zh/publications/` 等）。页面本身是 `content/publications/_index.md`（英文标题）+ `_index.zh.md`（中文标题）等，正文里写的文字会显示在列表上面；内容则是 `data/` 下的 YAML 文件，**每条一个文件**。后台「学术」改的就是这些文件，手动改也一样：
+
+```
+data/
+├── publications/2025apj-980-123z.yaml   ← 一篇论文
+├── talks/2025-06-10-aas-246.yaml        ← 一个报告 / 海报
+└── news/2025-07-01-paper-accepted.yaml  ← 一条近况
+```
+
+> ⚠ `data/` 下只能放 `.yaml` 文件（以及 `.gitkeep` 这种点开头的文件）。放一个 `README.md` 之类的文件，Hugo 会构建失败。
+
+**论文**（`data/publications/<id>.yaml`，`<id>` = 文件名，只用小写字母、数字和 `-`）：
+
+```yaml
+id: "2025apj-980-123z"
+title: "Neutral Hydrogen in Dark Galaxies with FAST"   # 可以写 $\Lambda$CDM 这样的公式
+authors:                                             # 按论文上的写法，一行一位
+  - "Zhong, F."
+  - "Doe, J."
+year: 2025
+month: 2                     # 可选
+venue: "ApJ"                 # 期刊 / 会议；预印本写 "arXiv e-prints"
+volume: "980"                # 可选
+pages: "123"                 # 可选
+status: "published"          # published | accepted | submitted | in-prep
+kind: "refereed"             # refereed | proceedings | preprint | thesis | other
+selected: true               # 可选：代表作，带一个「Selected / 代表作」标记
+arxiv: "2501.01234"          # 编号或网址
+ads: "2025ApJ...980..123Z"   # ADS bibcode 或网址
+doi: "10.3847/1538-4357/adf00d"
+pdf: "/documents/papers/Zhong-2025-FAST.pdf"   # 网站上的文件 → 用在线阅读器打开
+code: "https://github.com/…" # 可选
+slides: "/documents/talks/x.pdf"               # 可选
+note: "Featured in AAS Nova" # 可选，一句备注
+bibtex: |-                   # 可选：原样的 BibTeX，页面上可以展开、复制
+  @ARTICLE{2025ApJ...980..123Z, …}
+```
+
+- 分组：`[publications] groupBy = "kind"` 时分「同行评审 / 已投稿与准备中 / 会议论文与其他」三组，`"year"` 时按年份。每组里新的在前。
+- `[publications] myNames` 里列出你名字的各种写法（如 `["Zhong, F.", "Zhong, Fangxiong"]`），作者列表里会加粗；作者很多时只显示前几位 + et al.，但你的名字始终可见。
+- `ads` / `orcid` / `scholar` 填了以后，论文页顶部出现对应链接（`ads` 可以只写作者名，`orcid` 可以只写 iD，`scholar` 可以只写 `user=` 后面的编号）。
+
+**报告与海报**（`data/talks/<id>.yaml`）：`id`、`title`、`event`（会议）、`location`、`date`（`"YYYY-MM-DD"`）、`kind`（talk | poster | seminar | invited | outreach | other）、`slides`（网站上的 PDF 或网址）、`video`、`url`（会议网址）、`abstract`、`note`。日期不早于网站构建那天的显示在「即将进行」，其余按年份列在下面（静态网站：报告过去以后，下一次发布网站时才会移到下面）。
+
+**近况**（`data/news/<日期>-<几个英文词>.yaml`）：
+
+```yaml
+date: "2025-07-01"
+text: "Our FAST paper was accepted by **ApJ**!"   # 所有语言共用；可以用行内 Markdown
+text_zh: "我们的 FAST 论文被 **ApJ** 接收了！"     # 可选：中文站用这一句
+link: "publications/"                             # 可选：「详情」链接
+```
+
+首页头像下方显示最新的几条（`[news] homeCount`，默认 5，`0` = 首页不显示），条数更多时有「全部近况 / All news」链接。
+
+**链接的写法**（论文、报告、近况、简历都一样）：只接受 `https://` 网址和网站路径，`javascript:` 之类会被忽略（构建时有警告）。网站上的 PDF / 图片写 `/documents/…`，会用在线阅读器打开，界面语言跟随页面；近况的 `link` 写 `posts/x/`（不以 `/` 开头）时，中文站自动变成 `/zh/posts/x/`。近况文字里的 HTML 标签会原样显示成文字（安全起见），格式请用 Markdown。
+
+**菜单**：这三个页面默认**不在**顶部菜单里。有内容以后，在后台「学术」打开「在顶部菜单显示」，或者在 `_index.md` 和 `_index.zh.md` 里都加上 `menu: { main: { weight: 50 } }`（见第 7 节）。这三个 `_index` 页面也列在后台「页面」里：列表上面的介绍文字、菜单里的先后顺序在那里改。
+
+**简历按钮**：`params.toml` 顶部的 `cv = "/documents/cv/xxx.pdf"`（留空 = 不显示），首页按钮后面会多一个「CV / 简历」按钮，用在线阅读器打开。
 
 ---
 
@@ -560,7 +662,7 @@ menu:
 - 菜单显示的名字 = 页面的 `linkTitle`（没写就用 `title`）。例如 `about.md` 的标题是"关于我"，但用 `linkTitle: "关于"` 让菜单里显示"关于"。
 - 因为菜单跟着页面走，所以它也遵守双语机制：共用页面会同时出现在中英文菜单里，有专属版本时各用各的名字，链接自动指向对应语言。
 
-当前顺序：关于 10、科研 20、博客 30、课程资料 40。
+当前顺序：关于 10、科研 20、博客 30、课程资料 40。论文 / 报告与海报 / 近况默认不在菜单里；在后台「学术」打开开关时，会排在已有菜单项后面（50、60……），也可以之后再改数字。
 
 课程资料里的一门门课（`content/courses/<课程>/_index.md`）不写 `menu`，它们列在「课程资料」页上，顺序用 `weight`（见第 6 节）。
 
@@ -578,6 +680,7 @@ menu:
 ```
 
 中英文站的导航栏都会出现它。以后想让英文菜单显示 "Projects"，再加一个 `content/projects/_index.en.md`（`title: "Projects"`，同样带上 `menu`）。
+（后台「新建栏目」：必填的是英文名称——默认语言，写进 `_index.md`；可选的中文名称写进 `_index.zh.md`。）
 
 ---
 
@@ -590,11 +693,14 @@ menu:
 | 想改什么 | 文件 | 位置 |
 |---|---|---|
 | 网站标题、网址 | `hugo.toml` | `title`、`baseURL` |
-| 默认语言 | `hugo.toml` | `defaultContentLanguage` |
-| 语言名称、顺序 | `languages.toml` | `[zh]`、`[en]` |
-| 某个语言的参数差异 | `languages.toml` | `[en.params.xxx]` |
+| 默认语言（现在是英文，在 `/`） | `hugo.toml` | `defaultContentLanguage` |
+| 语言名称、顺序 | `languages.toml` | `[en]`、`[zh]` 的 `weight` |
+| 某个语言的参数差异（`params.toml` 是英文站的值） | `languages.toml` | `[zh.params.xxx]` |
 | 首页名字 / 简介 / 头像 / 按钮 | `params.toml` | `[profileMode]` |
 | 社交链接 | `params.toml` | `[[socialIcons]]` |
+| 简历按钮 | `params.toml` | 顶部的 `cv` |
+| 论文页设置（加粗的名字、分组、ORCID / ADS / Scholar） | `params.toml` | `[publications]` |
+| 首页显示几条近况 | `params.toml` | `[news] homeCount` |
 | 背景动画 | `params.toml` | `[background]` |
 | 评论区 | `params.toml` | `comments`、`[giscus]` |
 | 节日图标 | `params.toml` | `[holidayFavicon]` |
@@ -608,7 +714,7 @@ menu:
   url = "https://linkedin.com/in/xxx"
 ```
 
-PaperMod 支持的图标名：`github`、`email`、`linkedin`、`twitter`、`facebook`、`instagram`、`youtube`、`orcid`、`googlescholar` 等。
+PaperMod 支持的图标名：`github`、`email`、`linkedin`、`twitter`、`facebook`、`instagram`、`youtube`、`orcid`、`googlescholar`、`researchgate`、`cv`、`bluesky`、`mastodon` 等；本站另外加了 `ads`（NASA ADS）和 `arxiv`（`layouts/partials/social_icons.html`）。
 
 ### 节日图标
 
@@ -657,7 +763,12 @@ static/images/photo.jpg        →  /images/photo.jpg
 /viewer/?file=/documents/my-paper.pdf           ← 预览 static/documents/my-paper.pdf
 /viewer/?file=/documents/my-paper.pdf&page=3    ← 从第 3 页开始
 /viewer/?file=/documents/my-paper.pdf&lang=en   ← 英文界面（英文版文章里用）
+/viewer/?file=/documents/my-paper.pdf&lang=zh   ← 中文界面（中文版文章里用）
 ```
+
+不写 `lang` 时，阅读器自己判断界面语言：从中文站（`/zh/…`）的页面点进来 → 中文；从英文站的页面点进来 → 英文；
+直接打开（例如微信里点了别人发的链接）→ 跟随浏览器 / 手机的语言；都判断不了 → 英文（网站的默认语言）。
+所以共用版本（中英文站都显示的 `xxx.md`）里的链接不用写 `lang`。
 
 - **用后台**：「资料」里 PDF 的「复制预览链接」，复制的是完整网址，可以直接发到微信群；编辑器里插入 PDF 时选「插入链接（点开在线预览）」。
 - **手动写**（不用后台）：
@@ -698,7 +809,7 @@ static/images/photo.jpg        →  /images/photo.jpg
 - 短代码要单独成一段（前后空一行），否则可能不生效。后台的「嵌入阅读器（正文里直接显示）」会自动这样插入。
 
 阅读器下方总有一行「在新页面打开」「下载」，阅读器出问题时也能拿到文件。中英文站通用：英文站里界面和这两个按钮自动变成英文
-（Open in new tab / Download）。同一篇文章可以嵌入多个；阅读器滚动到附近才开始加载，不拖慢文章打开速度。
+（Open in new tab / Download），中文站是中文（短代码总是把页面语言传给阅读器）。同一篇文章可以嵌入多个；阅读器滚动到附近才开始加载，不拖慢文章打开速度。
 短代码在 `layouts/shortcodes/pdf.html`，样式在 `assets/css/extended/pdf-embed.css`。
 
 ### 图片画廊
@@ -741,7 +852,7 @@ $$
 
 背景动画由一个"游戏机"加若干"卡带"组成：
 
-- `assets/js/background/core.js`：引擎，负责画布、动画循环、深浅色检测、左下角开关按钮
+- `assets/js/background/core.js`：引擎，负责画布、动画循环、深浅色检测、开关按钮（电脑上在左下角；手机等窄屏上放在页脚里，不挡正文）
 - `assets/js/background/effects/*.js`：效果（卡带），只负责怎么动、怎么画
 
 构建时只打包选中的那一个效果，其他效果不会被加载。
@@ -804,7 +915,7 @@ window.BG_System.loadCassette({
 
 仓库、分类等 ID 在 `params.toml` 的 `[giscus]` 中配置：
 
-- `lang`：评论区界面语言，中文站 `zh-CN`，英文站在 `languages.toml` 中覆盖为 `en`
+- `lang`：评论区界面语言，英文站（默认）`en`，中文站在 `languages.toml` 的 `[zh.params.giscus]` 中覆盖为 `zh-CN`
 - `sharedThread = true`：同一篇文章的中英文页面**共用一个评论区**（推荐）；设为 `false` 则按网址区分，中英文各自独立
 
 ---
@@ -861,6 +972,37 @@ window.BG_System.loadCassette({
 ### 英文站某个菜单项不见了
 
 该页面的 `.en.md` 里没有写 `menu`。专属版本会整体替换共用版本，`menu` 也要写上。
+
+### 旧的 `/en/` 链接打不开，或者旧的中文链接打开成了英文
+
+网站改成英文在 `/`、中文在 `/zh/` 以后（见第 4 节）：
+
+- **旧的英文链接** `/en/xxx/`：会自动转到 `/xxx/`（`?…` 和 `#…` 保留）。这一步靠 `layouts/404.html` 里的一小段脚本，所以要等部署完成；转过去的页面也不存在时，停在 404 页。
+- **旧的中文链接** `/xxx/`：现在打开的是这一页的英文版（只有共用版本时内容一样）。浏览器首选中文的读者会在页面底部看到「本页有中文版 →」；也可以点顶栏的语言切换。
+- 自己发出去的链接（简历、邮件签名、微信群）以后尽量用新地址：中文页面写 `/zh/xxx/`，英文页面写 `/xxx/`。
+
+### 论文页（报告、近况）没出现在菜单里
+
+- 这三个页面默认就**不在**菜单里。到后台「学术」对应的标签页，打开「在顶部菜单显示」，等部署完成（「已上线 ✓」）再刷新。没打开时页面也能通过网址打开（`/publications/`、`/zh/publications/`）。
+- 只有一个语言的菜单里有：中文站用的是 `_index.zh.md`，它整体替换共用版本，所以 `menu` 两个文件都要写（第 4 节要点 1）。后台的开关会同时改两个文件；手动改时别漏了一个。
+- 开关是灰的、提示「设置区格式有误」：这一栏的 `_index.md` / `_index.zh.md` 的 front matter 写坏了，到 GitHub 上按提示的文件改好。
+- 打开了菜单但还没有内容时，后台会提醒：访客点进去只会看到「这里还没有列出论文。」这样一句话。
+
+### BibTeX 解析不对时怎么改
+
+- 粘贴后先看「识别并填入」旁边的提示，再检查下面的表单：**每一项都可以直接改**（作者一行一位），确认无误再点「保存并发布」。
+- 提示「没能识别：第 n 行……」：多半是没复制完整（漏了最后的 `}`）。回到 ADS 论文页 Export → BibTeX（或 arXiv 的「Export BibTeX Citation」）重新复制整条。实在不行就不粘贴，直接手填表单。
+- 一次粘了好几篇：在「这段 BibTeX 里有 n 篇」的下拉框里选要加的那一篇，其余的再点「添加论文」逐篇加。
+- 已经发布的论文：列表里点「编辑」改字段；或者在「粘贴新的 BibTeX 更新上面的信息（可选）」里贴新导出的 BibTeX（例如论文正式发表后），再点「保存修改」。
+- 表单下面的「BibTeX」原文框是单独保存的（网站上「复制」给访客的就是它），改上面的字段不会改它；想让访客复制到修正过的版本，这一框也要改。
+- arXiv 编号、ADS bibcode、DOI 格式不对时后台不让保存（网站会忽略这样的值）。
+- 自己的名字没加粗：到「论文设置」的署名写法里加上论文里的那种写法（例如 `Zhong, F.`）。
+- 也可以直接在 GitHub 上改 `data/publications/<文件名>.yaml`，字段见第 6 节「[学术模块](#论文报告与海报近况学术模块)」。
+
+### 首页没有显示近况 / 简历按钮
+
+- 近况：`data/news/` 里要有内容，且「近况设置」（`[news] homeCount`）不是 `0`。日期写错（不是 `YYYY-MM-DD`）的那条会被跳过。
+- 简历：「首页设置」的「简历 CV」卡片里上传过 PDF（`params.toml` 的 `cv` 不为空）。两者都要等部署完成。
 
 ### 数学公式没渲染
 

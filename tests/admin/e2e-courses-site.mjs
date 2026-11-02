@@ -16,6 +16,10 @@
 //   electronics  nothing at all (no intro, no sub-posts, no materials) → empty note
 //   seminar      no group
 //
+// Languages: English is the default language (at /), Chinese lives under /zh/. The fixtures keep the file naming
+// (xxx.md shared — written in Chinese here — and xxx.en.md English overrides), so the Chinese pages below are
+// checked under /zh/… and the English ones at the site root.
+//
 // Run from the repo root:   node tests/admin/e2e-courses-site.mjs
 // Env:
 //   COURSES_SITE_E2E_DIR  where exports, builds and screenshots go
@@ -282,7 +286,12 @@ function fmtSize(n) {
   return m < 10 ? `${m.toFixed(1)} MB` : `${m.toFixed(0)} MB`;
 }
 
-const viewerHref = (sitePath, lang) => '/viewer/?file=' + encodeURIComponent(sitePath) + (lang && lang !== 'zh' ? `&lang=${lang}` : '');
+// The materials list always passes the page language to the viewer (lang=en on the English site, lang=zh on the Chinese one).
+const viewerHref = (sitePath, lang) => {
+  assert.ok(lang === 'zh' || lang === 'en', 'viewerHref needs the page language');
+  return '/viewer/?file=' + encodeURIComponent(sitePath) + `&lang=${lang}`;
+};
+const ZH = '/zh'; // URL prefix of the Chinese site
 const fileHref = (sitePath) => sitePath.split('/').map((s) => encodeURIComponent(s)).join('/');
 
 // ---------------------------------------------------------------------------
@@ -313,7 +322,7 @@ async function main() {
   // ---------------- landing ----------------
 
   await test('landing (grouped): user intro above the cards, groups in min-weight order, 其他 last', async () => {
-    assert.equal(await go('/courses/'), 200);
+    assert.equal(await go(`${ZH}/courses/`), 200);
     const L = await landingInfo(page);
     assert.ok(L.introBeforeCards, 'the intro from content/courses/_index.md comes before the cards');
     assert.match(L.introText, /资料使用说明/);
@@ -328,10 +337,10 @@ async function main() {
   });
 
   await test('landing: cards show title, description, sub-post / material counts and link to the unit', async () => {
-    await go('/courses/');
+    await go(`${ZH}/courses/`);
     const L = await landingInfo(page);
     const by = Object.fromEntries(L.cards.map((c) => [c.title, c]));
-    assert.deepEqual(by['近代物理实验'], { title: '近代物理实验', tag: 'H3', href: '/courses/modern-lab/', desc: '大三下学期，每个实验一篇，附实验报告。', meta: '3 篇 · 4 份资料' });
+    assert.deepEqual(by['近代物理实验'], { title: '近代物理实验', tag: 'H3', href: `${ZH}/courses/modern-lab/`, desc: '大三下学期，每个实验一篇，附实验报告。', meta: '3 篇 · 4 份资料' });
     assert.equal(by['光学'].meta, '2 份资料');
     assert.equal(by['量子力学'].meta, '1 篇');
     assert.equal(by['现代电子学实验'].meta, '');
@@ -339,11 +348,11 @@ async function main() {
     // the whole card is clickable
     const box = await page.locator('.course-card:has-text("光学") .course-card-desc').boundingBox();
     await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
-    await page.waitForURL(/\/courses\/optics\/$/);
+    await page.waitForURL(/\/zh\/courses\/optics\/$/);
   });
 
   await test('landing (plain): no group → one list, no headings, weight then title', async () => {
-    assert.equal(await go('/courses/', P), 200);
+    assert.equal(await go(`${ZH}/courses/`, P), 200);
     const L = await landingInfo(page);
     assert.equal(L.groupTitles, 0);
     assert.equal(L.lists, 1);
@@ -358,19 +367,19 @@ async function main() {
   // ---------------- course unit ----------------
 
   await test('unit page: breadcrumbs, intro, sub-post cards by weight, draft hidden, no dates', async () => {
-    assert.equal(await go('/courses/modern-lab/'), 200);
+    assert.equal(await go(`${ZH}/courses/modern-lab/`), 200);
     const U = await unitInfo(page);
     assert.deepEqual(U.crumbs, [
-      { text: '课程资料', href: '/courses/', current: null },
+      { text: '课程资料', href: `${ZH}/courses/`, current: null },
       { text: '近代物理实验', href: null, current: 'page' },
     ]);
     assert.equal(U.h1, '近代物理实验');
     assert.match(U.intro, /挑了几个整理成文/);
     assert.deepEqual(U.sections, ['内容', '资料']);
     assert.deepEqual(U.posts, [
-      { title: '密立根油滴实验', href: '/courses/modern-lab/millikan/', desc: '' },
-      { title: '塞曼效应', href: '/courses/modern-lab/zeeman/', desc: '用法布里-珀罗标准具观察汞 546.1 nm 谱线的分裂' },
-      { title: '弗兰克-赫兹实验', href: '/courses/modern-lab/franck-hertz/', desc: '测量汞原子的第一激发电位' },
+      { title: '密立根油滴实验', href: `${ZH}/courses/modern-lab/millikan/`, desc: '' },
+      { title: '塞曼效应', href: `${ZH}/courses/modern-lab/zeeman/`, desc: '用法布里-珀罗标准具观察汞 546.1 nm 谱线的分裂' },
+      { title: '弗兰克-赫兹实验', href: `${ZH}/courses/modern-lab/franck-hertz/`, desc: '测量汞原子的第一激发电位' },
     ]);
     assert.doesNotMatch(U.text, /还没写完/);
     assert.equal(U.hasDate, false);
@@ -380,19 +389,19 @@ async function main() {
   });
 
   await test('unit page: materials list (sorted, viewer vs direct links, encoding, sizes, embedding sub-post)', async () => {
-    await go('/courses/modern-lab/');
+    await go(`${ZH}/courses/modern-lab/`);
     const U = await unitInfo(page);
     const size = (p) => fmtSize(fs.statSync(path.join(G.exportDir, 'static', p)).size);
     assert.deepEqual(U.files, [
       { name: 'data.docx', href: fileHref(MAT.docx), download: 'data.docx', ext: 'DOCX', size: size(MAT.docx),
-        used: { label: '收录于', title: '密立根油滴实验', href: '/courses/modern-lab/millikan/' }, dl: null, dlText: null },
+        used: { label: '收录于', title: '密立根油滴实验', href: `${ZH}/courses/modern-lab/millikan/` }, dl: null, dlText: null },
       // referenced only by the draft → no "收录于"
-      { name: 'handout.pdf', href: viewerHref(MAT.handout), download: null, ext: 'PDF', size: size(MAT.handout),
+      { name: 'handout.pdf', href: viewerHref(MAT.handout, 'zh'), download: null, ext: 'PDF', size: size(MAT.handout),
         used: null, dl: fileHref(MAT.handout), dlText: '下载' },
-      { name: 'spectrum.png', href: viewerHref(MAT.png), download: null, ext: 'PNG', size: size(MAT.png),
-        used: { label: '收录于', title: '塞曼效应', href: '/courses/modern-lab/zeeman/' }, dl: fileHref(MAT.png), dlText: '下载' },
-      { name: '实验 报告 1.pdf', href: viewerHref(MAT.cjk), download: null, ext: 'PDF', size: size(MAT.cjk),
-        used: { label: '收录于', title: '弗兰克-赫兹实验', href: '/courses/modern-lab/franck-hertz/' }, dl: fileHref(MAT.cjk), dlText: '下载' },
+      { name: 'spectrum.png', href: viewerHref(MAT.png, 'zh'), download: null, ext: 'PNG', size: size(MAT.png),
+        used: { label: '收录于', title: '塞曼效应', href: `${ZH}/courses/modern-lab/zeeman/` }, dl: fileHref(MAT.png), dlText: '下载' },
+      { name: '实验 报告 1.pdf', href: viewerHref(MAT.cjk, 'zh'), download: null, ext: 'PDF', size: size(MAT.cjk),
+        used: { label: '收录于', title: '弗兰克-赫兹实验', href: `${ZH}/courses/modern-lab/franck-hertz/` }, dl: fileHref(MAT.cjk), dlText: '下载' },
     ]);
     assert.equal(fileHref(MAT.cjk), '/documents/courses/modern-lab/%E5%AE%9E%E9%AA%8C%20%E6%8A%A5%E5%91%8A%201.pdf');
     assert.equal(size(MAT.docx), '51 KB');
@@ -408,29 +417,37 @@ async function main() {
     assert.doesNotMatch(U.text, /gitkeep/);
   });
 
-  await test('unit page: a visitor opens the CJK-named PDF from the materials list in the viewer', async () => {
-    await go('/courses/modern-lab/');
+  await test('unit page: a visitor opens the CJK-named PDF from the materials list in the viewer (in the page language)', async () => {
+    await go(`${ZH}/courses/modern-lab/`);
     await page.click('.course-material-name:has-text("实验 报告 1.pdf")');
     await page.waitForURL(/\/viewer\/\?file=/);
     await page.waitForFunction(() => {
       const d = document.querySelector('.page[data-page-number="1"]');
       return d && d.classList.contains('rendered') && d.querySelector('canvas');
     }, null, { timeout: 30000 });
+    assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
+    assert.equal(new URL(await page.getAttribute('#home', 'href'), origin).pathname, '/zh/', 'viewer home = the Chinese site');
+    // the same file from the English site: English interface, home = /
+    await go('/courses/modern-lab/');
+    await page.click('.course-material-name:has-text("实验 报告 1.pdf")');
+    await page.waitForURL(/\/viewer\/\?file=.*&lang=en/);
+    await page.waitForFunction(() => document.documentElement.lang === 'en' && document.querySelector('#download')?.textContent.trim() === 'Download');
+    assert.equal(new URL(await page.getAttribute('#home', 'href'), origin).pathname, '/');
   });
 
   await test('unit page: course with only materials, and an empty course render cleanly', async () => {
-    assert.equal(await go('/courses/optics/'), 200);
+    assert.equal(await go(`${ZH}/courses/optics/`), 200);
     let U = await unitInfo(page);
     assert.deepEqual(U.sections, ['资料']);
     assert.deepEqual(U.posts, []);
     assert.deepEqual(U.files.map((f) => [f.name, f.ext, f.href]), [
       ['习题.txt', 'TXT', fileHref(`${C}/optics/习题.txt`)],
-      ['期末复习.pdf', 'PDF', viewerHref(`${C}/optics/期末复习.pdf`)],
+      ['期末复习.pdf', 'PDF', viewerHref(`${C}/optics/期末复习.pdf`, 'zh')],
     ]);
     assert.equal(U.empty, null);
     await page.screenshot({ path: path.join(SHOTS, 'unit-materials-only-desktop.png'), fullPage: true });
 
-    assert.equal(await go('/courses/electronics/'), 200);
+    assert.equal(await go(`${ZH}/courses/electronics/`), 200);
     U = await unitInfo(page);
     assert.deepEqual(U.sections, []);
     assert.deepEqual(U.files, []);
@@ -442,24 +459,25 @@ async function main() {
   // ---------------- sub-posts ----------------
 
   await test('sub-post: breadcrumbs 课程资料 › 课程 › 本篇, no date / reading time, pdf shortcode embedded', async () => {
-    assert.equal(await go('/courses/modern-lab/franck-hertz/'), 200);
+    assert.equal(await go(`${ZH}/courses/modern-lab/franck-hertz/`), 200);
     const N = await navInfo(page);
     assert.equal(N.crumbText, '课程资料 › 近代物理实验 › 弗兰克-赫兹实验');
     assert.deepEqual(N.crumbs, [
-      { text: '课程资料', href: '/courses/' },
-      { text: '近代物理实验', href: '/courses/modern-lab/' },
+      { text: '课程资料', href: `${ZH}/courses/` },
+      { text: '近代物理实验', href: `${ZH}/courses/modern-lab/` },
       { text: '弗兰克-赫兹实验', href: null },
     ]);
     assert.equal(N.h1, '弗兰克-赫兹实验');
     assert.equal(N.hasDate, false);
     assert.equal(await page.locator('figure.pdf-embed iframe').count(), 1);
+    assert.match(await page.getAttribute('figure.pdf-embed iframe', 'src'), /&lang=zh&embed=1$/);
     await page.screenshot({ path: path.join(SHOTS, 'subpost-desktop.png'), fullPage: false });
 
-    await go('/courses/modern-lab/millikan/'); // has a date in its front matter
+    await go(`${ZH}/courses/modern-lab/millikan/`); // has a date in its front matter
     const M = await navInfo(page);
     assert.equal(M.hasDate, false);
     assert.doesNotMatch(M.text, /2025|分钟|min read/);
-    const html = fs.readFileSync(path.join(G.siteDir, 'courses/modern-lab/millikan/index.html'), 'utf8');
+    const html = fs.readFileSync(path.join(G.siteDir, 'zh/courses/modern-lab/millikan/index.html'), 'utf8');
     assert.doesNotMatch(html.split('<main')[1], /2025-03-01|March 1, 2025|2025年/);
   });
 
@@ -467,41 +485,44 @@ async function main() {
     const order = ['millikan', 'zeeman', 'franck-hertz'];
     const titles = { millikan: '密立根油滴实验', zeeman: '塞曼效应', 'franck-hertz': '弗兰克-赫兹实验' };
     for (let i = 0; i < order.length; i++) {
-      await go(`/courses/modern-lab/${order[i]}/`);
+      await go(`${ZH}/courses/modern-lab/${order[i]}/`);
       const N = await navInfo(page);
       assert.equal(N.navs, 1);
-      const want = (j, label) => (j < 0 || j >= order.length ? null : { href: `/courses/modern-lab/${order[j]}/`, title: titles[order[j]], label });
+      const want = (j, label) => (j < 0 || j >= order.length ? null : { href: `${ZH}/courses/modern-lab/${order[j]}/`, title: titles[order[j]], label });
       assert.deepEqual(N.prev, want(i - 1, '« 上一篇'), `prev of ${order[i]}`);
       assert.deepEqual(N.next, want(i + 1, '下一篇 »'), `next of ${order[i]}`);
     }
     // a course with a single sub-post has no pager at all
-    await go('/courses/quantum/ch1/');
+    await go(`${ZH}/courses/quantum/ch1/`);
     assert.equal((await navInfo(page)).navs, 0);
     // following "next" really navigates
-    await go('/courses/modern-lab/millikan/');
+    await go(`${ZH}/courses/modern-lab/millikan/`);
     await page.click('.course-paginav a.next');
-    await page.waitForURL(/\/courses\/modern-lab\/zeeman\/$/);
+    await page.waitForURL(/\/zh\/courses\/modern-lab\/zeeman\/$/);
   });
 
-  await test('draft sub-post is not built and not listed (zh + en, sitemap)', async () => {
+  await test('draft sub-post is not built and not listed (en + zh, sitemap)', async () => {
     assert.equal(await go('/courses/modern-lab/z-draft/'), 404);
-    assert.equal(await go('/en/courses/modern-lab/z-draft/'), 404);
+    assert.equal(await go(`${ZH}/courses/modern-lab/z-draft/`), 404);
     const sitemap = fs.readFileSync(path.join(G.siteDir, 'sitemap.xml'), 'utf8')
       + fs.readFileSync(path.join(G.siteDir, 'zh', 'sitemap.xml'), 'utf8')
       + fs.readFileSync(path.join(G.siteDir, 'en', 'sitemap.xml'), 'utf8');
     assert.doesNotMatch(sitemap, /z-draft/);
     assert.match(sitemap, /\/courses\/modern-lab\/zeeman\//);
+    assert.match(sitemap, /\/zh\/courses\/modern-lab\/zeeman\//);
   });
 
   await test('posts keep PaperMod behaviour (no course pager, no course breadcrumbs)', async () => {
-    assert.equal(await go('/posts/first-physics-note/'), 200);
-    assert.equal(await page.locator('.course-paginav, .course-breadcrumbs').count(), 0);
+    for (const p of ['/posts/first-physics-note/', `${ZH}/posts/first-physics-note/`]) {
+      assert.equal(await go(p), 200);
+      assert.equal(await page.locator('.course-paginav, .course-breadcrumbs').count(), 0);
+    }
   });
 
   // ---------------- English site ----------------
 
-  await test('en: labels in English, own group text, en overrides, fallback group/weight', async () => {
-    assert.equal(await go('/en/courses/'), 200);
+  await test('en (default language, at /): labels in English, own group text, en overrides, fallback group/weight', async () => {
+    assert.equal(await go('/courses/'), 200);
     const L = await landingInfo(page);
     assert.deepEqual(L.groups, [
       { title: '理论课', cards: ['Quantum Mechanics', '光学'] }, // quantum's _index.en.md has no group/weight → shared values
@@ -510,42 +531,44 @@ async function main() {
     ]);
     const by = Object.fromEntries(L.cards.map((c) => [c.title, c]));
     assert.equal(by['Modern Physics Lab'].meta, '3 posts · 4 files');
-    assert.equal(by['Modern Physics Lab'].href, '/en/courses/modern-lab/');
+    assert.equal(by['Modern Physics Lab'].href, '/courses/modern-lab/');
     assert.equal(by['Quantum Mechanics'].meta, '1 post');
     assert.equal(by['光学'].meta, '2 files');
     assert.equal(by['Quantum Mechanics'].desc, 'Solutions to the exercises');
     assert.match(L.introText, /How to Use/);
 
-    assert.equal(await go('/en/courses/modern-lab/'), 200);
+    assert.equal(await go('/courses/modern-lab/'), 200);
     const U = await unitInfo(page);
-    assert.deepEqual(U.crumbs.map((c) => [c.text, c.href]), [['Course Materials', '/en/courses/'], ['Modern Physics Lab', null]]);
+    assert.deepEqual(U.crumbs.map((c) => [c.text, c.href]), [['Course Materials', '/courses/'], ['Modern Physics Lab', null]]);
     assert.deepEqual(U.sections, ['Contents', 'Materials']);
     assert.match(U.intro, /A few of the experiments/);
-    assert.deepEqual(U.posts.map((p) => p.href), ['/en/courses/modern-lab/millikan/', '/en/courses/modern-lab/zeeman/', '/en/courses/modern-lab/franck-hertz/']);
+    assert.deepEqual(U.posts.map((p) => p.href), ['/courses/modern-lab/millikan/', '/courses/modern-lab/zeeman/', '/courses/modern-lab/franck-hertz/']);
     const cjk = U.files.find((f) => f.name === '实验 报告 1.pdf');
     assert.equal(cjk.href, viewerHref(MAT.cjk, 'en'));
-    assert.deepEqual(cjk.used, { label: 'Used in', title: '弗兰克-赫兹实验', href: '/en/courses/modern-lab/franck-hertz/' });
+    assert.deepEqual(cjk.used, { label: 'Used in', title: '弗兰克-赫兹实验', href: '/courses/modern-lab/franck-hertz/' });
     assert.equal(cjk.dlText, 'Download');
     assert.equal(U.files.find((f) => f.name === 'data.docx').href, fileHref(MAT.docx));
     await page.screenshot({ path: path.join(SHOTS, 'en-unit-desktop.png'), fullPage: true });
 
-    await go('/en/courses/modern-lab/zeeman/');
+    await go('/courses/modern-lab/zeeman/');
     const N = await navInfo(page);
     assert.equal(N.crumbText, 'Course Materials › Modern Physics Lab › 塞曼效应');
-    assert.deepEqual(N.prev, { href: '/en/courses/modern-lab/millikan/', title: '密立根油滴实验', label: '« Previous' });
-    assert.deepEqual(N.next, { href: '/en/courses/modern-lab/franck-hertz/', title: '弗兰克-赫兹实验', label: 'Next »' });
+    assert.deepEqual(N.prev, { href: '/courses/modern-lab/millikan/', title: '密立根油滴实验', label: '« Previous' });
+    assert.deepEqual(N.next, { href: '/courses/modern-lab/franck-hertz/', title: '弗兰克-赫兹实验', label: 'Next »' });
+    await go('/courses/modern-lab/franck-hertz/');
+    assert.match(await page.getAttribute('figure.pdf-embed iframe', 'src'), /&lang=en&embed=1$/, 'English sub-post embeds the English viewer');
 
-    await go('/en/courses/electronics/');
+    await go('/courses/electronics/');
     assert.equal((await unitInfo(page)).empty, 'Nothing has been posted for this course yet.');
 
-    await go('/en/courses/', P);
+    await go('/courses/', P);
     assert.equal((await landingInfo(page)).groupTitles, 0);
   });
 
   // ---------------- feeds ----------------
 
   await test('RSS and sitemaps are well-formed XML', async () => {
-    const files = ['index.xml', 'courses/index.xml', 'courses/modern-lab/index.xml', 'en/courses/modern-lab/index.xml', 'sitemap.xml', 'zh/sitemap.xml', 'en/sitemap.xml'];
+    const files = ['index.xml', 'courses/index.xml', 'courses/modern-lab/index.xml', 'zh/courses/modern-lab/index.xml', 'sitemap.xml', 'zh/sitemap.xml', 'en/sitemap.xml'];
     for (const f of files) {
       const xml = fs.readFileSync(path.join(G.siteDir, f), 'utf8');
       const err = await page.evaluate((s) => {
@@ -566,8 +589,8 @@ async function main() {
       const pctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
       const pp = await newPage(pctx, origins);
       for (const [p, shot, v] of [
-        ['/courses/', 'landing-grouped', G], ['/courses/', 'landing-plain', P], ['/courses/modern-lab/', 'unit', G],
-        ['/courses/modern-lab/millikan/', 'subpost', G], ['/en/courses/modern-lab/', 'en-unit', G], ['/courses/optics/', 'unit-materials-only', G],
+        [`${ZH}/courses/`, 'landing-grouped', G], [`${ZH}/courses/`, 'landing-plain', P], [`${ZH}/courses/modern-lab/`, 'unit', G],
+        [`${ZH}/courses/modern-lab/millikan/`, 'subpost', G], ['/courses/modern-lab/', 'en-unit', G], [`${ZH}/courses/optics/`, 'unit-materials-only', G],
       ]) {
         await pp.goto(v.mock.url + p, { waitUntil: 'load' });
         const s = await noHScroll(pp);
@@ -583,12 +606,12 @@ async function main() {
   await test('dark mode: cards and materials use the theme colours; screenshots', async () => {
     const dctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'dark' });
     const dp = await newPage(dctx, origins);
-    for (const [p, shot] of [['/courses/', 'landing-grouped'], ['/courses/modern-lab/', 'unit'], ['/courses/modern-lab/zeeman/', 'subpost']]) {
+    for (const [p, shot] of [[`${ZH}/courses/`, 'landing-grouped'], [`${ZH}/courses/modern-lab/`, 'unit'], [`${ZH}/courses/modern-lab/zeeman/`, 'subpost']]) {
       await dp.goto(G.mock.url + p, { waitUntil: 'load' });
       assert.equal(await dp.evaluate(() => document.documentElement.dataset.theme), 'dark');
       await dp.screenshot({ path: path.join(SHOTS, `${shot}-dark.png`), fullPage: true });
     }
-    await dp.goto(G.mock.url + '/courses/modern-lab/');
+    await dp.goto(G.mock.url + `${ZH}/courses/modern-lab/`);
     const colors = await dp.evaluate(() => {
       const bg = (s) => getComputedStyle(document.querySelector(s)).backgroundColor;
       const fg = (s) => getComputedStyle(document.querySelector(s)).color;
@@ -643,21 +666,24 @@ async function main() {
       const exportDir = mock.exportTo(path.join(dir, 'export'));
       const built = await buildSite({ repoDir: exportDir, outDir: path.join(dir, 'site'), baseURL: mock.url + '/' });
       const warns = (built.stdout + built.stderr).split('\n').filter((l) => /WARN|ERROR/.test(l));
-      assert.equal(warns.length, 2, 'exactly the two draft-course warnings (zh + en):\n' + warns.join('\n'));
+      assert.equal(warns.length, 2, 'exactly the two draft-course warnings (en + zh):\n' + warns.join('\n'));
       assert.ok(warns.every((w) => w.includes('漏出来的草稿课') && w.includes('cascade')), warns.join('\n'));
       const site = path.join(dir, 'site');
       const has = (p) => fs.existsSync(path.join(site, p, 'index.html'));
       const read = (p) => fs.readFileSync(path.join(site, p, 'index.html'), 'utf8');
-      assert.equal(has('courses/leaky'), false);
-      assert.equal(has('courses/hidden'), false);
-      assert.equal(has('courses/hidden/b'), false, 'the cascade hides the sub-post');
-      assert.equal(has('en/courses/hidden/b'), false);
-      assert.ok(!fs.readFileSync(path.join(site, 'index.xml'), 'utf8').includes('/courses/hidden/'));
+      for (const pre of ['', 'zh/']) {
+        assert.equal(has(`${pre}courses/leaky`), false);
+        assert.equal(has(`${pre}courses/hidden`), false);
+        assert.equal(has(`${pre}courses/hidden/b`), false, 'the cascade hides the sub-post');
+        assert.ok(!fs.readFileSync(path.join(site, pre, 'index.xml'), 'utf8').includes('/courses/hidden/'));
+      }
       // the leaked sub-post (no cascade) at least has no dead breadcrumb link to its unpublished course
-      const leak = read('courses/leaky/a');
-      assert.ok(!/href=""/.test(leak) && !/<a href="?"?>漏出来的草稿课/.test(leak), 'no empty breadcrumb link');
-      // landing: unique ids; Labs / labs / other are separate groups (labels shown as written), 其他 last
-      const landing = read('courses');
+      for (const pre of ['', 'zh/']) {
+        const leak = read(`${pre}courses/leaky/a`);
+        assert.ok(!/href=""/.test(leak) && !/<a href="?"?>漏出来的草稿课/.test(leak), 'no empty breadcrumb link');
+      }
+      // landing (Chinese site): unique ids; Labs / labs / other are separate groups (labels shown as written), 其他 last
+      const landing = read('zh/courses');
       const groups = [...landing.matchAll(/<h2 class="?course-group-title"? id="?([^" >]+)"?>([^<]+)</g)].map((m) => [m[1], m[2].trim()]);
       assert.deepEqual(groups.map((g) => g[1]), ['Labs', 'labs', 'other', '其他']);
       assert.equal(new Set(groups.map((g) => g[0])).size, 4, 'unique ids: ' + JSON.stringify(groups));
@@ -665,20 +691,22 @@ async function main() {
       for (const t of ['只有英文分组', '没有分组也没有顺序', '编码', '自定义资料']) assert.ok(otherCards.includes(t), `${t} in 其他 on zh`);
       assert.ok(!landing.includes('Seminars'), 'an en-only group never shows on the Chinese site');
       assert.ok(otherCards.indexOf('自定义资料') < otherCards.indexOf('没有分组也没有顺序'), 'no weight → last');
-      const enLanding = read('en/courses');
+      const enLanding = read('courses');
       assert.ok(/>\s*Seminars\s*</.test(enLanding), 'the English override shows its own group');
       // nested: the section is listed on its parent unit page, and its materials come from courses/nest/sub/
-      const nest = read('courses/nest');
-      assert.ok(nest.includes('/courses/nest/sub/') && nest.includes('/courses/nest/z/'), 'nested section + direct sub-post listed');
-      const sub = read('courses/nest/sub');
+      const nest = read('zh/courses/nest');
+      assert.ok(nest.includes('/zh/courses/nest/sub/') && nest.includes('/zh/courses/nest/z/'), 'nested section + direct sub-post listed');
+      const sub = read('zh/courses/nest/sub');
       assert.ok(sub.includes('right.pdf') && !sub.includes('wrong.pdf'), 'nested section uses its own materials folder');
       // encodings written by the admin are recognised as "used in"
-      const enc = read('courses/enc');
+      const enc = read('zh/courses/enc');
       const row = (name) => (new RegExp(`<li class="?course-material"?[^>]*>(?:(?!</li>)[\\s\\S])*${name.replace(/[()]/g, '\\$&')}(?:(?!</li>)[\\s\\S])*</li>`).exec(enc) || [''])[0];
       assert.match(row('图 一.png'), /course-material-post[\s\S]*图片引用/, 'mdDest-encoded image reference');
       assert.match(row('a(1).pdf'), /course-material-post[\s\S]*预览链接/, 'encodeURIComponent viewer link');
       // custom materialsDir
-      assert.ok(read('courses/custom').includes('/documents/shared/s.pdf') || read('courses/custom').includes('%2Fdocuments%2Fshared%2Fs.pdf'));
+      for (const pre of ['', 'zh/']) {
+        assert.ok(read(`${pre}courses/custom`).includes('/documents/shared/s.pdf') || read(`${pre}courses/custom`).includes('%2Fdocuments%2Fshared%2Fs.pdf'));
+      }
     } finally {
       await mock.close();
     }

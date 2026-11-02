@@ -6,7 +6,7 @@
  *   #/courses?course=<网址名>      一门课：子推文（顺序、编辑、删除、新子推文）、资料列表（上传 / 删除 / 复制链接）、批量上传
  *
  * 文件约定见 courses.js（纯函数模型）。所有修改都是一次 ctx.publish（一个提交）：
- *   新建课程（_index.md + 可选 _index.en.md）、保存顺序（只改 weight 那一行，注释原样保留）、改分组、
+ *   新建课程（_index.md + 可选的另一种语言 _index.<语言>.md，例如 _index.zh.md）、保存顺序（只改 weight 那一行，注释原样保留）、改分组、
  *   删除子推文（全部语言版本）、批量上传（文件 + 子推文一起）。
  * 上传共用 uploads.js：压缩图片、大小检查、.gitignore 提醒、拒绝网页 / 脚本 / SVG。
  *
@@ -22,6 +22,7 @@ import {
 } from '../ui.js';
 import {
   languageStatus, statusText, resolveForLang, isDraftFm, isValidSlug, sitePathFor, referencesSitePath, variantPath,
+  langSitePath, langSiteUrl,
 } from '../content.js';
 import { safeFileName, extOf } from '../images.js';
 import {
@@ -37,6 +38,9 @@ import {
 import { readFrontMatters, editHash, skeletonRows } from './posts.js';
 
 const COMPRESS_PREF_KEY = 'admin.files.compress';
+/** 新建课程对话框里的示例文字：按这一栏的语言（不按哪个是默认语言）。 */
+const COURSE_NAME_EXAMPLE = { zh: '例如：近代物理实验', en: 'e.g. Modern Physics Lab' };
+const COURSE_DESC_EXAMPLE = { zh: '一句话介绍，显示在课程卡片上', en: 'One line for the course card' };
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp']);
 
 function readPref(key, fallback) {
@@ -595,7 +599,9 @@ export default async function mount(container, params, ctx) {
 
   function openNewCourse() {
     if (ctx.isPublishing && ctx.isPublishing()) { toast('正在发布，请稍候', { type: 'warning' }); return; }
-    const other = langs.find((l) => l !== ctx.defaultLang) || null;
+    // 两栏名称：默认语言（必填，写进共用的 _index.md）+ 另一种语言（可选，写进 _index.<语言>.md）。testid 带这一栏的语言代码
+    const main = ctx.defaultLang;
+    const other = langs.find((l) => l !== main) || null;
     let slugTouched = false;
     const mk = (id, label, input, { hint, optional } = {}) => {
       const err = h('div', { class: 'error', role: 'alert' });
@@ -606,40 +612,42 @@ export default async function mount(container, params, ctx) {
         setError(msg) { err.textContent = msg || ''; err.hidden = !msg; input.setAttribute('aria-invalid', msg ? 'true' : 'false'); },
       };
     };
-    const zh = h('input', { class: 'input', type: 'text', maxlength: 80, autocomplete: 'off', placeholder: '例如：近代物理实验', 'data-autofocus': true, dataset: { testid: 'new-course-name-zh' } });
-    const en = h('input', { class: 'input', type: 'text', maxlength: 80, autocomplete: 'off', placeholder: 'e.g. Modern Physics Lab', dataset: { testid: 'new-course-name-en' } });
+    const mainName = h('input', { class: 'input', type: 'text', maxlength: 80, autocomplete: 'off', placeholder: COURSE_NAME_EXAMPLE[main] || '', 'data-autofocus': true, dataset: { testid: `new-course-name-${main}` } });
+    const otherName = h('input', { class: 'input', type: 'text', maxlength: 80, autocomplete: 'off', placeholder: COURSE_NAME_EXAMPLE[other] || '', dataset: { testid: `new-course-name-${other}` } });
     const slugIn = h('input', { class: 'input mono', type: 'text', maxlength: 60, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'modern-physics-lab', dataset: { testid: 'new-course-slug' } });
     const urlPreview = h('div', { class: 'hint lists-url-preview', dataset: { testid: 'new-course-url' } });
     const gi = groupInput('', 'new-course-group');
-    const desc = h('input', { class: 'input', type: 'text', maxlength: 160, autocomplete: 'off', placeholder: '一句话介绍，显示在课程卡片上', dataset: { testid: 'new-course-desc' } });
-    const descEn = h('input', { class: 'input', type: 'text', maxlength: 160, autocomplete: 'off', placeholder: 'One line for the English site', dataset: { testid: 'new-course-desc-en' } });
-    const fZh = mk('nc-zh', `${ctx.langName(ctx.defaultLang)}名称`, zh);
-    const fEn = other ? mk('nc-en', `${ctx.langName(other)}名称`, en, { optional: true, hint: `填了就同时生成${ctx.siteLabel(other)}的版本（_index.${other}.md），并用它生成网址` }) : null;
+    const desc = h('input', { class: 'input', type: 'text', maxlength: 160, autocomplete: 'off', placeholder: COURSE_DESC_EXAMPLE[main] || COURSE_DESC_EXAMPLE.zh, dataset: { testid: 'new-course-desc' } });
+    const otherDesc = h('input', { class: 'input', type: 'text', maxlength: 160, autocomplete: 'off', placeholder: COURSE_DESC_EXAMPLE[other] || '', dataset: { testid: `new-course-desc-${other}` } });
+    const fMain = mk('nc-name', `${ctx.langName(main)}名称`, mainName);
+    const fOther = other ? mk('nc-name-other', `${ctx.langName(other)}名称`, otherName, { optional: true, hint: `填了就同时生成${ctx.siteLabel(other)}的版本（_index.${other}.md）` }) : null;
     const fSlug = mk('nc-slug', '网址', slugIn, { hint: '只能用小写英文字母、数字和 -，以后不能改' });
     fSlug.el.appendChild(urlPreview);
     const fGroup = mk('nc-group', '分组', gi.input, { optional: true, hint: '自由填写，例如「实验课」「理论课」「大三」；同名的课程在网站上放在一起。不填也可以。' });
     // groupInput 自带 datalist：把它放回字段里
     fGroup.el.insertBefore(gi.el, fGroup.el.children[1] || null);
     const fDesc = mk('nc-desc', '一句话简介', desc, { optional: true });
-    const fDescEn = other ? mk('nc-desc-en', `${ctx.langName(other)}简介`, descEn, { optional: true, hint: `只在填了${ctx.langName(other)}名称时使用` }) : null;
+    const fOtherDesc = other ? mk('nc-desc-other', `${ctx.langName(other)}简介`, otherDesc, { optional: true, hint: `只在填了${ctx.langName(other)}名称时使用` }) : null;
 
     const updatePreview = () => {
       const s = slugIn.value.trim();
-      urlPreview.textContent = s ? '网站上的地址：' + langs.map((l) => `/${l === ctx.defaultLang ? '' : l + '/'}courses/${s}/`).join('  ·  ') : '';
+      urlPreview.textContent = s ? '网站上的地址：' + langs.map((l) => langSitePath(`courses/${s}/`, l, main)).join('  ·  ') : '';
     };
+    // 网址建议：优先用英文名称（不管它是不是默认语言那一栏），其次另一栏名称里的字母数字
     const suggest = () => {
       if (slugTouched) return;
-      slugIn.value = courseSlugSuggestion(en.value, zh.value);
+      const enName = main === 'en' ? mainName.value : other === 'en' ? otherName.value : '';
+      slugIn.value = courseSlugSuggestion(enName, main === 'en' ? otherName.value : mainName.value);
       updatePreview();
     };
-    zh.addEventListener('input', () => { fZh.setError(null); suggest(); });
-    en.addEventListener('input', () => { suggest(); });
+    mainName.addEventListener('input', () => { fMain.setError(null); suggest(); });
+    otherName.addEventListener('input', () => { suggest(); });
     slugIn.addEventListener('input', () => { slugTouched = slugIn.value.trim() !== ''; fSlug.setError(null); updatePreview(); });
 
     const validate = () => {
       let ok = true;
-      const title = zh.value.trim();
-      fZh.setError(title ? null : `请填写${ctx.langName(ctx.defaultLang)}名称`);
+      const title = mainName.value.trim();
+      fMain.setError(title ? null : `请填写${ctx.langName(main)}名称`);
       if (!title) ok = false;
       const s = slugIn.value.trim();
       let e = null;
@@ -651,13 +659,13 @@ export default async function mount(container, params, ctx) {
       fSlug.setError(e);
       if (e) ok = false;
       return ok ? {
-        title, enTitle: other ? en.value.trim() : '', slug: s, group: canonicalGroup(gi.input.value, existingGroups()),
-        description: desc.value.trim(), enDescription: other ? descEn.value.trim() : '',
+        title, otherTitle: other ? otherName.value.trim() : '', slug: s, group: canonicalGroup(gi.input.value, existingGroups()),
+        description: desc.value.trim(), otherDescription: other ? otherDesc.value.trim() : '',
       } : null;
     };
 
     const form = h('form', { class: 'stack lists-new-form', novalidate: true },
-      fZh.el, fEn && fEn.el, fSlug.el, fGroup.el, fDesc.el, fDescEn && fDescEn.el,
+      fMain.el, fOther && fOther.el, fSlug.el, fGroup.el, fDesc.el, fOtherDesc && fOtherDesc.el,
       h('p', { class: 'muted small' }, '创建后会打开这门课：可以批量上传资料（每个文件生成一篇子推文），也可以写课程介绍。'));
     form.addEventListener('submit', (e) => e.preventDefault());
     let m;
@@ -687,7 +695,7 @@ export default async function mount(container, params, ctx) {
     });
   }
 
-  async function createCourse({ title, enTitle, slug: s, group, description, enDescription }) {
+  async function createCourse({ title, otherTitle, slug: s, group, description, otherDescription }) {
     const dir = `${COURSES_DIR}/${s}`;
     const weight = nextWeights((state.courses || []).map((c) => c.weight), 1)[0];
     const changes = [{
@@ -696,10 +704,10 @@ export default async function mount(container, params, ctx) {
       baseSha: null,
     }];
     const other = langs.find((l) => l !== ctx.defaultLang);
-    if (other && enTitle) {
+    if (other && otherTitle) {
       changes.push({
         path: variantPath(dir, '_index', other),
-        content: courseIndexDocument({ title: enTitle, description: enDescription, group, weight }),
+        content: courseIndexDocument({ title: otherTitle, description: otherDescription, group, weight }),
         baseSha: null,
       });
     }
@@ -709,7 +717,7 @@ export default async function mount(container, params, ctx) {
         message: `admin: 新建课程《${title}》`,
         changes,
         summary: changes.map((c) => c.path),
-        viewUrl: `${ctx.siteUrl.replace(/\/?$/, '/')}courses/${s}/`, viewLabel: '查看课程',
+        viewUrl: langSiteUrl(ctx.siteUrl, `courses/${s}/`, ctx.defaultLang, ctx.defaultLang), viewLabel: '查看课程',
       });
     } catch {
       return false;
@@ -736,8 +744,7 @@ export default async function mount(container, params, ctx) {
   }
 
   function siteCourseUrl(course, lang = ctx.defaultLang) {
-    const prefix = lang === ctx.defaultLang ? '' : `${lang}/`;
-    return `${ctx.siteUrl.replace(/\/?$/, '/')}${prefix}courses/${encodeURIComponent(course.slug)}/`;
+    return langSiteUrl(ctx.siteUrl, `courses/${encodeURIComponent(course.slug)}/`, lang, ctx.defaultLang);
   }
 
   function renderDetail() {

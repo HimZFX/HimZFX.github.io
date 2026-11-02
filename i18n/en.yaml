@@ -35,3 +35,100 @@
   translation: "Nothing has been posted for this course yet."
 - id: courses_draft
   translation: "Draft"
+
+# ---------- {{< pdf >}} shortcode (layouts/shortcodes/pdf.html) ----------
+- id: pdf_preview_title
+  translation: "Preview: "
+- id: pdf_open_new
+  translation: "Open in new tab"
+- id: pdf_download
+  translation: "Download"
+
+# ---------- Language hint (layouts/partials/features/lang-hint.html) ----------
+# Shown on ENGLISH pages to readers whose browser prefers another language, so each text is written in
+# THAT language: lang_hint_<code> / lang_hint_close_<code> (code = the language in languages.toml).
+- id: lang_hint_zh
+  translation: "本页有中文版"
+- id: lang_hint_close_zh
+  translation: "关闭"
+
+# ---------- Publications / talks / news (layouts/publications|talks|news/, layouts/partials/academic/) ----------
+- id: pub_group_refereed
+  translation: "Refereed publications"
+- id: pub_group_pending
+  translation: "Submitted & in preparation"
+- id: pub_group_other
+  translation: "Proceedings & other"
+- id: pub_undated
+  translation: "Undated"
+- id: pub_status_accepted
+  translation: "Accepted"
+- id: pub_status_submitted
+  translation: "Submitted"
+- id: pub_status_inprep
+  translation: "In preparation"
+- id: pub_kind_proceedings
+  translation: "Proceedings"
+- id: pub_kind_preprint
+  translation: "Preprint"
+- id: pub_kind_thesis
+  translation: "Thesis"
+- id: pub_selected
+  translation: "Selected"
+# after the last listed author of a truncated list; the leading ", " / " " is part of the text
+- id: pub_et_al
+  translation: ", et al."
+- id: pub_author_count
+  translation:
+    one: " ({{ .Count }} author)"
+    other: " ({{ .Count }} authors)"
+- id: pub_code
+  translation: "Code"
+- id: pub_slides
+  translation: "Slides"
+- id: pub_copy
+  translation: "Copy"
+- id: pub_copied
+  translation: "Copied"
+- id: pub_profiles
+  translation: "Publication lists elsewhere"
+- id: pub_empty
+  translation: "No publications listed yet."
+- id: talk_upcoming
+  translation: "Upcoming"
+- id: talk_undated
+  translation: "Undated"
+- id: talk_kind_talk
+  translation: "Talk"
+- id: talk_kind_poster
+  translation: "Poster"
+- id: talk_kind_seminar
+  translation: "Seminar"
+- id: talk_kind_invited
+  translation: "Invited talk"
+- id: talk_kind_outreach
+  translation: "Outreach"
+- id: talk_slides
+  translation: "Slides"
+- id: talk_video
+  translation: "Video"
+- id: talk_event
+  translation: "Event"
+- id: talk_abstract
+  translation: "Abstract"
+- id: talk_empty
+  translation: "No talks listed yet."
+- id: news_title
+  translation: "News"
+- id: news_all
+  translation: "All news"
+- id: news_more
+  translation: "More"
+- id: news_empty
+  translation: "Nothing here yet."
+- id: cv_button
+  translation: "CV"
+
+# ---------- Background animation (assets/js/background/core.js) ----------
+- id: bg_toggle
+  translation: "Background animation"

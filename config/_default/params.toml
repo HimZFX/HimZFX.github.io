@@ -1,8 +1,8 @@
 # ============================================================
 # 主题与功能参数
 #
-# 这里的参数对所有语言生效。某个语言要不一样时，
-# 到 languages.toml 的 [<语言>.params] 下覆盖对应项即可。
+# 这里的参数是默认语言（英文站）的值，也对所有语言生效。某个语言要不一样时，
+# 到 languages.toml 的 [<语言>.params] 下覆盖对应项即可（例如中文站的评论区语言）。
 # 带「页面可覆盖」标记的开关，也可以在单个页面的 front matter 里改写。
 # ============================================================
 
@@ -11,6 +11,10 @@
 # 所以这些顶层开关必须放在第一个 [表头] 之前。
 env = "production"       # PaperMod：允许搜索引擎收录
 defaultTheme = "auto"    # 深浅色跟随系统
+
+# 简历（CV）：简历 PDF 的网站路径，例如 "/documents/cv.pdf"（文件放在 static/documents/ 下，或用管理后台「资料」上传）。
+# 填了以后首页按钮后面会多一个「CV / 简历」按钮，用在线预览页打开；留空 = 不显示。也可以写 https:// 网址。
+cv = ""
 
 # 数学公式（KaTeX）：全站默认开启。          页面可覆盖：math: false
 # 某页确定没有公式时写 math: false，可少加载 KaTeX。
@@ -32,7 +36,7 @@ comments = false
   imageTitle = "Zhong Fangxiong"
 
   # 站内链接写成「不以 / 开头」的相对路径（如 "research/"）：
-  # 中文首页会跳到 /research/，英文首页自动跳到 /en/research/。
+  # 英文首页会跳到 /research/，中文首页自动跳到 /zh/research/。
   [[profileMode.buttons]]
     name = "My Research"
     url = "research/"
@@ -70,7 +74,7 @@ comments = false
   categoryId = "DIC_kwDOQjBi1M4Czb7I"
   mapping = "pathname"
   theme = "preferred_color_scheme"
-  lang = "zh-CN"           # 英文站在 languages.toml 中覆盖为 "en"
+  lang = "en"              # 中文站在 languages.toml 中覆盖为 "zh-CN"
   # true：同一篇文章的中英文页面共用一个评论区（推荐，与双语共享机制一致）
   # false：按网址区分，中英文页面各自独立的评论区
   sharedThread = true
@@ -101,3 +105,26 @@ comments = false
     { emoji = "🎃", from = "10-25", to = "10-31" },   # 万圣节
     { emoji = "🎄", from = "12-20", to = "12-31" },   # 圣诞
   ]
+
+
+# ============================================================
+# 学术模块：论文 /publications/、报告与海报 /talks/、近况 /news/
+# 内容是 data/publications/、data/talks/、data/news/ 下的 YAML 文件（每条一个文件，格式见 SITE_GUIDE.md），
+# 页面模板在 layouts/publications|talks|news/ 和 layouts/partials/academic/。
+# 这三个页面默认不在导航菜单里：有内容以后，在管理后台（或页面的 front matter）里打开菜单项即可。
+# ============================================================
+
+# ---------- 论文列表 ----------
+[publications]
+  myNames = []        # 你的名字在作者列表里的各种写法，会加粗，例如 ["Zhong, F.", "Zhong, Fangxiong"]
+  ads = ""            # 页首的 NASA ADS 链接：网址，或作者名（例如 "Zhong, F."，链接到 ADS 的作者检索）
+  orcid = ""          # ORCID：网址，或 iD（0000-0000-0000-0000）
+  scholar = ""        # Google Scholar：网址，或个人主页网址里 user= 后面的编号
+  groupBy = "kind"    # "kind"：同行评审 / 已投稿与准备中 / 会议论文与其他；"year"：按年份分组
+  # 作者很多时的截断（可选）：超过 maxAuthors 位只显示前 firstAuthors 位 + et al.，你的名字始终可见
+  # maxAuthors = 8
+  # firstAuthors = 3
+
+# ---------- 近况 ----------
+[news]
+  homeCount = 5       # 首页头像下方显示最新的几条近况；0 = 首页不显示

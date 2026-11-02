@@ -6,8 +6,17 @@
 //   → change the avatar and the subtitle → switch the background cassette → reorder the menu → save a draft post and delete it
 //   from the list → discard a local (browser) draft → export + Hugo build → check the BUILT site (both
 //   languages, served by the mock) reflects every change, and every original config comment survived →
-//   as a visitor on /posts/<slug>/ and /en/posts/<slug>/: the preview link opens the viewer, which renders the
-//   PDF, and the embedded reader renders it too (in the page's language), never touching the admin token.
+//   as a visitor on /zh/posts/<slug>/ (Chinese) and /posts/<slug>/ (English, the default language): the preview link
+//   opens the viewer, which renders the PDF, and the embedded reader renders it too (in the page's language), never
+//   touching the admin token.
+//   学术 (academic modules): paste an ADS BibTeX export → paper + PDF saved in one commit → 论文设置 (my name) → menu on for
+//   论文 and 报告与海报 → a talk with an uploaded slides PDF → 2 news items → 简历 CV upload → ORCID + NASA ADS icons →
+//   build → visitor on / and /zh/: menu items, home news + CV button (the viewer opens the CV), icons, publications with
+//   my name in bold and the PDF in the viewer, talks with the slides in the viewer; old /en/<path>/ links (query, hash,
+//   /en/, /en/viewer/?file=…) land on the new English URLs; a zh-CN browser on an English page sees the language hint.
+//
+// Languages: English is the default language (hugo.toml) and lives at /, Chinese at /zh/. File naming is unchanged:
+// the post is written as the shared xxx.md (Chinese here) + its English version xxx.en.md.
 //
 // After every publish the mock's files are checked. Run from the repo root:
 //   node tests/admin/e2e-journey.mjs
@@ -61,6 +70,35 @@ const REPORTS = [
   { file: '实验2 弗兰克-赫兹实验.pdf', title: '实验2 弗兰克 赫兹实验', slug: 'item-2', saved: '实验2-弗兰克-赫兹实验.pdf' },
 ];
 let REPORT_BYTES = [];
+// 学术：一篇论文（从 ADS 粘贴 BibTeX + 上传 PDF）、一个带幻灯片 PDF 的报告、两条近况、简历 CV、ORCID + NASA ADS 图标
+const PAPER_BIB = String.raw`@ARTICLE{2025ApJ...980..123Z,
+       author = {{Zhong}, Fangxiong and {Doe}, Jane and {Roe}, R.},
+        title = "{Neutral Hydrogen in Dark Galaxies with FAST}",
+      journal = {\apj},
+         year = 2025,
+        month = feb,
+       volume = {980},
+          eid = {123},
+        pages = {123},
+          doi = {10.3847/1538-4357/adf00d},
+archivePrefix = {arXiv},
+       eprint = {2501.01234},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2025ApJ...980..123Z},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}`;
+const PAPER_ID = '2025apj-980-123z';
+const PAPER_TITLE = 'Neutral Hydrogen in Dark Galaxies with FAST';
+const PAPER_PDF = 'static/documents/papers/Zhong-2025-FAST.pdf';
+const TALK_ID = '2025-06-10-cosmic-dawn-2025';
+const TALK_TITLE = 'HI in Dark Galaxies';
+const TALK_PDF = 'static/documents/talks/cosmic-dawn-slides.pdf';
+// two news items: the older one is English-only with a Markdown link whose URL has a query with & (regression: it used to
+// come out as &amp;amp;); the newer one has a Chinese override and links to the publications page in the page's language
+const NEWS_OLD = { date: '2025-06-10', text: 'Gave a talk at [Cosmic Dawn](https://example.org/cd?year=2025&track=hi).', id: '2025-06-10-gave-a-talk-at-cosmic-dawn' };
+const NEWS_NEW = { date: '2025-07-01', text: 'Our FAST paper was accepted by **ApJ**!', zh: '我们的 FAST 论文被 **ApJ** 接收了！', link: 'publications/', id: '2025-07-01-our-fast-paper-was-accepted-by' };
+const CV_FILE = 'static/documents/cv/Zhong-CV.pdf';
+const ORCID = 'https://orcid.org/0000-0002-1825-0097';
+const ADS_LINK = 'https://ui.adsabs.harvard.edu/search/q=author%3A%22Zhong%2C%20F.%22&sort=date%20desc';
 
 // ---------------------------------------------------------------------------
 // tiny runner (steps depend on each other: stop at the first failure)
@@ -187,13 +225,20 @@ function splitMd(text) {
 const commentLines = (text) => text.split('\n').filter((l) => /^\s*#/.test(l) || /\s#\s/.test(l));
 
 /** Lines of `before` must appear in `after` in the same order. Returns the missing ones. */
+// A `key = value  # comment` line counts as kept when the same key still carries the same trailing comment (its value may
+// have been changed by the admin, e.g. myNames = [] → myNames = ["Zhong, F."]).
+const inlineComment = (l) => (/^\s*#/.test(l) ? null : (/\s#\s.*$/.exec(l) || [null])[0]);
+const keyOf = (l) => (/^\s*([A-Za-z0-9_.-]+)\s*=/.exec(l) || [])[1];
+const sameCommentLine = (x, line) => x === line
+  || (inlineComment(line) !== null && keyOf(line) !== undefined && keyOf(x) === keyOf(line) && x.endsWith(inlineComment(line)));
+
 function missingInOrder(beforeLines, after) {
   const a = after.split('\n');
   let j = 0;
   const missing = [];
   for (const line of beforeLines) {
     let k = j;
-    while (k < a.length && a[k] !== line) k++;
+    while (k < a.length && !sameCommentLine(a[k], line)) k++;
     if (k === a.length) missing.push(line);
     else j = k + 1;
   }
@@ -204,7 +249,7 @@ function navItems(html) {
   const m = /<ul id=["']?menu["']?[^>]*>([\s\S]*?)<\/ul>/.exec(html);
   assert.ok(m, 'nav menu not found in built page');
   return [...m[1].matchAll(/<a\b[^>]*href=["']?([^"' >]+)["']?[^>]*>([\s\S]*?)<\/a>/g)]
-    .map((x) => ({ href: x[1], text: x[2].replace(/<[^>]+>/g, '').trim() }));
+    .map((x) => ({ href: x[1], text: x[2].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').trim() }));
 }
 
 async function fetchSite(mock, p) {
@@ -392,7 +437,7 @@ async function main() {
       assert.match(en.body, /tie geometry to matter/);
       // the shared file is untouched
       assert.match(mock.readFile(POST), new RegExp(`title: "${TITLE_ZH}"`));
-      assert.match(await page.textContent(tid('editor-explain')), /中文站显示：共用版本 · 英文站显示：英文专属/);
+      assert.match(await page.textContent(tid('editor-explain')), /英文站显示：英文专属 · 中文站显示：共用版本/);
     });
 
     // -----------------------------------------------------------------------
@@ -401,10 +446,12 @@ async function main() {
       const row = `${tid('post-row')}[data-key="content/posts/${SLUG}"]`;
       await page.waitForSelector(row);
       const text = await page.textContent(row);
-      assert.ok(text.includes(TITLE_ZH), text);
+      // the list shows (and 编辑 opens) the default-language version: English
+      assert.ok(text.includes(TITLE_EN), text);
       assert.match(text, /中英分开/);
       assert.match(text, /已发表/);
-      assert.equal(await page.getAttribute(`${row} ${tid('post-edit')}`, 'href'), '#/edit?path=' + encodeURIComponent(POST));
+      assert.equal(await page.getAttribute(`${row} ${tid('post-edit')}`, 'href'), '#/edit?path=' + encodeURIComponent(POST_EN));
+      assert.equal(await page.getAttribute(`${row} ${tid('post-view')}`, 'href'), `${mock.url}/posts/${SLUG}/`);
     });
 
     // -----------------------------------------------------------------------
@@ -432,7 +479,10 @@ async function main() {
       await nav(page, 'posts');
       await page.click(`${tid('post-row')}[data-key="content/posts/${SLUG}"] ${tid('post-edit')}`);
       await waitEditor(page);
-      assert.equal(await page.inputValue(tid('editor-title')), TITLE_ZH, 'the zh (shared) version opens');
+      assert.equal(await page.inputValue(tid('editor-title')), TITLE_EN, 'the English (default-language) version opens');
+      await page.click(tid('editor-tab-shared'));
+      await page.waitForSelector(`${tid('editor-tab-shared')}.active`);
+      assert.equal(await page.inputValue(tid('editor-title')), TITLE_ZH, 'the shared (Chinese) version');
       await vditor.caretToEnd(page);
       await page.keyboard.type('讲义下载：', { delay: 5 });
       await insertPdf(page, 'link');
@@ -445,7 +495,9 @@ async function main() {
       assert.equal(commit.message, `admin: 更新《${TITLE_ZH}》（共用版本）`);
       assert.deepEqual(commit.changes.map((c) => c.path), [POST], 'the PDF is already in the repo → only the post');
       const { body } = splitMd(mock.readFile(POST));
+      // the shared version is shown on both sites → no lang: the viewer follows the page it is opened from
       assert.ok(body.includes(`[${PDF_NAME}](${PDF_VIEWER})`), body);
+      assert.ok(!body.includes(`${PDF_VIEWER}&lang=`), body);
       assert.ok(body.includes(`\n\n${PDF_EMBED}\n`), 'the embed is its own paragraph:\n' + body);
       assert.match(body, /讲义下载/);
       assert.match(body, new RegExp(`/images/posts/${SLUG}/`), 'image link kept');
@@ -597,23 +649,25 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
-    await step('课程: create 近代物理实验 (group 实验课, + English) → batch upload 2 reports → 2 sub-posts in ONE commit', async () => {
+    await step('课程: create Modern Physics Lab / 近代物理实验 (group 实验课) → batch upload 2 reports → 2 sub-posts in ONE commit', async () => {
       await nav(page, 'courses');
       await page.waitForSelector('body[data-courses-ready="list"]', { state: 'attached' });
       await page.click(tid('courses-new'));
-      await page.fill(tid('new-course-name-zh'), COURSE_ZH);
+      // required name = the default language (English) → shared _index.md; the Chinese name → _index.zh.md
       await page.fill(tid('new-course-name-en'), COURSE_EN);
+      await page.fill(tid('new-course-name-zh'), COURSE_ZH);
       assert.equal(await page.inputValue(tid('new-course-slug')), COURSE);
       await page.fill(tid('new-course-group'), COURSE_GROUP);
-      await page.fill(tid('new-course-desc'), '大三上学期 · 每个实验一篇报告');
-      await page.fill(tid('new-course-desc-en'), 'One report per experiment');
+      await page.fill(tid('new-course-desc'), 'One report per experiment');
+      await page.fill(tid('new-course-desc-zh'), '大三上学期 · 每个实验一篇报告');
       const c1 = await clickAndCommit(page, mock, tid('new-course-ok'));
-      assert.deepEqual(c1.changes.map((x) => x.path).sort(), [`content/courses/${COURSE}/_index.en.md`, `content/courses/${COURSE}/_index.md`]);
+      assert.equal(c1.message, `admin: 新建课程《${COURSE_EN}》`);
+      assert.deepEqual(c1.changes.map((x) => x.path).sort(), [`content/courses/${COURSE}/_index.md`, `content/courses/${COURSE}/_index.zh.md`]);
       // exactly the front matter the site layouts read: title / description / group / weight, no menu
       assert.equal(mock.readFile(`content/courses/${COURSE}/_index.md`),
-        `---\ntitle: "${COURSE_ZH}"\ndescription: "大三上学期 · 每个实验一篇报告"\ngroup: "${COURSE_GROUP}"\nweight: 10\n---\n`);
-      assert.equal(mock.readFile(`content/courses/${COURSE}/_index.en.md`),
         `---\ntitle: "${COURSE_EN}"\ndescription: "One report per experiment"\ngroup: "${COURSE_GROUP}"\nweight: 10\n---\n`);
+      assert.equal(mock.readFile(`content/courses/${COURSE}/_index.zh.md`),
+        `---\ntitle: "${COURSE_ZH}"\ndescription: "大三上学期 · 每个实验一篇报告"\ngroup: "${COURSE_GROUP}"\nweight: 10\n---\n`);
       await page.waitForSelector('body[data-courses-ready="detail"]', { state: 'attached' });
       assert.equal(await page.evaluate(() => location.hash), `#/courses?course=${COURSE}`);
 
@@ -642,9 +696,152 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
+    const pickFile = async (sel, file) => {
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click(sel)]);
+      await chooser.setFiles(file);
+    };
+    await step('学术 · 论文: paste an ADS BibTeX export → fields filled → upload the PDF → 保存并发布 (YAML + PDF in ONE commit)', async () => {
+      await nav(page, 'academic');
+      await page.waitForSelector(tid('academic-list-publications'));
+      await page.click(tid('pub-add'));
+      await page.waitForSelector(tid('pub-form'));
+      await page.fill(tid('pub-bibtex'), PAPER_BIB);
+      await until(async () => (await page.inputValue(tid('pub-title'))) === PAPER_TITLE, { msg: 'BibTeX parsed into the form' });
+      const v = (k) => page.inputValue(tid(`pub-${k}`));
+      assert.equal(await v('authors'), 'Zhong, F.\nDoe, J.\nRoe, R.');
+      assert.deepEqual([await v('year'), await v('month'), await v('venue'), await v('volume'), await v('status'), await v('kind')],
+        ['2025', '2', 'ApJ', '980', 'published', 'refereed']);
+      assert.deepEqual([await v('arxiv'), await v('ads'), await v('doi'), await v('id')], ['2501.01234', '2025ApJ...980..123Z', '10.3847/1538-4357/adf00d', PAPER_ID]);
+      await pickFile(tid('pub-pdf-upload'), { name: 'Zhong 2025 FAST.pdf', mimeType: 'application/pdf', buffer: PDF_BYTES });
+      await until(async () => (await v('pdf')) === '/documents/papers/Zhong-2025-FAST.pdf', { msg: 'PDF path filled' });
+      const c = await clickAndCommit(page, mock, tid('pub-form-save'));
+      assert.equal(c.message, `admin: 添加论文《${PAPER_TITLE}》`);
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), [`data/publications/${PAPER_ID}.yaml`, PAPER_PDF]);
+      const y = mock.readFile(`data/publications/${PAPER_ID}.yaml`);
+      assert.match(y, /^authors:\n {2}- "Zhong, F."\n {2}- "Doe, J."\n {2}- "Roe, R."$/m);
+      assert.match(y, /^pdf: "\/documents\/papers\/Zhong-2025-FAST\.pdf"$/m);
+      assert.match(y, /^bibtex: \|-\n {2}@ARTICLE\{2025ApJ\.\.\.980\.\.123Z,$/m, 'raw BibTeX kept');
+      assert.equal(Buffer.compare(mock.readBytes(PAPER_PDF), PDF_BYTES), 0, 'paper PDF byte-exact');
+      await page.waitForSelector(`${tid('pub-row')}[data-id="${PAPER_ID}"]`);
+    });
+
+    await step('学术 · 论文设置 (my name in bold) → 在顶部菜单显示 for 论文 and 报告与海报 (both _index files, surgical)', async () => {
+      const before = mock.readFile('config/_default/params.toml');
+      await page.click(`${tid('academic-settings-publications')} summary`);
+      await page.fill(tid('pub-myNames'), 'Zhong, F.\nZhong, Fangxiong');
+      const c = await clickAndCommit(page, mock, tid('academic-settings-save-publications'));
+      assert.deepEqual(c.changes.map((x) => x.path), ['config/_default/params.toml']);
+      const after = mock.readFile('config/_default/params.toml');
+      const changed = after.split('\n').filter((l) => !before.split('\n').includes(l));
+      assert.equal(changed.length, 1, 'only the myNames line changed: ' + JSON.stringify(changed));
+      assert.match(changed[0], /^ {2}myNames = \["Zhong, F\.", "Zhong, Fangxiong"\] +# /, 'value replaced, its comment kept');
+      assert.ok(await page.isVisible(`${tid('pub-row')}[data-id="${PAPER_ID}"] .ac-me`), 'my name in bold in the admin list');
+      for (const [tab, label, files] of [
+        ['publications', '论文', ['content/publications/_index.md', 'content/publications/_index.zh.md']],
+        ['talks', '报告与海报', ['content/talks/_index.md', 'content/talks/_index.zh.md']],
+      ]) {
+        if (tab !== 'publications') {
+          await page.click(tid(`academic-tab-${tab}`));
+          await page.waitForSelector(tid(`academic-list-${tab}`));
+        }
+        const old = Object.fromEntries(files.map((p) => [p, mock.readFile(p)]));
+        const m = await clickAndCommit(page, mock, tid(`academic-menu-${tab}`));
+        assert.equal(m.message, `admin: 在顶部菜单显示「${label}」`);
+        assert.deepEqual(m.changes.map((x) => x.path).sort(), files);
+        for (const p of files) {
+          const added = mock.readFile(p).split('\n').filter((l) => !old[p].split('\n').includes(l));
+          assert.equal(added.length, 1, `${p}: one line added (${JSON.stringify(added)})`);
+          assert.match(added[0], /^menu: \{ main: \{ weight: \d+ \} \}$/, p);
+        }
+        await until(() => page.isChecked(tid(`academic-menu-${tab}`)), { msg: `${tab} menu switch on` });
+      }
+    });
+
+    await step('学术 · 报告与海报: a past talk with an uploaded slides PDF → one commit', async () => {
+      await page.click(tid('talk-add'));
+      await page.waitForSelector(tid('talk-form'));
+      await page.fill(tid('talk-title'), TALK_TITLE);
+      await page.fill(tid('talk-date'), '2025-06-10');
+      await page.fill(tid('talk-event'), 'Cosmic Dawn 2025');
+      await page.fill(tid('talk-location'), 'Pasadena, CA');
+      await page.selectOption(tid('talk-kind'), 'invited');
+      await pickFile(tid('talk-slides-upload'), { name: 'cosmic dawn slides.pdf', mimeType: 'application/pdf', buffer: REPORT_BYTES[1] });
+      await until(async () => (await page.inputValue(tid('talk-slides'))) === '/documents/talks/cosmic-dawn-slides.pdf', { msg: 'slides path' });
+      await until(async () => (await page.inputValue(tid('talk-id'))) === TALK_ID, { msg: 'talk id' });
+      const c = await clickAndCommit(page, mock, tid('talk-form-save'));
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), [`data/talks/${TALK_ID}.yaml`, TALK_PDF]);
+      assert.equal(mock.readFile(`data/talks/${TALK_ID}.yaml`), [
+        `id: "${TALK_ID}"`, `title: "${TALK_TITLE}"`, 'event: "Cosmic Dawn 2025"', 'location: "Pasadena, CA"', 'date: "2025-06-10"',
+        'kind: "invited"', 'slides: "/documents/talks/cosmic-dawn-slides.pdf"', ''].join('\n'));
+      await page.waitForSelector(`${tid('talks-past')} ${tid('talk-row')}[data-id="${TALK_ID}"]`);
+    });
+
+    await step('学术 · 近况: quick-add two items (one with a Chinese override + link) → one commit each', async () => {
+      await page.click(tid('academic-tab-news'));
+      await page.waitForSelector(tid('news-quick'));
+      for (const n of [NEWS_OLD, NEWS_NEW]) {
+        await page.fill(tid('news-date'), n.date);
+        await page.fill(tid('news-text'), n.text);
+        if (n.zh) {
+          const det = page.locator(`${tid('news-quick')} ${tid('news-langs')}`);
+          if (!(await det.evaluate((d) => d.open))) await det.locator('summary').click();
+          await page.fill(tid('news-text_zh'), n.zh);
+        }
+        if (n.link) await page.fill(tid('news-link'), n.link);
+        const c = await clickAndCommit(page, mock, tid('news-add'));
+        assert.deepEqual(c.changes.map((x) => x.path), [`data/news/${n.id}.yaml`]);
+        assert.equal(mock.readFile(`data/news/${n.id}.yaml`), [`date: "${n.date}"`, `text: ${JSON.stringify(n.text)}`,
+          ...(n.zh ? [`text_zh: ${JSON.stringify(n.zh)}`] : []), ...(n.link ? [`link: "${n.link}"`] : []), ''].join('\n'));
+        await page.waitForSelector(`${tid('news-row')}[data-id="${n.id}"]`);
+      }
+      assert.deepEqual(await page.$$eval(tid('news-row'), (els) => els.map((e) => e.dataset.id)), [NEWS_NEW.id, NEWS_OLD.id], 'newest first');
+    });
+
+    await step('首页设置: 简历 CV upload (PDF + params.cv, one commit) → social icons ORCID + NASA ADS → 保存并发布', async () => {
+      await nav(page, 'profile');
+      await page.waitForSelector(tid('cv-empty'));
+      const before = mock.readFile('config/_default/params.toml');
+      await pickFile(tid('cv-upload'), { name: 'Zhong CV.pdf', mimeType: 'application/pdf', buffer: REPORT_BYTES[0] });
+      await page.waitForSelector(tid('cv-confirm'));
+      const n = mock.commits.length;
+      await page.click(tid('confirm-ok'));
+      await until(() => mock.commits.length > n, { msg: 'CV commit' });
+      await page.waitForSelector(tid('overlay'), { state: 'detached', timeout: 30000 });
+      const c = mock.commits.at(-1);
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), ['config/_default/params.toml', CV_FILE]);
+      const after = mock.readFile('config/_default/params.toml');
+      assert.deepEqual(after.split('\n').filter((l) => !before.split('\n').includes(l)), ['cv = "/documents/cv/Zhong-CV.pdf"']);
+      await page.waitForSelector(tid('cv-path'));
+      assert.ok(await page.isVisible(tid('preview-cv')), 'the home preview shows the CV button');
+      // social icons, typed the short way and normalised on blur
+      const rows = await page.$$eval(tid('social-row'), (els) => els.length);
+      for (const [icon, input, want] of [['orcid', '0000-0002-1825-0097', ORCID], ['ads', 'Zhong, F.', ADS_LINK]]) {
+        await page.click(tid('social-add'));
+        const row = page.locator(tid('social-row')).last();
+        await row.locator(tid('social-icon')).selectOption(icon);
+        const url = row.locator(tid('social-url'));
+        await url.fill(input);
+        await url.blur();
+        assert.equal(await url.inputValue(), want);
+      }
+      assert.equal(await page.$$eval(tid('social-row'), (els) => els.length), rows + 2);
+      const n2 = mock.commits.length;
+      await page.click(tid('profile-save'));
+      await page.waitForSelector(tid('profile-confirm'));
+      await page.click(tid('confirm-ok'));
+      await until(() => mock.commits.length > n2, { msg: 'profile commit' });
+      await page.waitForSelector(tid('overlay'), { state: 'detached', timeout: 30000 });
+      const params = mock.readFile('config/_default/params.toml');
+      assert.ok(params.includes(`url = "${ORCID}"`) && params.includes(`url = "${ADS_LINK}"`), 'icons written');
+      assert.ok(params.includes('cv = "/documents/cv/Zhong-CV.pdf"'), 'CV kept');
+      assert.ok(params.includes(`subtitle = "${SUBTITLE}"`), 'earlier subtitle kept');
+      assert.deepEqual(missingInOrder(commentLines(ORIGINAL_CONFIG['config/_default/params.toml']), params), [], 'params.toml comments kept');
+    });
+
+    // -----------------------------------------------------------------------
     await step('every view fits a phone (390x844 and 360x740) without horizontal scroll; screenshots', async () => {
       const views = [['#/posts', 'posts'], ['#/edit?path=' + encodeURIComponent(POST), 'edit'], ['#/pages', 'pages'],
-        ['#/courses', 'courses'], [`#/courses?course=${COURSE}`, 'courses'],
+        ['#/courses', 'courses'], [`#/courses?course=${COURSE}`, 'courses'], ['#/academic?tab=publications', 'academic'],
         ['#/profile', 'profile'], ['#/background', 'background'], ['#/files', 'files']];
       for (const [w, hgt, label] of [[1280, 800, 'desktop'], [390, 844, 'mobile'], [360, 740, 'mobile360']]) {
         const mp = await context.newPage();
@@ -677,17 +874,27 @@ async function main() {
       // rebuild INTO the directory the mock serves, so everything below is fetched over HTTP like a visitor
       await buildSite({ repoDir: exp, outDir: SITE_DIR, baseURL: mock.url + '/' });
 
-      // the post, in both languages
-      const zh = await fetchSite(mock, `/posts/${SLUG}/`);
-      const en = await fetchSite(mock, `/en/posts/${SLUG}/`);
+      // the post, in both languages: English (xxx.en.md) at /, Chinese (the shared xxx.md) at /zh/
+      const zh = await fetchSite(mock, `/zh/posts/${SLUG}/`);
+      const en = await fetchSite(mock, `/posts/${SLUG}/`);
+      assert.equal((await fetchSite(mock, `/en/posts/${SLUG}/index.html`)).status, 404, 'nothing is built under /en/ any more');
       assert.equal(zh.status, 200);
       assert.equal(en.status, 200);
       const zhHtml = zh.bytes.toString('utf8');
       const enHtml = en.bytes.toString('utf8');
       assert.ok(zhHtml.includes(TITLE_ZH), 'zh post has the Chinese title');
       assert.ok(enHtml.includes(TITLE_EN), 'en post has the English title');
+      assert.match(enHtml, /<html lang="?en"? /);
+      assert.match(zhHtml, /<html lang="?zh"? /);
+      // hreflang alternates point at the two language versions
+      for (const html of [zhHtml, enHtml]) {
+        const alt = [...html.matchAll(/<link rel="?alternate"? hreflang="?([a-z-]+)"? href="?([^" >]+)"?>/g)].map((m) => [m[1], m[2]]);
+        assert.deepEqual(alt, [['en', `${mock.url}/posts/${SLUG}/`], ['zh', `${mock.url}/zh/posts/${SLUG}/`]]);
+      }
       assert.ok(!enHtml.includes(TITLE_ZH), 'en post does not use the shared title');
       assert.ok(zhHtml.includes(PDF_VIEWER), 'zh post links the PDF’s online preview');
+      const re = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      assert.match(zhHtml, new RegExp(`<a href="?${re(PDF_VIEWER)}"?>${re(PDF_NAME)}</a>`), 'the shared version’s link carries no lang (the viewer uses the referrer)');
       assert.ok(enHtml.includes(`${PDF_VIEWER}&amp;lang=en`), 'en post links the English online preview');
       for (const [html, lang] of [[zhHtml, 'zh'], [enHtml, 'en']]) {
         // the shortcode became an <iframe> to the viewer in embed mode, in the page's language
@@ -702,6 +909,7 @@ async function main() {
       assert.equal(Buffer.compare(img.bytes, mock.readBytes(`${IMGDIR}/${imgName}`)), 0);
       // the draft that was deleted is not built
       assert.equal((await fetchSite(mock, `/posts/${DRAFT_SLUG}/`)).status, 404);
+      assert.equal((await fetchSite(mock, `/zh/posts/${DRAFT_SLUG}/`)).status, 404);
 
       // PDF served byte-exact
       const pdf = await fetchSite(mock, `/documents/${PDF_NAME}`);
@@ -719,7 +927,7 @@ async function main() {
       assert.equal(Buffer.compare((await fetchSite(mock, '/favicon.jpg')).bytes, mock.readBytes('static/favicon.jpg')), 0);
 
       // home pages: subtitle + lorenz background, in both languages
-      for (const p of ['/', '/en/']) {
+      for (const p of ['/', '/zh/']) {
         const home = (await fetchSite(mock, p)).bytes.toString('utf8');
         assert.ok(home.includes(SUBTITLE), `${p} shows the new subtitle`);
         assert.ok(home.includes('avatar.jpg'), `${p} shows the avatar`);
@@ -732,14 +940,15 @@ async function main() {
       }
 
       // menu order: 博客 first, in both languages
-      const zhNav = navItems((await fetchSite(mock, '/')).bytes.toString('utf8')).map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
-      const enNav = navItems((await fetchSite(mock, '/en/')).bytes.toString('utf8')).map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
-      assert.deepEqual(zhNav, ['博客 /posts/', '关于 /about/', '科研 /research/', '课程资料 /courses/']);
-      assert.deepEqual(enNav, ['Blog /en/posts/', 'About /en/about/', 'Research /en/research/', 'Course Materials /en/courses/']);
+      const enNav = navItems((await fetchSite(mock, '/')).bytes.toString('utf8')).map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
+      const zhNav = navItems((await fetchSite(mock, '/zh/')).bytes.toString('utf8')).map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
+      // …and the two academic pages the 学术 view switched on, after the existing items (news stays off the menu)
+      assert.deepEqual(enNav, ['Blog /posts/', 'About /about/', 'Research /research/', 'Course Materials /courses/', 'Publications /publications/', 'Talks & Posters /talks/']);
+      assert.deepEqual(zhNav, ['博客 /zh/posts/', '关于 /zh/about/', '科研 /zh/research/', '课程资料 /zh/courses/', '论文 /zh/publications/', '报告与海报 /zh/talks/']);
 
       // the blog lists show the post in the right language
-      assert.ok((await fetchSite(mock, '/posts/')).bytes.toString('utf8').includes(TITLE_ZH));
-      assert.ok((await fetchSite(mock, '/en/posts/')).bytes.toString('utf8').includes(TITLE_EN));
+      assert.ok((await fetchSite(mock, '/zh/posts/')).bytes.toString('utf8').includes(TITLE_ZH));
+      assert.ok((await fetchSite(mock, '/posts/')).bytes.toString('utf8').includes(TITLE_EN));
     });
 
     // -----------------------------------------------------------------------
@@ -753,7 +962,7 @@ async function main() {
         zh: { contents: '内容', materials: '资料', used: '收录于', prev: '« 上一篇', next: '下一篇 »', crumbs: ['课程资料', COURSE_ZH], title: COURSE_ZH },
         en: { contents: 'Contents', materials: 'Materials', used: 'Used in', prev: '« Previous', next: 'Next »', crumbs: ['Course Materials', COURSE_EN], title: COURSE_EN },
       };
-      for (const [prefix, lang] of [['', 'zh'], ['/en', 'en']]) {
+      for (const [prefix, lang] of [['/zh', 'zh'], ['', 'en']]) {
         const l = L[lang];
         // 1. landing: the user's intro text first, then the card under its group heading
         await vp.goto(`${mock.url}${prefix}/courses/`, { waitUntil: 'domcontentloaded' });
@@ -786,7 +995,7 @@ async function main() {
         const sorted = [...REPORTS].sort((a, b) => ((a.saved || a.file) < (b.saved || b.file) ? -1 : 1));
         assert.deepEqual(unit.materials, sorted.map((r) => ({
           name: r.saved || r.file,
-          href: `/viewer/?file=${encodeURIComponent(`/documents/courses/${COURSE}/${r.saved || r.file}`)}${lang === 'en' ? '&lang=en' : ''}`,
+          href: `/viewer/?file=${encodeURIComponent(`/documents/courses/${COURSE}/${r.saved || r.file}`)}&lang=${lang}`,
           used: `${l.used} ${r.title}`,
         })));
         assert.equal(unit.dates, 0, 'no dates in courses');
@@ -824,7 +1033,7 @@ async function main() {
     await step('visitor (zh + en): the preview link opens a viewer that renders the PDF; the embedded reader renders it', async () => {
       const externalBefore = external.length;
       const viewerExternal = [];
-      for (const [prefix, lang] of [['', 'zh'], ['/en', 'en']]) {
+      for (const [prefix, lang] of [['/zh', 'zh'], ['', 'en']]) {
         // same browser profile as the admin (the token is remembered in localStorage on this origin)
         const vp = await context.newPage();
         vp.on('pageerror', (e) => pageErrors.push(`${lang} visitor: ${e.message}`));
@@ -864,9 +1073,12 @@ async function main() {
         assert.deepEqual(await frame.evaluate(() => window.__storage), ['getItem:pref-theme'], 'embedded viewer storage access');
         await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-embed.png`) });
 
-        // 2. the preview link in the text → the viewer page (same tab), then back to the post
+        // 2. the preview link in the text → the viewer page (same tab), then back to the post.
+        //    zh: the shared version's link has no lang → the viewer picks Chinese from the referrer (/zh/…);
+        //    en: the English version's link says lang=en.
         const link = vp.locator(`.post-content a[href^="/viewer/?file="]:not(figure a)`);
         assert.equal(await link.count(), 1, 'one preview link in the text');
+        assert.equal(new URL(await link.getAttribute('href'), mock.url).searchParams.get('lang'), lang === 'en' ? 'en' : null);
         await link.scrollIntoViewIfNeeded();
         await Promise.all([vp.waitForURL(/\/viewer\/\?file=/), link.click()]);
         const v = await viewerRendered(vp);
@@ -885,6 +1097,140 @@ async function main() {
       // the theme's own post page loads KaTeX from the CDN (blocked in this test) — that is not the viewer's doing
       const added = external.splice(externalBefore);
       assert.deepEqual(added.filter((u) => !u.startsWith('https://cdn.jsdelivr.net/npm/katex@')), [], 'unexpected external requests');
+    });
+
+    // -----------------------------------------------------------------------
+    await step('visitor (en at /, zh at /zh/): home news + CV button (viewer opens the CV), icons; publications (bold name, PDF in the viewer); talks (slides in the viewer)', async () => {
+      const externalBefore = external.length;
+      const vp = await context.newPage();
+      vp.on('pageerror', (e) => pageErrors.push(`academic visitor: ${e.message}`));
+      vp.on('console', (m) => { if (/CSP-VIOLATION|Content Security Policy/.test(m.text())) cspErrors.push(m.text()); });
+      vp.on('request', (req) => { if (req.url().includes(mock.token) || req.headers().authorization) tokenLeaks.push(`academic visitor: ${req.url()}`); });
+      const T = {
+        en: { more: 'More', cv: 'CV', newsNew: 'Our FAST paper was accepted by ApJ!', viewerLang: 'en' },
+        zh: { more: '详情', cv: '简历', newsNew: '我们的 FAST 论文被 ApJ 接收了！', viewerLang: 'zh-CN' },
+      };
+      for (const [prefix, lang] of [['', 'en'], ['/zh', 'zh']]) {
+        const t = T[lang];
+        // 1. the home page: latest news under the profile, the CV button after the configured buttons, the new icons
+        await vp.goto(`${mock.url}${prefix}/`, { waitUntil: 'domcontentloaded' });
+        const home = await vp.evaluate(() => ({
+          news: [...document.querySelectorAll('section.home-news li.news-item')].map((li) => ({
+            date: li.querySelector('time').getAttribute('datetime'),
+            text: li.querySelector('.news-text').textContent.replace(/\s+/g, ' ').trim(),
+            bold: [...li.querySelectorAll('.news-text strong')].map((b) => b.textContent),
+            links: [...li.querySelectorAll('.news-text a')].map((a) => [a.textContent.trim(), a.getAttribute('href')]),
+          })),
+          all: !!document.querySelector('a.home-news-all'),
+          lastButton: (() => { const b = [...document.querySelectorAll('.profile .buttons a.button')].pop(); return b && [b.className, b.textContent.trim(), b.getAttribute('href')]; })(),
+          icons: [...document.querySelectorAll('.profile .social-icons a')].map((a) => [a.getAttribute('href'), a.getAttribute('title'), !!a.querySelector('svg')]),
+        }));
+        assert.deepEqual(home.news, [
+          { date: NEWS_NEW.date, text: `${t.newsNew} ${t.more}`, bold: ['ApJ'], links: [[t.more, `${prefix}/publications/`]] },
+          { date: NEWS_OLD.date, text: 'Gave a talk at Cosmic Dawn.', bold: [], links: [['Cosmic Dawn', 'https://example.org/cd?year=2025&track=hi']] },
+        ], `${lang}: home news (newest first, per-language text, & in a link URL kept)`);
+        assert.equal(home.all, false, `${lang}: 2 items ≤ homeCount → no 「All news」 link`);
+        assert.deepEqual(home.lastButton, ['button button-cv', t.cv, `/viewer/?file=%2Fdocuments%2Fcv%2FZhong-CV.pdf&lang=${lang}`]);
+        assert.deepEqual(home.icons.slice(-2), [[ORCID, 'ORCID', true], [ADS_LINK, 'NASA ADS', true]], `${lang}: ORCID + NASA ADS icons with an SVG`);
+        await vp.screenshot({ path: path.join(SHOTS, `visitor-${lang}-home-academic.png`), fullPage: true });
+        // the CV button opens the viewer, which renders the CV in the page's language
+        await Promise.all([vp.waitForURL(/\/viewer\/\?file=/), vp.click('a.button-cv')]);
+        const cv = await viewerRendered(vp);
+        assert.equal(cv.lang, t.viewerLang);
+        assert.equal(cv.download, '/documents/cv/Zhong-CV.pdf');
+
+        // 2. publications: my name in bold, every link chip, the PDF opens in the viewer
+        await vp.goto(`${mock.url}${prefix}/publications/`, { waitUntil: 'domcontentloaded' });
+        const pub = await vp.evaluate((id) => {
+          const li = document.getElementById(`pub-${id}`);
+          return li && {
+            title: li.querySelector('.pub-title').textContent.trim(),
+            me: [...li.querySelectorAll('.pub-me')].map((b) => [b.tagName, b.textContent]),
+            authors: li.querySelector('.pub-authors').textContent.trim(),
+            chips: [...li.querySelectorAll('a.pub-chip')].map((a) => [a.textContent.trim(), a.getAttribute('href'), a.target || '']),
+            bibtex: !!li.querySelector('details.pub-bibtex pre code'),
+          };
+        }, PAPER_ID);
+        assert.ok(pub, `${lang}: the paper is listed`);
+        assert.equal(pub.title, PAPER_TITLE);
+        assert.deepEqual(pub.me, [['STRONG', 'Zhong, F.']], `${lang}: my name in bold`);
+        assert.equal(pub.authors, 'Zhong, F., Doe, J., Roe, R.');
+        assert.deepEqual(pub.chips, [
+          ['arXiv', 'https://arxiv.org/abs/2501.01234', '_blank'],
+          ['ADS', 'https://ui.adsabs.harvard.edu/abs/2025ApJ...980..123Z/abstract', '_blank'],
+          ['DOI', 'https://doi.org/10.3847/1538-4357/adf00d', '_blank'],
+          ['PDF', `/viewer/?file=%2Fdocuments%2Fpapers%2FZhong-2025-FAST.pdf&lang=${lang}`, ''],
+        ]);
+        assert.ok(pub.bibtex, 'BibTeX block');
+        await Promise.all([vp.waitForURL(/\/viewer\/\?file=/), vp.click(`#pub-${PAPER_ID} a.pub-chip-pdf`)]);
+        const pv = await viewerRendered(vp);
+        assert.equal(pv.pages, PDF_PAGES);
+        assert.equal(pv.lang, t.viewerLang);
+        assert.equal(pv.download, '/documents/papers/Zhong-2025-FAST.pdf');
+
+        // 3. talks: the past talk with its slides in the viewer
+        await vp.goto(`${mock.url}${prefix}/talks/`, { waitUntil: 'domcontentloaded' });
+        const talk = await vp.evaluate((id) => {
+          const li = document.getElementById(`talk-${id}`);
+          return li && {
+            title: li.querySelector('.talk-title').textContent.trim(),
+            date: li.querySelector('.talk-date').getAttribute('datetime'),
+            slides: li.querySelector('a.pub-chip-slides') && li.querySelector('a.pub-chip-slides').getAttribute('href'),
+          };
+        }, TALK_ID);
+        assert.deepEqual(talk, { title: TALK_TITLE, date: '2025-06-10', slides: `/viewer/?file=%2Fdocuments%2Ftalks%2Fcosmic-dawn-slides.pdf&lang=${lang}` });
+        await Promise.all([vp.waitForURL(/\/viewer\/\?file=/), vp.click(`#talk-${TALK_ID} a.pub-chip-slides`)]);
+        assert.equal((await viewerRendered(vp)).download, '/documents/talks/cosmic-dawn-slides.pdf');
+        // 4. the news page lists both items
+        const news = (await fetchSite(mock, `${prefix}/news/`)).bytes.toString('utf8');
+        assert.ok(news.includes(lang === 'en' ? 'Our FAST paper was accepted by' : '我们的 FAST 论文被') && news.includes('Gave a talk at'), `${lang}: news page`);
+      }
+      await vp.close();
+      const added = external.splice(externalBefore);
+      assert.deepEqual(added.filter((u) => !u.startsWith('https://cdn.jsdelivr.net/npm/katex@')), [], 'unexpected external requests');
+    });
+
+    // -----------------------------------------------------------------------
+    await step('old /en/ links land on the new English URLs (path, ?query, #hash; /en/, /en/viewer/?file=…); zh-preferring visitor gets the language hint', async () => {
+      const externalBefore = external.length;
+      const vp = await context.newPage();
+      vp.on('pageerror', (e) => pageErrors.push(`old-link visitor: ${e.message}`));
+      for (const [from, to] of [
+        [`/en/posts/${SLUG}/?ref=old#comments`, `/posts/${SLUG}/?ref=old#comments`],
+        ['/en/publications/', '/publications/'],
+        ['/en/', '/'],
+        [`/en/viewer/?file=%2Fdocuments%2F${PDF_NAME}&lang=en`, `/viewer/?file=%2Fdocuments%2F${PDF_NAME}&lang=en`],
+      ]) {
+        await vp.goto(mock.url + from, { waitUntil: 'domcontentloaded' });
+        await vp.waitForURL((u) => u.pathname + u.search + u.hash === to, { timeout: 15000 });
+      }
+      // the viewer reached through the old link renders the PDF
+      assert.equal((await viewerRendered(vp)).pages, PDF_PAGES);
+      // a real 404 under /en/ stays a 404 (no loop)
+      await vp.goto(mock.url + '/en/no-such-page/', { waitUntil: 'domcontentloaded' });
+      await vp.waitForURL((u) => u.pathname === '/no-such-page/');
+      assert.equal(await vp.textContent('.not-found'), '404');
+      await vp.close();
+      const added = external.splice(externalBefore);
+      assert.deepEqual(added.filter((u) => !u.startsWith('https://cdn.jsdelivr.net/npm/katex@')), [], 'unexpected external requests');
+
+      // a Chinese-preferring browser on an English page that has a Chinese version: a hint (never a redirect)
+      const zctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 844 } });
+      await zctx.route((u) => (u.protocol === 'http:' || u.protocol === 'https:') && u.origin !== origin, (r) => r.abort('blockedbyclient'));
+      const zp = await zctx.newPage();
+      zp.on('pageerror', (e) => pageErrors.push(`zh visitor: ${e.message}`));
+      for (const p of [`/posts/${SLUG}/`, '/publications/']) {
+        await zp.goto(mock.url + p, { waitUntil: 'domcontentloaded' });
+        await zp.waitForSelector('.lang-hint');
+        assert.equal(new URL(zp.url()).pathname, p, 'no redirect');
+        assert.deepEqual(await zp.$eval('.lang-hint a', (a) => [a.textContent.trim(), a.getAttribute('href'), a.getAttribute('hreflang')]),
+          ['本页有中文版 →', `/zh${p}`, 'zh']);
+      }
+      await zp.screenshot({ path: path.join(SHOTS, 'visitor-zh-pref-hint.png') });
+      await Promise.all([zp.waitForURL(/\/zh\/publications\/$/), zp.click('.lang-hint a')]);
+      assert.equal(await zp.$$eval('#pub-' + PAPER_ID, (x) => x.length), 1, 'the Chinese publications page lists the paper');
+      assert.ok(await zp.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no horizontal scroll at 390px');
+      await zctx.close();
     });
 
     // -----------------------------------------------------------------------
@@ -908,8 +1254,8 @@ async function main() {
       assert.deepEqual(external, []);
       assert.deepEqual(tokenLeaks, []);
       // one commit per publish: 2 post + 1 upload + 2 link/embed (zh, en) + 1 profile + 1 background + 1 menu + 1 draft + 1 delete
-      // + 1 new course + 1 batch upload
-      assert.equal(mock.commits.length, 12, mock.commits.map((c) => c.message).join('\n'));
+      // + 1 new course + 1 batch upload + 学术: 1 paper + 1 论文设置 + 2 menu switches + 1 talk + 2 news + 1 CV + 1 profile (icons)
+      assert.equal(mock.commits.length, 21, mock.commits.map((c) => c.message).join('\n'));
     });
   } finally {
     await browser.close();

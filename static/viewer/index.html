@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!--
   资料在线预览（/viewer/?file=/documents/xxx.pdf）。说明见 static/viewer/README.md。
+  site.js 不在 static/ 里：由 Hugo 构建时根据语言配置生成（layouts/partials/features/viewer-site.html）；
+  lang.js 据此和 ?lang= / 来源页面 / 浏览器语言决定界面语言。
   与 /admin/ 同源（那里可能在 localStorage 里记住了 GitHub 令牌），所以这里：只加载本站脚本、没有内联脚本、
   不读写 localStorage（只读主题偏好 pref-theme）、只打开本站 /documents/ 等目录下的文件。
 -->
@@ -15,6 +17,8 @@
 <title>资料预览</title>
 <link rel="icon" href="../favicon.jpg">
 <link rel="stylesheet" href="viewer.css">
+<script src="site.js"></script>
+<script src="lang.js"></script>
 <script src="theme.js"></script>
 <script type="module" src="viewer.js"></script>
 <script nomodule src="nomodule.js"></script>

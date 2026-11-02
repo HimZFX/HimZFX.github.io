@@ -9,7 +9,8 @@
   资料列表在构建时由 Hugo 读取资料文件夹（默认 static/documents/courses/<slug>/，front matter 的
   materialsDir 可改），按文件名排序。每项是 dict：
     name  文件名      path  网站路径（未编码）    size  字节数     ext  扩展名（小写）
-    href  链接：PDF / 图片指向在线预览页 /viewer/?file=…（英文站加 &lang=en），其他文件直接指向文件
+    href  链接：PDF / 图片指向在线预览页 /viewer/?file=…&lang=<页面语言>（每种语言都写，和 {{< pdf >}} 短代码相同），
+          其他文件直接指向文件
     file  文件本身的地址（逐段编码）      preview  是否在线预览
     post  正文里引用了这个文件的第一篇子推文（{{< pdf >}}、图片、链接或预览链接都算），没有为 nil
 */ -}}
@@ -44,7 +45,6 @@
 {{- if and $show (os.FileExists (strings.TrimSuffix "/" $dir)) -}}
   {{- $base := printf "/%s" (strings.TrimPrefix "static/" $dir) -}}
   {{- $lang := $page.Language.Lang -}}
-  {{- $defaultLang := (index site.Sites 0).Language.Lang -}}
   {{- range os.ReadDir (strings.TrimSuffix "/" $dir) -}}
     {{- if or .IsDir (hasPrefix .Name ".") -}}{{- continue -}}{{- end -}}
     {{- $name := .Name -}}
@@ -65,8 +65,8 @@
     {{- $preview := in (slice "pdf" "png" "jpg" "jpeg" "gif" "webp" "avif" "svg") $ext -}}
     {{- $href := $fileHref -}}
     {{- if $preview -}}
-      {{- $href = printf "%s?file=%s" ("viewer/" | relURL) $q -}}
-      {{- if ne $lang $defaultLang -}}{{- $href = printf "%s&lang=%s" $href (urlquery $lang) -}}{{- end -}}
+      {{- /* 阅读器的界面语言 = 页面语言：总是写 lang（默认语言也写），访客从哪里打开链接都一样 */ -}}
+      {{- $href = printf "%s?file=%s&lang=%s" ("viewer/" | relURL) $q (urlquery $lang) -}}
     {{- end -}}
     {{- /* 引用了这个文件的子推文：原样路径、逐段编码的路径，或预览链接里编码后的 file= 参数 */ -}}
     {{- $post := false -}}

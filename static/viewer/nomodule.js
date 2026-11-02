@@ -2,7 +2,10 @@
 // ES5 only. Shows a hint instead of an endless 「正在加载…」.
 (function () {
   function show() {
-    var en = /[?&]lang=en(&|$)/.test(window.location.search);
+    // lang.js (classic script, loaded before us) already picked the interface language
+    var en = window.VIEWER_LANG ? window.VIEWER_LANG === 'en' : !/[?&]lang=zh(&|$)/.test(window.location.search);
+    var home = document.getElementById('site-name');
+    if (home && en) home.textContent = 'Home';
     var title = document.getElementById('status-title');
     if (title) {
       title.textContent = en
