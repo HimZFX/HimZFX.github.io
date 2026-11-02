@@ -684,6 +684,9 @@ function setTitle(text) {
   document.title = t ? `${t} · ${APP_NAME}` : `${APP_NAME} · ${SITE_NAME}`;
 }
 
+/** ctx.publish 的 afterCommit 最多等多久（毫秒），见 publish() */
+const AFTER_COMMIT_LIMIT_MS = 10000;
+
 const PHASE_TEXT = {
   prepare: '正在准备文件…',
   check: '正在检查网站上的最新版本…',
@@ -708,13 +711,16 @@ function siteLink(url) {
 
 /**
  * 视图提交修改的唯一入口（§4 ctx.publish）。
- * @param {{ message: string, changes: Array<object>, summary?: string|string[], viewUrl?: string, viewLabel?: string }} opts
+ * @param {{ message: string, changes: Array<object>, summary?: string|string[], viewUrl?: string, viewLabel?: string, afterCommit?: (result: object) => any }} opts
  *        viewUrl / viewLabel（扩展，可选）：发布的内容在网站上的地址（例如文章页）和链接文字（默认「打开看看」）。
  *        部署完成后「已上线 ✓」指向这里，提示里也会带上这个链接；不传时指向网站首页。
+ *        afterCommit（扩展，可选）：提交成功后、遮罩关闭之前要做完的收尾（例如清理本机草稿），可以是异步的。
+ *        遮罩和「正在发布」状态会一直保持到它结束 —— 遮罩消失时，这次发布连同视图的收尾就都完成了，
+ *        用户（和测试）不会在收尾途中离开或刷新页面。它出错只记日志，不影响发布结果（已经提交了）。
  * @returns {Promise<{ commitSha: string, shas: Record<string,string>, unchanged?: boolean, alreadyApplied?: boolean } | { conflict: true, reloaded: boolean, paths: string[] }>}
  *        alreadyApplied：这些修改其实已经在网站上了（上一次发布成功了，只是没收到 GitHub 的回复）。
  */
-async function publish({ message, changes, summary, viewUrl, viewLabel } = {}) {
+async function publish({ message, changes, summary, viewUrl, viewLabel, afterCommit } = {}) {
   const s = session;
   if (!s || !s.ready) throw new Error('还没有登录');
   if (publishing) {
@@ -759,6 +765,21 @@ async function publish({ message, changes, summary, viewUrl, viewLabel } = {}) {
     console.error('[publish] failed', err);
     toast(`发布失败：${errorMessage(err)}`, { type: 'error', timeout: 9000 });
     throw err;
+  }
+  if (typeof afterCommit === 'function') {
+    // 最多等 AFTER_COMMIT_LIMIT_MS：收尾一般只是几次 IndexedDB 读写，但浏览器的 IndexedDB 偶尔会卡住不回应
+    // （Safari 出过这种问题），不能让「正在发布」遮罩因此永远挡着。超时后照常关遮罩，收尾在后台继续。
+    let timer;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => afterCommit(result)),
+        new Promise((resolve) => { timer = setTimeout(() => { console.warn('[publish] afterCommit timed out'); resolve(); }, AFTER_COMMIT_LIMIT_MS); }),
+      ]);
+    } catch (err) {
+      console.warn('[publish] afterCommit failed', err);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   overlay.close();
   publishing = false;

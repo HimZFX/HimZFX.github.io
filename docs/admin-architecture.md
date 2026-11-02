@@ -105,10 +105,13 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
    repo.readText() / readBytes() 读取内容（按 sha 缓存在内存 + IndexedDB，内容寻址，永不过期）
    用户修改 → 本机自动保存（见第 7 节）
 
-发布：ctx.publish({ message, changes, summary, viewUrl?, viewLabel? })
+发布：ctx.publish({ message, changes, summary, viewUrl?, viewLabel?, afterCommit? })
    → 全屏遮罩「正在发布…」（显示进度：准备 / 检查最新版本 / 上传 n/m / 提交）
    → Repo.commit()（见下）
-   → 成功：toast「已发布，正在部署…」，启动部署指示器
+   → 成功：先 await afterCommit(result)（视图的收尾，例如编辑器清理本机草稿；遮罩和 isPublishing() 一直保持到它结束，最多等 10 秒（AFTER_COMMIT_LIMIT_MS，防止 IndexedDB 卡住时遮罩永远不关）），
+     再关遮罩，toast「已发布，正在部署…」，启动部署指示器。
+     所以遮罩消失 = 这次发布连同视图收尾都做完了：视图在 publish() 返回之后只做同步的收尾（更新状态、新文章跳到它的地址），
+     不会出现「遮罩没了，但离开 / 刷新还被『正在发表』拒绝」的空档（e2e-editor 的 slow draft cleanup 测试）
    → ConflictError：对话框「有文件在你编辑期间被修改了」→「重新加载最新版本」= repo.load()，返回 { conflict: true }
    → 其他错误：toast 中文错误并抛出（视图保留用户的修改）
 
@@ -277,7 +280,7 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 | `siteUrl` | `location.origin + '/'` |
 | `navigate(hash, { replace })` | 跳转；跳到当前地址时重新挂载 |
 | `setTitle(text)` | 设置顶栏标题和 `document.title` |
-| `publish({ message, changes, summary, viewUrl?, viewLabel? })` | **视图提交修改的唯一入口**（见第 3 节） |
+| `publish({ message, changes, summary, viewUrl?, viewLabel?, afterCommit? })` | **视图提交修改的唯一入口**（见第 3 节）；`afterCommit` 在遮罩关闭前执行完 |
 | `isPublishing()` | 当前是否正在发布 |
 
 ---

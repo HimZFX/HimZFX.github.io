@@ -723,6 +723,9 @@ async function main() {
       // nothing to publish from these attempts
       assert.equal(mock.commits.length, before);
       for (const p of ['static/documents/讲义.html', 'static/documents/tool.js']) assert.equal(mock.readFile(p), undefined);
+      // these error toasts stay up to 12 s and pause while the mouse is over them: when the next test's toolbar click
+      // lands under one, Playwright's retries keep the mouse there and the toast never goes away
+      await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
     });
 
     await test('new post autosaves locally; #/edit?draft=<key> restores it', async () => {
@@ -816,6 +819,10 @@ async function main() {
       await until(() => mock.commits.length > n, { msg: 'delete commit' });
       assert.equal(mock.readFile(POST_EN), undefined);
       assert.ok(mock.readFile(POST));
+      // overlay gone = the editor is done and has already moved on to the remaining (shared) version;
+      // opening another post before that would be undone by its late navigate
+      await page.waitForSelector('[data-testid="overlay"]', { state: 'detached', timeout: 30000 });
+      assert.equal(await page.evaluate(() => location.hash), '#/edit?path=' + encodeURIComponent(POST));
       await waitEditor(page);
 
       // delete the whole draft post
@@ -835,9 +842,13 @@ async function main() {
 
     /** Make the admin re-read the repository (after mock.setFile) and open a hash. */
     async function reloadTo(p, hash) {
-      await p.evaluate((h) => { location.hash = h; }, hash);
+      const before = await p.evaluate((h) => { const b = location.hash; location.hash = h; return b; }, hash);
       await p.reload({ waitUntil: 'domcontentloaded' });
       await p.waitForSelector('body[data-testid="app-ready"]', { state: 'attached' });
+      // a refused navigation (e.g. still publishing) puts the old address back, and the reload then opens
+      // the old page: fail here instead of testing the wrong page
+      const now = await p.evaluate(() => location.hash);
+      if (before !== hash && now === before) throw new Error(`navigation to ${hash} was refused (reloaded ${before})`);
       if (hash.startsWith('#/edit')) await waitEditor(p);
     }
     const draftOf = (p, key) => p.evaluate(async (k) => {
@@ -1111,6 +1122,9 @@ async function main() {
       await until(() => mock.commits.length > n, { msg: 'delete commit' });
       assert.deepEqual(mock.commits.at(-1).changes.map((c) => c.path).sort(), ['content/lectures/_index.md', 'static/images/pages/lectures/banner.png']);
       assert.equal(mock.readFile('static/images/pages/lectures/optics/fig1.png'), 'png-b', "child page's image kept");
+      // overlay gone = already back on the list (the next test's navigation is not undone)
+      await page.waitForSelector('[data-testid="overlay"]', { state: 'detached', timeout: 30000 });
+      assert.equal(await page.evaluate(() => location.hash), '#/pages');
     });
 
     await test('a new-post draft whose post is already published offers to open it (no duplicate post)', async () => {
@@ -1167,6 +1181,65 @@ async function main() {
       const link = page.locator('[data-testid="toast-link"]', { hasText: '查看文章' });
       await link.waitFor();
       assert.equal(await link.getAttribute('href'), want);
+    });
+
+    await test('the 发表 overlay stays until the editor is done (slow draft cleanup): leaving / reloading right after it works', async () => {
+      // make the post-publish IndexedDB cleanup slow, so that any gap between "overlay gone" and "editor done" is wide
+      const slowCleanup = () => page.evaluate(() => {
+        const ed = document.querySelector('[data-testid="editor-body"]')._editor;
+        const orig = ed.cleanupDrafts.bind(ed);
+        ed.cleanupDrafts = async (keys) => { await new Promise((r) => setTimeout(r, 1500)); return orig(keys); };
+      });
+      const target = '#/edit?path=' + encodeURIComponent('content/posts/slow-cleanup.md');
+      await gotoEdit(page, '#/edit?new=post');
+      await page.fill('[data-testid="editor-title"]', 'Slow Cleanup');
+      await page.fill('[data-testid="editor-slug"]', 'slow-cleanup');
+      await vditor.insert(page, '发表以后马上刷新。\n');
+      await waitAutosaved(page);
+      await slowCleanup();
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      // overlay gone = the editor has finished: already on the published post's address, no stale local draft
+      assert.equal(await page.evaluate(() => location.hash), target);
+      const left = await page.evaluate(async () => (await (await import('/admin/js/drafts.js')).listDrafts()).filter((d) => d.title === 'Slow Cleanup'));
+      assert.deepEqual(left, []);
+      // reloading right away opens the published post (not an empty 写新文章)
+      await reloadTo(page, target);
+      assert.match(await vditor.get(page), /发表以后马上刷新。/);
+      // existing post: 更新, then open another post right away (not refused with 「正在发表，请稍候再离开」)
+      await typeAtEnd(page, ' 再改一次');
+      await slowCleanup();
+      await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.equal((await page.textContent('[data-testid="editor-status"]')).trim(), '已发表');
+      assert.match(mock.readFile('content/posts/slow-cleanup.md'), /再改一次/);
+      const other = '#/edit?path=' + encodeURIComponent('content/posts/deploy-link-test.md');
+      await gotoEdit(page, other);
+      assert.equal(await page.evaluate(() => location.hash), other);
+      assert.match(await vditor.get(page), /部署完成之后/);
+    });
+
+    await test('删除此版本 with a slow draft cleanup: the overlay stays until the editor has moved to the remaining version', async () => {
+      const SD = 'content/posts/slow-delete.md';
+      const SD_EN = 'content/posts/slow-delete.en.md';
+      mock.setFiles({ [SD]: fmOf('慢删除') + '共用正文\n', [SD_EN]: fmOf('Slow delete') + 'English body\n' });
+      await reloadTo(page, '#/edit?path=' + encodeURIComponent(SD_EN));
+      assert.ok(await page.isVisible('[data-testid="editor-tab-en"].active'));
+      // make the post-delete local-draft bookkeeping slow, so any gap between "overlay gone" and "editor done" is wide
+      await page.evaluate(() => {
+        const ed = document.querySelector('[data-testid="editor-body"]')._editor;
+        const orig = ed.flushOthers.bind(ed);
+        ed.flushOthers = async (except) => { await new Promise((r) => setTimeout(r, 1500)); return orig(except); };
+      });
+      await page.click('[data-testid="editor-more"]');
+      await page.click('[data-testid="editor-delete-variant"]');
+      await page.waitForSelector('[data-testid="confirm-ok"]');
+      await clickAndCommit(page, mock, '[data-testid="confirm-ok"]');
+      assert.equal(mock.readFile(SD_EN), undefined);
+      assert.equal(await page.evaluate(() => location.hash), '#/edit?path=' + encodeURIComponent(SD));
+      await waitEditor(page);
+      const other = '#/edit?path=' + encodeURIComponent('content/posts/deploy-link-test.md');
+      await gotoEdit(page, other);
+      assert.equal(await page.evaluate(() => location.hash), other);
+      assert.match(await vditor.get(page), /部署完成之后/);
     });
 
     await test('a new post whose first 发表 silently landed: 发表 again points to the published post instead of «换个文件名»', async () => {

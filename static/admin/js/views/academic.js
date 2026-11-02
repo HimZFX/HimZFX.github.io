@@ -914,6 +914,8 @@ export default async function mount(container, params, ctx) {
         {
           text: isNew ? '保存并发布' : '保存修改', kind: 'primary', testid: `${testid}-save`,
           onClick: async (close) => {
+            // 文件名建议是防抖更新的（输入后 200 ms）：刚改完标题 / 日期就点保存时先补算一次，免得用旧值命名
+            suggestId();
             const ok = await saveEntry(kind, entry, f);
             if (ok) { close(); renderAll(); }
           },
