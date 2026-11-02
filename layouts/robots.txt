@@ -1,0 +1,17 @@
+{{- /*
+  robots.txt：跟随 config/_default/hugo.toml 里的「搜索引擎收录」开关（cascade 的 robotsNoIndex）。
+  禁止收录时：网页本身仍允许抓取——搜索引擎要读到每页的 noindex 标记才会不收录（或移除已收录的页面）；
+  PDF 等文件无法带 noindex，所以直接禁止抓取资料、预览页和后台。
+  允许收录时：与 PaperMod 原版相同，另外仍禁止抓取后台。
+*/ -}}
+User-agent: *
+{{- if site.Home.Params.robotsNoIndex }}
+Disallow: /documents/
+Disallow: /viewer/
+Disallow: /admin/
+{{- else if hugo.IsProduction | or (eq site.Params.env "production") }}
+Disallow: /admin/
+Sitemap: {{ "sitemap.xml" | absURL }}
+{{- else }}
+Disallow: /
+{{- end }}
