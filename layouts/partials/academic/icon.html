@@ -1,7 +1,7 @@
 {{- /*
   本站自己加的学术图标（PaperMod 的 svg.html 里没有的）：
     ads    NASA ADS（Astrophysics Data System）：带环的行星 + 两颗星
-    arxiv  arXiv：希腊字母 χ（粗的一笔两端带弯，和 X / Twitter 的图标区分开）
+    arxiv  arXiv：一页论文（折角）上写着小小的 χ（不单独画 χ，免得看起来像 X / Twitter 的标志）
   和 PaperMod 的图标一样：24×24、线条用 currentColor（深浅色自动跟随），尺寸由 CSS 决定（.social-icons a svg 是 26px）。
   参数：图标名（小写）。不是这两个时什么也不输出。
 */ -}}
@@ -17,7 +17,9 @@
 {{- else if eq $name "arxiv" -}}
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M3.5 5.5c1.8-1.2 3.3-.6 4.5 1.3l7.4 11.6c1.2 1.9 2.8 2.6 5.1 1.6" stroke-width="2.4" />
-    <path d="M19 3.5c-3.5 3.2-9.8 12.3-13.5 17" stroke-width="1.7" />
+    <path d="M14 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8z" />
+    <path d="M14 2.5V8h5.5" />
+    <path d="M8.2 11.2c.9-.5 1.6-.2 2.1.6l2.6 4.6c.5.8 1.2 1.1 2.1.7" stroke-width="1.7" />
+    <path d="M14.6 11c-1.6 1.5-3.6 4.2-5.6 6.6" stroke-width="1.4" />
 </svg>
 {{- end -}}

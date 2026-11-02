@@ -1004,6 +1004,18 @@ window.BG_System.loadCassette({
 - 近况：`data/news/` 里要有内容，且「近况设置」（`[news] homeCount`）不是 `0`。日期写错（不是 `YYYY-MM-DD`）的那条会被跳过。
 - 简历：「首页设置」的「简历 CV」卡片里上传过 PDF（`params.toml` 的 `cv` 不为空）。两者都要等部署完成。
 
+### 网站在搜索引擎上搜不到 / 想让网站被搜索到
+
+目前网站**故意设置成禁止搜索引擎收录**：每个网页都带 `noindex, nofollow` 标记，`robots.txt` 还禁止抓取 `/documents/`（资料、简历 PDF）、`/viewer/` 和 `/admin/`。开关在 `config/_default/hugo.toml` 末尾：
+
+```toml
+[[cascade]]
+  [cascade.params]
+    robotsNoIndex = true   # 改成 false（或删掉整个 [[cascade]] 块）= 允许收录
+```
+
+改成 `false` 后网页和 `robots.txt` 一起恢复为允许收录。搜索引擎要等下次来抓取才会看到变化，所以生效通常需要几天到几周。
+
 ### 数学公式没渲染
 
 确认该页没有写 `math: false`；检查公式分隔符是否成对。
