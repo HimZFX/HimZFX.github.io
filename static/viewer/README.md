@@ -6,14 +6,14 @@
 ## 网址
 
 ```
-/viewer/?file=<encodeURIComponent(网站路径)>[&lang=en][&embed=1][&page=N]
+/viewer/?file=<encodeURIComponent(网站路径)>[&lang=zh|en][&embed=1][&page=N]
 例：/viewer/?file=%2Fdocuments%2F%E8%AE%B2%E4%B9%89.pdf     （即 /documents/讲义.pdf）
 ```
 
 | 参数 | 说明 |
 |---|---|
 | `file` | 必填。本站文件的路径，以 `/` 开头，例如 `/documents/讲义.pdf`、`/images/板书.jpg` |
-| `lang=en` | 英文界面（默认中文），左上角「主页」指向 `/en/` |
+| `lang=en` / `lang=zh` | 英文 / 中文界面；左上角「主页」指向那种语言的首页（英文 `/`，中文 `/zh/`）。不写时见下面「界面语言」 |
 | `embed=1` | 精简模式，给文章里嵌入的 `<iframe>` 用：顶栏更窄，带「在新页面打开」和「下载」 |
 | `page=N` | 从第 N 页开始显示 |
 
@@ -31,6 +31,8 @@
 | 文件 | 作用 |
 |---|---|
 | `index.html` | 页面骨架 + 内容安全策略（CSP） |
+| `site.js` | **不在这个文件夹里**：Hugo 构建时生成（`layouts/partials/features/viewer-site.html`），内容是网站的默认语言和各语言的网址前缀 |
+| `lang.js` | 在显示前决定界面语言（经典脚本，ES5；测试里用 `require` 直接调用 `pick` / `homePath`） |
 | `theme.js` | 在显示前决定深浅色：与主站一致，先看 `localStorage['pref-theme']`，否则跟随系统 |
 | `viewer.js` | 主逻辑（ES 模块）：参数检查、PDF 懒加载渲染、缩放、页码、图片、错误提示 |
 | `path.js` | `file` 参数的校验（纯函数，测试也会直接调用） |
@@ -39,6 +41,17 @@
 | `vendor/pdfjs/` | PDF.js 6.4.299 本地副本（legacy 版），说明见其中的 README.md |
 
 左上角的网站名称是从首页的 `og:site_name` 读出来的（读不到时显示「主页」），所以在后台改了网站标题这里会自动跟着变。
+
+## 界面语言
+
+网站的默认语言是英文（在 `/`），中文在 `/zh/`。按顺序判断（`lang.js`）：
+
+1. 链接里的 `lang=zh` / `lang=en`。网站的 `{{< pdf >}}` 和课程资料列表总是写页面的语言；后台在语言专属版本（`xxx.en.md` / `xxx.zh.md`）里插入的链接也写；
+2. 从哪个页面点进来的（同一网站的 `document.referrer`）：`/zh/…` → 中文，网站的其他页面 → 默认语言（英文）。共用版本 `xxx.md` 里的链接、后台「复制预览链接」不写 `lang`，靠的就是这一条；
+3. 浏览器 / 手机的语言（`navigator.languages`）；
+4. 网站的默认语言（`site.js`，读不到时英文）。
+
+「在新页面打开」总是带上当前的界面语言。
 
 ## 安全
 
@@ -49,7 +62,7 @@
 - **CSP**：`script-src 'self'`（没有内联脚本、没有 eval）、`connect-src 'self'`、`worker-src 'self'`、`style-src 'self'`、
   `object-src 'none'`、`base-uri 'none'`、`form-action 'none'`、`frame-src 'none'`。
   不需要 `'wasm-unsafe-eval'`：WebAssembly 解码器只在 PDF.js 的 Worker 里运行，Worker 不受页面 CSP 约束。
-- **不读写 localStorage**，唯一的例外是读取主题偏好 `pref-theme`。
+- **不读写 localStorage**，唯一的例外是读取主题偏好 `pref-theme`（`lang.js` 不碰存储）。
 - PDF.js 关闭脚本（不带 `pdf.sandbox`）和 XFA 表单；PDF 里的链接只保留 `http(s)`、`mailto` 和文档内跳转，
   外部链接在新标签页打开并带 `noopener noreferrer`；页面内容全部用 DOM API / textContent 生成，不用 innerHTML。
 - `<meta name="referrer" content="no-referrer">`：从 PDF 点出去的链接不会带上预览地址。

@@ -398,14 +398,20 @@ export async function mapLimit(items, limit, fn) {
 /**
  * 找出正文里引用了这个网站文件的文章 / 页面（最多等 5 秒，失败就当没有）。
  * 直接链接、在线预览链接（/viewer/?file=…）、{{< pdf >}} 短代码都算。
+ * 查找范围：content/ 下的 .md、data/ 下的 .yaml（论文的 pdf、报告的 slides…）、config/ 下的 .toml（简历 cv）。
  * @param {object} repo
  * @param {string} sitePath 网站路径（未编码）
  * @returns {Promise<string[]>} 仓库路径
  */
 export async function findReferences(repo, sitePath) {
   const mds = repo.list(PATHS.content + '/').filter((e) => e.path.endsWith('.md'));
-  if (!mds.length || mds.length > 400) return [];
-  const work = mapLimit(mds, 6, async (e) => {
+  // 学术模块的数据文件（论文 pdf、报告 slides、近况 link）和配置（params.toml 的 cv、[<语言>.params] 的覆盖）也会引用资料
+  const more = [
+    ...repo.list('data/').filter((e) => /\.ya?ml$/i.test(e.path)),
+    ...repo.list('config/').filter((e) => /\.toml$/i.test(e.path)),
+  ];
+  if ((!mds.length && !more.length) || mds.length > 400 || more.length > 400) return [];
+  const work = mapLimit([...more, ...mds], 6, async (e) => {
     try {
       const text = await repo.readText(e.path);
       return referencesSitePath(text, sitePath) ? e.path : null;
@@ -434,7 +440,7 @@ export async function deleteStaticFile(ctx, e, { isDisposed = () => false } = {}
       ? h('div', { class: 'banner banner-warning', dataset: { testid: 'files-delete-refs' } },
         svgIcon('warning'),
         h('div', { class: 'banner-text' },
-          h('div', {}, `有 ${refs.length} 篇文章或页面引用了它，删除后那里的链接、图片或嵌入的阅读器会打不开：`),
+          h('div', {}, `有 ${refs.length} 处（文章、页面、论文 / 报告 / 近况或网站设置）引用了它，删除后那里的链接、图片或嵌入的阅读器会打不开：`),
           h('ul', { class: 'files-name-list' }, refs.slice(0, 8).map((p) => h('li', {}, h('code', {}, p)))),
           refs.length > 8 ? h('div', { class: 'muted' }, `…等 ${refs.length} 个`) : null))
       : null,

@@ -1,0 +1,26 @@
+{{- /*
+  首页头像下方的「近况」（layouts/partials/index_profile.html 调用，参数是首页）。
+  显示 data/news/ 里最新的 params.toml [news] homeCount 条（默认 5；0 = 不显示）；
+  总条数比 homeCount 多时，底部加「全部近况 / All news」链接到这种语言的 /news/ 页面。没有近况时什么也不输出。
+*/ -}}
+{{- $lang := .Language.Lang -}}
+{{- $cfg := site.Params.news | default dict -}}
+{{- $count := 5 -}}
+{{- with $cfg.homeCount -}}{{- $count = int . -}}{{- end -}}
+{{- if eq (printf "%v" $cfg.homeCount) "0" }}{{ $count = 0 }}{{ end -}}
+{{- $news := partial "academic/news.html" $lang -}}
+{{- if and $news (gt $count 0) }}
+<section class="home-news" aria-labelledby="home-news-title">
+    <h2 class="home-news-title" id="home-news-title">{{ i18n "news_title" }}</h2>
+    <ul class="news-list">
+        {{- range first $count $news }}
+        {{ partial "academic/news-item.html" (dict "n" . "lang" $lang) }}
+        {{- end }}
+    </ul>
+    {{- if gt (len $news) $count }}
+    {{- with site.GetPage "/news" }}
+    <a class="home-news-all" href="{{ .RelPermalink }}">{{ i18n "news_all" }} →</a>
+    {{- end }}
+    {{- end }}
+</section>
+{{- end -}}

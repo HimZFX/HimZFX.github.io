@@ -1,0 +1,92 @@
+/* ==========================================================================
+   academic.css — 「学术」视图（views/academic.js）：论文 / 报告与海报 / 近况
+   只写这个视图特有的样式；通用组件来自 admin.css。类名以 .ac- 开头。
+   ========================================================================== */
+
+.ac-view { gap: 16px; }
+.ac-view > .page-header { margin-bottom: 0; }
+.ac-tabs .tab { gap: 6px; }
+.ac-tabs .tab .icon { width: 16px; height: 16px; }
+.ac-panel { gap: 16px; }
+
+/* ---------- 顶部菜单开关 ---------- */
+.ac-menu-card { display: flex; flex-direction: column; gap: 10px; }
+.ac-menu-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.ac-menu-label { display: inline-flex; align-items: center; gap: 12px; min-width: 0; cursor: pointer; }
+.ac-menu-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ac-menu-urls { word-break: break-all; }
+.ac-menu-hint { margin: 0; }
+.ac-banner { margin: 0; }
+
+/* ---------- 设置（可折叠） ---------- */
+.ac-settings { padding: 0; }
+.ac-settings-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 24px;
+  cursor: pointer;
+  font-weight: 500;
+  list-style: none;
+}
+.ac-settings-summary::-webkit-details-marker { display: none; }
+.ac-settings-summary .icon { color: var(--muted); flex: none; }
+.ac-settings-summary .ac-chevron { margin-left: auto; transition: transform 0.15s; }
+.ac-settings[open] > .ac-settings-summary .ac-chevron { transform: rotate(180deg); }
+.ac-settings-body { padding: 0 24px 18px; }
+.ac-settings-actions { justify-content: flex-end; }
+.ac-names { min-height: 72px; }
+.ac-num { max-width: 120px; }
+
+/* ---------- 表单 ---------- */
+.ac-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.ac-grid > .field, .ac-grid > div { min-width: 0; }
+.ac-span2 { grid-column: 1 / -1; }
+.ac-check { align-self: center; }
+.ac-form .input-group { display: flex; gap: 8px; }
+.ac-form .input-group > .input { flex: 1 1 auto; min-width: 0; }
+.ac-form .input-group > .btn { flex: none; }
+.ac-form .is-readonly { background: var(--gray-soft); color: var(--text-2); }
+.ac-file-note { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: -4px; word-break: break-all; }
+.ac-file-note a { display: inline-flex; align-items: center; gap: 4px; }
+.ac-raw > summary { cursor: pointer; color: var(--text-2); font-size: 13.5px; padding: 4px 0; }
+.ac-raw[open] > summary { margin-bottom: 8px; }
+.ac-bib { font-size: 12.5px; line-height: 1.5; white-space: pre; overflow-x: auto; }
+
+.ac-bib-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--hover-soft);
+}
+.ac-bib-label { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; }
+.ac-bib-paste { min-height: 120px; }
+.ac-bib-row { flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.ac-bib-status { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; word-break: break-word; }
+
+/* ---------- 列表 ---------- */
+.ac-groups { display: flex; flex-direction: column; gap: 12px; }
+.ac-group-title { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.ac-group-title .badge { font-weight: 500; }
+.ac-list-card > .ac-groups .list, .ac-list-card > .list { margin: 0 -24px; box-shadow: none; border-radius: 0; }
+.ac-row .list-item-title { font-size: 15px; line-height: 1.45; white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+.ac-sub { color: var(--text-2); font-size: 13.5px; line-height: 1.5; word-break: break-word; }
+.ac-me { color: var(--text); }
+.ac-badges { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.ac-actions { gap: 6px; }
+.ac-row.is-broken .list-item-title code { word-break: break-all; }
+.ac-news-text { font-size: 15px; line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+.ac-empty-line { margin: 4px 0; }
+.ac-quick-actions { justify-content: flex-end; margin-top: 12px; }
+
+@media (max-width: 760px) {
+  .ac-grid { grid-template-columns: minmax(0, 1fr); }
+  .ac-list-card > .ac-groups .list, .ac-list-card > .list { margin: 0 -16px; }
+  .ac-menu-row { align-items: flex-start; }
+  .ac-settings-summary { padding: 14px 16px; }
+  .ac-settings-body { padding: 0 16px 14px; }
+  .ac-tabs .tab { padding-left: 10px; padding-right: 10px; }
+}

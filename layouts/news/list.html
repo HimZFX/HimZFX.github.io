@@ -1,0 +1,47 @@
+{{- /*
+  近况 /news/（content/news/_index*.md；覆盖 PaperMod 的 list.html，只作用于这个栏目）。
+  数据：data/news/<YYYY-MM-DD>-<简短英文>.yaml，每条一个文件（字段见 layouts/partials/academic/news.html 和 SITE_GUIDE.md）。
+  页面顺序：页首 → _index 的正文 → 按年份分组的全部近况（最新的在前）。没有近况时显示一句提示。
+  首页头像下方的「近况」用的是同一份数据（layouts/partials/index_profile.html，条数见 params.toml [news] homeCount）。
+*/ -}}
+{{- define "main" }}
+{{- $lang := .Language.Lang }}
+<header class="page-header">
+  {{- partial "breadcrumbs.html" . }}
+  <h1>{{ .Title }}</h1>
+  {{- if .Description }}
+  <div class="post-description">
+    {{ .Description | markdownify }}
+  </div>
+  {{- end }}
+</header>
+
+{{- if .Content }}
+<div class="post-content">
+  {{- if not (.Param "disableAnchoredHeadings") }}
+  {{- partial "anchored_headings.html" .Content -}}
+  {{- else }}{{ .Content }}{{ end }}
+</div>
+{{- end }}
+
+{{- $news := partial "academic/news.html" $lang }}
+{{- if not $news }}
+<p class="academic-empty">{{ i18n "news_empty" }}</p>
+{{- else }}
+{{- $years := slice }}
+{{- range $news }}{{ if not (in $years .year) }}{{ $years = $years | append .year }}{{ end }}{{ end }}
+<div class="news-index">
+  {{- range $years }}
+  {{- $y := . }}
+  <section class="pub-group news-group">
+    <h2 class="pub-group-title" id="y{{ $y }}">{{ $y }}</h2>
+    <ul class="news-list">
+      {{- range where $news "year" $y }}
+      {{ partial "academic/news-item.html" (dict "n" . "lang" $lang) }}
+      {{- end }}
+    </ul>
+  </section>
+  {{- end }}
+</div>
+{{- end }}
+{{- end }}{{- /* end main */ -}}

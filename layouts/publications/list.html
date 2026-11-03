@@ -1,0 +1,103 @@
+{{- /*
+  论文列表页 /publications/（content/publications/_index*.md；覆盖 PaperMod 的 list.html，只作用于这个栏目）。
+
+  数据：data/publications/<id>.yaml，每篇一个文件（字段见 layouts/partials/academic/publications.html 和 SITE_GUIDE.md）。
+  设置：params.toml 的 [publications]
+    groupBy   "kind"（默认）：同行评审 / 已投稿与准备中 / 会议论文与其他；"year"：按年份分组
+    myNames   你的名字的各种写法，作者列表里加粗（例如 ["Zhong, F.", "Zhong, Fangxiong"]）
+    ads / orcid / scholar   页首的「NASA ADS / ORCID / Google Scholar」链接：可以写完整网址，
+              也可以只写 ORCID iD（0000-0000-0000-0000）、Google Scholar 的 user 编号、ADS 的作者名（例如 "Zhong, F."，链接到 ADS 作者检索）
+    maxAuthors / firstAuthors   作者列表的截断（默认 8 / 3，见 academic/authors.html）
+  页面顺序：页首 → _index 的正文（可以写一段介绍）→ 论文检索页面的链接 → 论文列表。
+  每组内从新到旧；没有论文时显示一句提示。BibTeX 的「复制」按钮来自 assets/js/academic.js（本站脚本，只在有 BibTeX 时加载）。
+*/ -}}
+{{- define "main" }}
+{{- $lang := .Language.Lang }}
+<header class="page-header">
+  {{- partial "breadcrumbs.html" . }}
+  <h1>{{ .Title }}</h1>
+  {{- if .Description }}
+  <div class="post-description">
+    {{ .Description | markdownify }}
+  </div>
+  {{- end }}
+</header>
+
+{{- if .Content }}
+<div class="post-content">
+  {{- if not (.Param "disableAnchoredHeadings") }}
+  {{- partial "anchored_headings.html" .Content -}}
+  {{- else }}{{ .Content }}{{ end }}
+</div>
+{{- end }}
+
+{{- $cfg := site.Params.publications | default dict }}
+{{- $profiles := slice }}
+{{- with trim (string ($cfg.ads | default "")) " " }}
+  {{- $href := "" }}
+  {{- if findRE `^(?i)https?://` . }}{{ $href = (partial "academic/url.html" (dict "url" . "where" "params.toml [publications] ads")).href }}
+  {{- else }}{{ $href = printf "https://ui.adsabs.harvard.edu/search/q=%s&sort=date%%20desc%%2C%%20bibcode%%20desc" (replace (urlquery (printf "author:\"%s\"" .)) "+" "%20") }}{{ end }}
+  {{- with $href }}{{ $profiles = $profiles | append (dict "name" "ads" "label" "NASA ADS" "href" .) }}{{ end }}
+{{- end }}
+{{- with trim (string ($cfg.orcid | default "")) " " }}
+  {{- $href := "" }}
+  {{- if findRE `^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$` . }}{{ $href = printf "https://orcid.org/%s" . }}
+  {{- else }}{{ $href = (partial "academic/url.html" (dict "url" . "where" "params.toml [publications] orcid")).href }}{{ end }}
+  {{- with $href }}{{ $profiles = $profiles | append (dict "name" "orcid" "label" "ORCID" "href" .) }}{{ end }}
+{{- end }}
+{{- with trim (string ($cfg.scholar | default "")) " " }}
+  {{- $href := "" }}
+  {{- if findRE `^[A-Za-z0-9_-]{6,20}$` . }}{{ $href = printf "https://scholar.google.com/citations?user=%s" . }}
+  {{- else }}{{ $href = (partial "academic/url.html" (dict "url" . "where" "params.toml [publications] scholar")).href }}{{ end }}
+  {{- with $href }}{{ $profiles = $profiles | append (dict "name" "googlescholar" "label" "Google Scholar" "href" .) }}{{ end }}
+{{- end }}
+{{- with $profiles }}
+<nav class="pub-profiles" aria-label="{{ i18n "pub_profiles" }}">
+  {{- range . }}
+  <a class="pub-profile pub-profile-{{ .name }}" href="{{ .href }}" target="_blank" rel="noopener noreferrer">
+    {{- if eq .name "ads" }}{{ partial "academic/icon.html" "ads" }}{{ else }}{{ partial "svg.html" (dict "name" .name) }}{{ end -}}
+    <span>{{ .label }}</span>
+  </a>
+  {{- end }}
+</nav>
+{{- end }}
+
+{{- $pubs := partial "academic/publications.html" . }}
+{{- if not $pubs }}
+<p class="academic-empty">{{ i18n "pub_empty" }}</p>
+{{- else }}
+{{- $groups := slice }}
+{{- if eq (lower (string ($cfg.groupBy | default "kind"))) "year" }}
+  {{- $years := slice }}
+  {{- range $pubs }}{{ if not (in $years .year) }}{{ $years = $years | append .year }}{{ end }}{{ end }}
+  {{- range $years }}
+    {{- $y := . }}
+    {{- $groups = $groups | append (dict "id" (cond (gt $y 0) (printf "y%d" $y) "undated") "title" (cond (gt $y 0) (string $y) (i18n "pub_undated")) "items" (where $pubs "year" $y) "showKind" true) }}
+  {{- end }}
+{{- else }}
+  {{- range slice "refereed" "pending" "other" }}
+    {{- with where $pubs "group" . }}
+      {{- $groups = $groups | append (dict "id" (index (index . 0) "group") "title" (i18n (printf "pub_group_%s" (index (index . 0) "group"))) "items" . "showKind" true) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+<div class="pub-index">
+  {{- range $groups }}
+  <section class="pub-group">
+    <h2 class="pub-group-title" id="{{ .id }}">{{ .title }} <span class="pub-group-count">{{ len .items }}</span></h2>
+    <ol class="pub-list">
+      {{- range .items }}
+      {{ partial "academic/pub.html" (dict "p" . "lang" $lang "showKind" true) }}
+      {{- end }}
+    </ol>
+  </section>
+  {{- end }}
+</div>
+{{- if where $pubs "bibtex" "!=" "" }}
+{{- $js := resources.Get "js/academic.js" }}
+{{- if hugo.IsProduction }}{{ $js = $js | minify | fingerprint }}{{ end }}
+<script defer src="{{ $js.RelPermalink }}" data-copy="{{ i18n "pub_copy" }}" data-copied="{{ i18n "pub_copied" }}"
+  {{- with $js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
+{{- end }}
+{{- end }}
+{{- end }}{{- /* end main */ -}}

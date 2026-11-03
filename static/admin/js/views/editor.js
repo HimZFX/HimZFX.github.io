@@ -2233,7 +2233,7 @@ class Editor {
       C.variantLabel(v.key, this.ctx),
       dirty ? h('span', { class: 'ed-dot', title: '有未发表的修改', 'aria-label': '有未发表的修改' }) : null));
     }
-    // 「＋ 单独写英文版」
+    // 「＋ 单独写中文版」等：每个还没有专属版本的语言一个（文字来自 ctx.langName，不写死语言）
     const canTranslate = !this.isNewGroup && [...this.variants.values()].some((v) => v.exists);
     if (canTranslate) {
       const hasShared = this.variants.has('shared');
@@ -2825,9 +2825,10 @@ class Editor {
     if (C.isPdfPath(sitePath)) {
       if (how === 'embed' && canEmbedPdf(sitePath)) return `{{< pdf "${sitePath}" >}}`;
       if (how === 'link' || how === 'embed') {
-        // 英文专属版本（xxx.en.md）里的链接打开英文界面的阅读器；共用版本 / 中文版用默认的中文界面
+        // 语言专属版本（xxx.en.md / xxx.zh.md）里的链接写 lang=<该语言>（默认语言也写）；
+        // 共用版本 xxx.md 两个站点都显示，不写 lang，由阅读器按来源页面（/zh/… → 中文）判断（content.viewerUrlFor 的约定）
         const key = this.activeKey;
-        const lang = key && key !== 'shared' && key !== this.ctx.defaultLang ? key : undefined;
+        const lang = key && key !== 'shared' ? key : undefined;
         const url = C.viewerUrlFor(sitePath, { lang });
         if (url) return `[${linkText(text)}](${url})`;
       }
@@ -3311,12 +3312,18 @@ class Editor {
     if (docCount) summary.push(`上传资料 ${docCount} 个`);
 
     this.flushAutosave();
+    const oldKey = v.draftKey;
+    const newKey = drafts.draftKeyForPath(path);
     let res;
     try {
       const view = mode === 'draft' ? null : this.publishedUrlFor(v, content);
       res = await this.ctx.publish({
         message: `admin: ${verb}《${title}》${label}`, changes, summary,
         viewUrl: view || undefined, viewLabel: view ? (this.kind === 'post' ? '查看文章' : '查看页面') : undefined,
+        // 成功后先清理本机草稿（即使编辑器已经关掉了，例如发表途中离开），否则会留下一份「未发表」的旧草稿。
+        // 放在遮罩关闭之前做：遮罩一消失，下面的收尾（更新状态 / 新文章跳到它的地址）就在同一轮里同步完成，
+        // 中间不会再有「遮罩已经没了，但还在发表、离开会被拒绝」的空档
+        afterCommit: () => this.cleanupDrafts([oldKey, newKey]),
       });
     } catch (err) {
       // 外壳已经提示过错误；修改仍在编辑器里和本机草稿中
@@ -3327,11 +3334,8 @@ class Editor {
       if (!this.destroyed) this.onConflict(v, res);
       return;
     }
-    // ---- 成功 ----
-    // 先清理本机草稿（即使编辑器已经关掉了，例如发表途中离开），否则会留下一份「未发表」的旧草稿
-    const oldKey = v.draftKey;
-    const newKey = drafts.draftKeyForPath(path);
-    await this.cleanupDrafts([oldKey, newKey]);
+    // ---- 成功（本机草稿已经在 afterCommit 里清理过了）----
+    // 从这里到函数结束不能再有 await：遮罩关闭后要一口气做完
     if (this.destroyed) return;
 
     const sha = (res.shas && res.shas[path]) || this.repo.entry(path)?.sha || v.sha;
@@ -3540,7 +3544,7 @@ class Editor {
       if (!v || !v.exists || !v.published) return null;
       fm = v.fm || {};
     }
-    const prefix = lang === this.ctx.defaultLang ? '' : `${lang}/`;
+    const prefix = C.langPrefix(lang, this.ctx.defaultLang);
     let rel;
     if (typeof fm.url === 'string' && fm.url.trim()) {
       const raw = fm.url.trim();
@@ -3613,14 +3617,19 @@ class Editor {
         message: `admin: 删除《${v.form.title.trim() || this.group.base}》的${label}`,
         changes: [{ path: v.path, delete: true, baseSha: v.sha }],
         summary: [`删除：${v.path}`],
+        // 本机草稿的收尾放在遮罩关闭之前（同 doSave）：遮罩一消失就同步跳走，
+        // 不会在用户已经打开别的页面之后再把他拉回这里
+        afterCommit: async () => {
+          this.autosave.cancel();
+          v.needsAutosave = false;
+          if (v.draftKey) await drafts.deleteDraft(v.draftKey);
+          v.draftKey = null;
+          await this.flushOthers(v);
+        },
       });
     } catch { return; }
     if (res && res.conflict) { this.onConflict(v, res); return; }
-    this.autosave.cancel();
-    v.needsAutosave = false;
-    if (v.draftKey) await drafts.deleteDraft(v.draftKey);
-    v.draftKey = null;
-    await this.flushOthers(v);
+    // 从这里到函数结束不能再有 await（见上）
     const remaining = [...this.variants.values()].find((x) => x !== v && x.exists);
     this.leaving = true;
     this.ctx.navigate(remaining ? '#/edit?path=' + encodeURIComponent(remaining.path) : this.listHash(), { replace: true });
@@ -3689,13 +3698,16 @@ class Editor {
         message: `admin: 删除《${title}》`,
         changes,
         summary: [`删除 ${existing.length} 个文件${cb.checked && images.length ? `和 ${images.length} 张图片` : ''}`],
+        // 同 deleteVariant：遮罩关闭之前删掉本机草稿，之后同步跳回列表
+        afterCommit: async () => {
+          this.autosave.cancel();
+          this.discarded = true;
+          for (const x of this.variants.values()) if (x.draftKey) await drafts.deleteDraft(x.draftKey);
+          for (const o of this.orphanDrafts) await drafts.deleteDraft(o.key);
+        },
       });
     } catch { return; }
     if (res && res.conflict) { this.onConflict(this.active, res); return; }
-    this.autosave.cancel();
-    this.discarded = true;
-    for (const x of this.variants.values()) if (x.draftKey) await drafts.deleteDraft(x.draftKey);
-    for (const o of this.orphanDrafts) await drafts.deleteDraft(o.key);
     this.leaving = true;
     this.ctx.navigate(this.listHash(), { replace: true });
   }
@@ -3706,7 +3718,12 @@ class Editor {
   openPreview() {
     this.syncActive();
     const multi = this.langs.length > 1 && this.variants.size > 1;
-    let lang = this.activeKey === 'shared' ? this.ctx.defaultLang : this.activeKey;
+    // 共用版本：先看显示它的站点（默认语言优先；默认语言有自己的专属版本时换成另一个仍显示共用版本的语言）
+    let lang = this.activeKey;
+    if (lang === 'shared') {
+      const showsShared = (l) => !this.variants.has(l);
+      lang = showsShared(this.ctx.defaultLang) ? this.ctx.defaultLang : this.langs.find(showsShared) || this.ctx.defaultLang;
+    }
     let dark = this.isDarkUI();
     const iframe = h('iframe', {
       class: 'ed-phone-frame', sandbox: 'allow-same-origin', title: '手机预览', referrerpolicy: 'no-referrer',

@@ -1,0 +1,96 @@
+/* 背景动画的开关按钮（由 assets/js/background/core.js 创建）。
+   宽屏：固定在左下角（正文左侧的空白里，和以前一样）。
+   窄屏（< 900px）：脚本把按钮移进页脚、版权一行的下面（.is-docked），跟着页面走，不会盖住正文、课程资料的标签或语言提示。
+   页面没有页脚时窄屏上仍是固定按钮：更小、半透明，并避开 iPhone 底部的安全区域。 */
+
+.bg-toggle {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    z-index: 999;
+    display: inline-flex;
+    padding: 5px;
+    color: var(--primary);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.3s, transform 0.3s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.bg-toggle[aria-pressed="true"] {
+    opacity: 1;
+}
+
+.bg-toggle:hover {
+    transform: scale(1.1);
+}
+
+.bg-toggle:focus-visible {
+    outline: 2px solid var(--secondary);
+    outline-offset: 1px;
+}
+
+.bg-toggle svg {
+    display: block;
+    width: 24px;
+    height: 24px;
+}
+
+/* 页脚里 */
+.bg-toggle-dock {
+    display: flex;
+    justify-content: center;
+    margin-top: 2px;
+}
+
+.bg-toggle.is-docked {
+    position: static;
+    z-index: auto;
+    padding: 7px;
+    color: var(--secondary);
+}
+
+.bg-toggle.is-docked[aria-pressed="true"] {
+    color: var(--primary);
+}
+
+.bg-toggle.is-docked svg {
+    width: 18px;
+    height: 18px;
+}
+
+@media screen and (max-width: 899px) {
+    .bg-toggle:not(.is-docked) {
+        bottom: max(10px, env(safe-area-inset-bottom));
+        left: max(6px, env(safe-area-inset-left));
+        padding: 6px;
+        background: var(--theme);
+        border-radius: 50%;
+        opacity: 0.5;
+        box-shadow: 0 0 0 1px var(--border);
+    }
+
+    .bg-toggle:not(.is-docked) svg {
+        width: 18px;
+        height: 18px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .bg-toggle,
+    .bg-toggle:hover {
+        transition: none;
+        transform: none;
+    }
+}
+
+/* 窄屏上显示语言提示（固定在底部中间，见 lang-hint.css）时，页脚下方多留一些空间：
+   滚到页面最底部时，页脚（以及里面的开关按钮）在提示上方，不会被它挡住。 */
+@media screen and (max-width: 899px) {
+    body:has(> .lang-hint) > .footer {
+        padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    }
+}

@@ -1,0 +1,77 @@
+{{- /*
+  论文的作者列表（publications 的 authors，原样显示，例如 "Zhong, F."）。参数：dict "authors" <列表> "id" <论文 id>
+
+  加粗：和 params.toml [publications] myNames 里任意一种写法相同的作者加粗。比较时忽略大小写、空格、句点、逗号、
+        ~ 和 TeX 的 { } \（"Zhong, F." = "zhong f" = "{Zhong}, F."；但 "F. Zhong" 是另一种写法，要单独写进 myNames）。
+  截断：作者超过 maxAuthors（默认 8）位时，只显示前 firstAuthors（默认 3）位，再加「et al.（共 N 位作者）」；
+        你排在后面时也保持可见：
+          排第 firstAuthors+1 或 +2 位 → 一直显示到你（A, B, C, D, Zhong, F., et al.）
+          更靠后                       → 前几位 + … + 你（A, B, C, …, Zhong, F., et al.）
+        你是最后一位时不加 et al.。
+*/ -}}
+{{- $cfg := site.Params.publications | default dict -}}
+{{- $max := int ($cfg.maxAuthors | default 8) -}}
+{{- if lt $max 1 }}{{ $max = 8 }}{{ end -}}
+{{- $first := int ($cfg.firstAuthors | default 3) -}}
+{{- if lt $first 1 }}{{ $first = 1 }}{{ end -}}
+{{- if gt $first $max }}{{ $first = $max }}{{ end -}}
+
+{{- $raw := .authors -}}
+{{- if reflect.IsSlice $raw -}}
+{{- else if $raw -}}
+  {{- /* 写成了一整串（"A; B; C"）也能用 */ -}}
+  {{- $raw = split (string $raw) ";" -}}
+{{- else -}}
+  {{- $raw = slice -}}
+{{- end -}}
+{{- $authors := slice -}}
+{{- range $raw -}}
+  {{- $a := trim (string .) " \t\r\n" -}}
+  {{- if $a }}{{ $authors = $authors | append $a }}{{ end -}}
+{{- end -}}
+
+{{- $norm := `[\s.,~{}\\]+` -}}
+{{- $mine := slice -}}
+{{- range ($cfg.myNames | default slice) -}}
+  {{- $n := lower (replaceRE $norm "" (string .)) -}}
+  {{- if $n }}{{ $mine = $mine | append $n }}{{ end -}}
+{{- end -}}
+
+{{- $n := len $authors -}}
+{{- $me := -1 -}}
+{{- range $i, $a := $authors -}}
+  {{- if and (lt $me 0) (in $mine (lower (replaceRE $norm "" $a))) }}{{ $me = $i }}{{ end -}}
+{{- end -}}
+
+{{- /* 要显示的作者序号；-1 表示省略号 */ -}}
+{{- $show := slice -}}
+{{- $truncated := gt $n $max -}}
+{{- if not $truncated -}}
+  {{- range $i, $_ := $authors }}{{ $show = $show | append $i }}{{ end -}}
+{{- else if or (lt $me $first) (lt $me 0) -}}
+  {{- range seq 0 (sub $first 1) }}{{ $show = $show | append . }}{{ end -}}
+{{- else if le $me (add $first 1) -}}
+  {{- range seq 0 $me }}{{ $show = $show | append . }}{{ end -}}
+{{- else -}}
+  {{- range seq 0 (sub $first 1) }}{{ $show = $show | append . }}{{ end -}}
+  {{- $show = $show | append -1 $me -}}
+{{- end -}}
+
+{{- if $authors -}}
+{{- $last := index $show (sub (len $show) 1) -}}
+<span class="pub-authors"{{ if $truncated }} data-authors="{{ $n }}"{{ end }}>
+  {{- range $k, $i := $show -}}
+    {{- if $k }}, {{ end -}}
+    {{- if eq $i -1 -}}
+      <span class="pub-gap" aria-hidden="true">…</span>
+    {{- else if eq $i $me -}}
+      <strong class="pub-author pub-me">{{ index $authors $i }}</strong>
+    {{- else -}}
+      <span class="pub-author">{{ index $authors $i }}</span>
+    {{- end -}}
+  {{- end -}}
+  {{- if and $truncated (lt $last (sub $n 1)) -}}
+    <span class="pub-etal">{{ i18n "pub_et_al" }}</span><span class="pub-count">{{ i18n "pub_author_count" $n }}</span>
+  {{- end -}}
+</span>
+{{- end -}}

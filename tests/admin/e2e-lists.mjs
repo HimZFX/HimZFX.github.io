@@ -134,12 +134,14 @@ async function main() {
       await waitView(page, 'posts');
       assert.deepEqual(await rowKeys(page), ['content/posts/first-physics-note']);
       const row = '[data-testid="post-row"][data-key="content/posts/first-physics-note"]';
-      assert.equal(await page.textContent(`${row} [data-testid="post-title"]`), '广义相对论中的度规张量');
+      // the row shows the default language's version (English: first-physics-note.en.md)
+      assert.equal(await page.textContent(`${row} [data-testid="post-title"]`), 'Metric Tensor in GR');
       assert.equal(await page.textContent(`${row} [data-testid="post-date"]`), '2025-12-05');
       assert.equal((await page.textContent(`${row} [data-testid="post-status"]`)).trim(), '已发表');
       assert.equal(await page.textContent(`${row} [data-testid="post-lang"]`), '中英分开');
       assert.equal(await page.$(`${row} [data-testid="post-warning"]`), null);
-      assert.equal(await page.getAttribute(`${row} [data-testid="post-edit"]`, 'href'), '#/edit?path=content%2Fposts%2Ffirst-physics-note.md');
+      // 编辑 opens the version the default-language (English) site shows
+      assert.equal(await page.getAttribute(`${row} [data-testid="post-edit"]`, 'href'), '#/edit?path=content%2Fposts%2Ffirst-physics-note.en.md');
       const view = await page.getAttribute(`${row} [data-testid="post-view"]`, 'href');
       assert.equal(view, mock.url + '/posts/first-physics-note/');
       assert.equal(await page.getAttribute(`${row} [data-testid="post-view"]`, 'target'), '_blank');
@@ -176,7 +178,8 @@ async function main() {
       const sh = '[data-testid="post-row"][data-key="content/posts/shadowed"]';
       assert.equal(await page.textContent(`${sh} [data-testid="post-warning"]`), '英文站看不到这篇');
       assert.ok(await page.$eval(`${sh} [data-testid="post-warning"]`, (e) => e.classList.contains('badge-orange')));
-      assert.equal(await innerText(page, `${sh} [data-testid="post-status"]`), '中文已发表 英文草稿');
+      // per-language badges follow languages.toml (en weight 1, zh weight 2)
+      assert.equal(await innerText(page, `${sh} [data-testid="post-status"]`), '英文草稿 中文已发表');
       // shared-only + first post: no warnings
       assert.equal(await page.$$eval('[data-testid="post-warning"]', (els) => els.length), 1);
       const nd = await rowText(page, 'content/posts/no-date');
@@ -196,7 +199,7 @@ async function main() {
       await waitRows(page, ['content/posts/first-physics-note']);
       await page.fill('[data-testid="posts-search"]', 'english only');
       await waitRows(page, ['content/posts/en-only']);
-      // English variant title of a split post is searchable too
+      // both languages' titles of a split post are searchable (度规 = the Chinese one, metric tensor = the English one)
       await page.fill('[data-testid="posts-search"]', 'metric tensor');
       await waitRows(page, ['content/posts/first-physics-note']);
       await page.fill('[data-testid="posts-search"]', 'zzz-nothing');
@@ -209,7 +212,7 @@ async function main() {
     await step('posts: 编辑 and 写新文章 navigate to the editor routes', async () => {
       await page.click('[data-testid="post-row"][data-key="content/posts/shadowed"] [data-testid="post-edit"]');
       await page.waitForFunction(() => location.hash.startsWith('#/edit'));
-      assert.equal(await page.evaluate(() => location.hash), '#/edit?path=content%2Fposts%2Fshadowed.md');
+      assert.equal(await page.evaluate(() => location.hash), '#/edit?path=content%2Fposts%2Fshadowed.en.md');
       await goto(page, '#/posts', 'posts');
       await page.click('[data-testid="posts-new"]');
       await page.waitForFunction(() => location.hash.startsWith('#/edit'));
@@ -324,7 +327,7 @@ async function main() {
       const about = await rowText(page, 'content/about', 'page-row');
       assert.ok(about.includes('/about/') && about.includes('中英分开'), about);
       assert.equal(await page.getAttribute('[data-testid="page-row"][data-key="content/research/_index"] [data-testid="page-edit"]', 'href'),
-        '#/edit?path=content%2Fresearch%2F_index.md');
+        '#/edit?path=content%2Fresearch%2F_index.en.md');
       assert.equal(await page.isDisabled('[data-testid="pages-save-order"]'), true, 'nothing to save yet');
       assert.equal(await innerText(page, '[data-testid="nav-preview-en"]'), '英文站 About Research Blog Course Materials');
       // the page draft saved earlier shows up here
@@ -414,27 +417,31 @@ async function main() {
       assert.match(mock.readFile('content/about.en.md'), /weight: 25\n/);
     });
 
-    await step('pages: 新建栏目 validates and creates _index.md + _index.en.md, then opens the editor', async () => {
+    await step('pages: 新建栏目 validates and creates _index.md (default language: English) + _index.zh.md, then opens the editor', async () => {
       const before = mock.commits.length;
       await page.click('[data-testid="pages-new-section"]');
-      await page.waitForSelector('[data-testid="new-section-name-zh"]');
+      await page.waitForSelector('[data-testid="new-section-name-en"]');
+      // the default language's name comes first and is required; the Chinese one is optional
+      assert.deepEqual(await page.$$eval('.modal [data-testid^="new-section-name-"]', (els) => els.map((e) => [e.dataset.testid, e.placeholder])),
+        [['new-section-name-en', 'e.g. Projects'], ['new-section-name-zh', '例如：项目']]);
+      assert.match(await page.textContent('.modal'), /英文名称.*中文名称（可选）/);
       assert.equal(await page.inputValue('[data-testid="new-section-weight"]'), '40', 'default = max + 10');
       // validation: empty
       await page.click('[data-testid="new-section-ok"]');
       await page.waitForSelector('.modal .error:not([hidden])');
-      assert.match(await page.textContent('.modal'), /请填写中文名称/);
+      assert.match(await page.textContent('.modal'), /请填写英文名称/);
       await page.fill('[data-testid="new-section-name-zh"]', '项目');
       await page.fill('[data-testid="new-section-name-en"]', 'My Projects');
       assert.equal(await page.inputValue('[data-testid="new-section-slug"]'), 'my-projects', 'slug suggested from the English name');
       // taken / reserved slugs are refused
-      for (const [slug, re] of [['about', /已经有同名的页面/], ['research', /已经被一个栏目用了/], ['images', /重名|保留/], ['en', /保留/], ['Bad Slug', /小写英文字母/]]) {
+      for (const [slug, re] of [['about', /已经有同名的页面/], ['research', /已经被一个栏目用了/], ['images', /重名|保留/], ['en', /保留/], ['zh', /保留/], ['Bad Slug', /小写英文字母/]]) {
         await page.fill('[data-testid="new-section-slug"]', slug);
         await page.click('[data-testid="new-section-ok"]');
         await page.waitForFunction((r) => new RegExp(r).test(document.querySelector('.modal')?.textContent || ''), re.source);
       }
       assert.equal(mock.commits.length, before, 'invalid input → no commit');
       await page.fill('[data-testid="new-section-slug"]', 'projects');
-      assert.match(await page.textContent('[data-testid="new-section-url"]'), /\/projects\/.*\/en\/projects\//);
+      assert.match(await page.textContent('[data-testid="new-section-url"]'), /^网站上的地址：\/projects\/ {2}· {2}\/zh\/projects\/$/);
       await page.fill('[data-testid="new-section-weight"]', '35');
       await page.screenshot({ path: path.join(SHOTS, 'pages-new-section-desktop.png') });
       await page.click('[data-testid="new-section-ok"]');
@@ -442,13 +449,14 @@ async function main() {
       assert.equal(await page.evaluate(() => location.hash), '#/edit?path=content%2Fprojects%2F_index.md');
       assert.equal(mock.commits.length, before + 1);
       const c = mock.commits[mock.commits.length - 1];
-      assert.equal(c.message, 'admin: 新建栏目《项目》');
-      assert.deepEqual(c.changes.map((x) => `${x.status}:${x.path}`).sort(), ['added:content/projects/_index.en.md', 'added:content/projects/_index.md']);
-      assert.equal(mock.readFile('content/projects/_index.md'), '---\ntitle: "项目"\nmenu:\n  main:\n    weight: 35\n---\n\n这里写栏目介绍…\n');
-      assert.equal(mock.readFile('content/projects/_index.en.md'), '---\ntitle: "My Projects"\nmenu:\n  main:\n    weight: 35\n---\n\nWrite the section introduction here…\n');
+      assert.equal(c.message, 'admin: 新建栏目《My Projects》');
+      assert.deepEqual(c.changes.map((x) => `${x.status}:${x.path}`).sort(), ['added:content/projects/_index.md', 'added:content/projects/_index.zh.md']);
+      assert.equal(mock.readFile('content/projects/_index.md'), '---\ntitle: "My Projects"\nmenu:\n  main:\n    weight: 35\n---\n\nWrite the section introduction here…\n');
+      assert.equal(mock.readFile('content/projects/_index.zh.md'), '---\ntitle: "项目"\nmenu:\n  main:\n    weight: 35\n---\n\n这里写栏目介绍…\n');
+      assert.equal(mock.readFile('content/projects/_index.en.md'), undefined);
     });
 
-    await step('pages: section without English name → only shared _index.md', async () => {
+    await step('pages: section without a Chinese name → only shared _index.md', async () => {
       await goto(page, '#/pages', 'pages');
       assert.deepEqual(await rowKeys(page, 'pages-list', 'page-row'), [
         'content/courses/_index', 'content/research/_index', 'content/about', 'content/posts/_index', 'content/projects/_index',
@@ -456,15 +464,18 @@ async function main() {
       await page.click('[data-testid="pages-new-section"]');
       await page.fill('[data-testid="new-section-name-zh"]', '教学');
       assert.equal(await page.inputValue('[data-testid="new-section-slug"]'), '', 'Chinese-only name → no ASCII suggestion');
-      await page.fill('[data-testid="new-section-slug"]', 'teaching');
+      await page.fill('[data-testid="new-section-name-zh"]', '');
+      await page.fill('[data-testid="new-section-name-en"]', 'Teaching');
+      assert.equal(await page.inputValue('[data-testid="new-section-slug"]'), 'teaching', 'suggested from the English (default-language) name');
       assert.equal(await page.inputValue('[data-testid="new-section-weight"]'), '40');
       await page.click('[data-testid="new-section-ok"]');
       await page.waitForFunction(() => location.hash === '#/edit?path=content%2Fteaching%2F_index.md');
-      assert.equal(mock.readFile('content/teaching/_index.md'), '---\ntitle: "教学"\nmenu:\n  main:\n    weight: 40\n---\n\n这里写栏目介绍…\n');
+      assert.equal(mock.readFile('content/teaching/_index.md'), '---\ntitle: "Teaching"\nmenu:\n  main:\n    weight: 40\n---\n\nWrite the section introduction here…\n');
+      assert.equal(mock.readFile('content/teaching/_index.zh.md'), undefined);
       assert.equal(mock.readFile('content/teaching/_index.en.md'), undefined);
       await goto(page, '#/pages', 'pages');
       const t = await rowText(page, 'content/teaching/_index', 'page-row');
-      assert.ok(t.includes('中英共用') && t.includes('英文 教学'), t);
+      assert.ok(t.includes('中英共用') && t.includes('中文 Teaching'), t);
     });
 
     await step('pages: mobile layout has no horizontal scroll', async () => {
@@ -473,7 +484,7 @@ async function main() {
       await noHorizontalScroll(page);
       await page.screenshot({ path: path.join(SHOTS, 'pages-mobile.png'), fullPage: true });
       await page.click('[data-testid="pages-new-section"]');
-      await page.waitForSelector('[data-testid="new-section-name-zh"]');
+      await page.waitForSelector('[data-testid="new-section-name-en"]');
       await page.waitForTimeout(300);
       await page.screenshot({ path: path.join(SHOTS, 'pages-new-section-mobile.png') });
       await page.click('[data-testid="new-section-cancel"]');
@@ -498,15 +509,18 @@ async function main() {
       mock.exportTo(exp);
       const site2 = path.join(OUT, 'site-after');
       await buildSite({ repoDir: exp, outDir: site2, baseURL: mock.url + '/' });
-      const zh = navItems(fs.readFileSync(path.join(site2, 'index.html'), 'utf8'));
-      const en = navItems(fs.readFileSync(path.join(site2, 'en', 'index.html'), 'utf8'));
+      // English (default language) at /, Chinese under /zh/
+      const en = navItems(fs.readFileSync(path.join(site2, 'index.html'), 'utf8'));
+      const zh = navItems(fs.readFileSync(path.join(site2, 'zh', 'index.html'), 'utf8'));
       const rel = (items) => items.map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
-      assert.deepEqual(rel(zh), ['课程资料 /courses/', '科研 /research/', '关于 /about/', '博客 /posts/', '项目 /projects/', '教学 /teaching/']);
-      assert.deepEqual(rel(en), ['Course Materials /en/courses/', 'Research /en/research/', 'About /en/about/', 'Blog /en/posts/', 'My Projects /en/projects/', '教学 /en/teaching/']);
+      assert.deepEqual(rel(en), ['Course Materials /courses/', 'Research /research/', 'About /about/', 'Blog /posts/', 'My Projects /projects/', 'Teaching /teaching/']);
+      assert.deepEqual(rel(zh), ['课程资料 /zh/courses/', '科研 /zh/research/', '关于 /zh/about/', '博客 /zh/posts/', '项目 /zh/projects/', 'Teaching /zh/teaching/']);
       assert.ok(fs.existsSync(path.join(site2, 'projects', 'index.html')));
-      assert.ok(fs.existsSync(path.join(site2, 'en', 'projects', 'index.html')));
+      assert.ok(fs.existsSync(path.join(site2, 'zh', 'projects', 'index.html')));
+      assert.ok(!fs.existsSync(path.join(site2, 'en', 'projects', 'index.html')));
       // deleted posts are gone from the built site
       assert.ok(!fs.existsSync(path.join(site2, 'posts', 'shared-only', 'index.html')));
+      assert.ok(!fs.existsSync(path.join(site2, 'zh', 'posts', 'shared-only', 'index.html')));
     });
 
     await step('posts: a future-dated post shows 定时发表 (not 已发表); a new-post draft whose file exists says 可能已经发表过了', async () => {

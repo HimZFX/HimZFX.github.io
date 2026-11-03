@@ -6,13 +6,17 @@
     xxx.md      共用版本：中英文站都显示
     xxx.en.md   英文专属：存在时，英文站改用它
     xxx.zh.md   中文专属：存在时，中文站改用它
+文件名只决定「哪个站点显示哪个文件」，和哪种语言是默认语言无关。默认语言（hugo.toml 的
+defaultContentLanguage，现在是英文）只决定网址：英文站在 / 下，中文站在 /zh/ 下。
 
 用法:
     python new_post.py dark-galaxy "暗星系中的中性氢"
         新建一份共用文章，中英文站都会显示（最省事）
 
     python new_post.py dark-galaxy "暗星系中的中性氢" "Neutral Hydrogen in Dark Galaxies"
-        同时新建中文版（dark-galaxy.md）和英文版（dark-galaxy.en.md）
+        给两个标题：第一个写进共用版本 dark-galaxy.md（中文站 /zh/posts/dark-galaxy/ 显示它），
+        第二个写进英文专属版本 dark-galaxy.en.md（英文站 /posts/dark-galaxy/ 显示它）。
+        第二个标题总是英文版（站点没有英文时才用第一个非默认语言）。
 
     python new_post.py dark-galaxy --translate en "Neutral Hydrogen in Dark Galaxies"
         给已有文章补一份英文版：复制原文作为翻译底稿，只改标题
@@ -35,6 +39,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 CONTENT_DIR = os.path.join(ROOT, "content")
 CONFIG_DIR = os.path.join(ROOT, "config", "_default")
 SITE_NAMES = {"zh": "中文站", "en": "英文站"}
+# 给两个标题时，第二个标题写进哪个语言的专属版本：英文（xxx.en.md）。见 second_lang()。
+SECOND_TITLE_LANG = "en"
 
 # 与 archetypes/default.md 保持一致
 TEMPLATE = """---
@@ -53,8 +59,11 @@ tags: []
 # ---------- 读取站点语言配置 ----------
 
 def read_languages():
-    """返回 (默认语言, [所有语言])，从 config/_default/ 中读取，读不到时用 zh/en。"""
-    default, langs = "zh", []
+    """返回 (默认语言, [所有语言])，从 config/_default/ 中读取。
+
+    读不到语言列表时用 en/zh（和 languages.toml 的顺序相同）；没写 defaultContentLanguage 时和 Hugo 一样是 en。
+    """
+    default, langs = "en", []
     try:
         with open(os.path.join(CONFIG_DIR, "hugo.toml"), encoding="utf-8") as f:
             m = re.search(r'^\s*defaultContentLanguage\s*=\s*"([\w-]+)"', f.read(), re.M)
@@ -64,7 +73,7 @@ def read_languages():
             langs = re.findall(r"^\s*\[([A-Za-z][\w-]*)\]\s*$", f.read(), re.M)
     except OSError:
         pass
-    langs = langs or ["zh", "en"]
+    langs = langs or ["en", "zh"]
     if default not in langs:
         langs.insert(0, default)
     return default, langs
@@ -75,6 +84,19 @@ DEFAULT_LANG, LANGS = read_languages()
 
 def site_name(lang):
     return SITE_NAMES.get(lang, f"{lang} 站")
+
+
+def site_path(lang, rel):
+    """某语言站点上的网址：默认语言在 / 下，其他语言在 /<语言>/ 下。site_path("zh", "posts/a/") -> "/zh/posts/a/"。"""
+    return "/" + ("" if lang == DEFAULT_LANG else f"{lang}/") + rel
+
+
+def second_lang():
+    """两个标题时第二个标题的语言：英文；站点没有英文时用第一个非默认语言；只有一种语言时为 None。"""
+    if SECOND_TITLE_LANG in LANGS:
+        return SECOND_TITLE_LANG
+    others = [l for l in LANGS if l != DEFAULT_LANG]
+    return others[0] if others else None
 
 
 def split_name(filename):
@@ -111,10 +133,10 @@ def fail(msg):
 def create(section_dir, slug, titles):
     targets = [(file_for(section_dir, slug), titles[0])]
     if len(titles) > 1:
-        others = [l for l in LANGS if l != DEFAULT_LANG]
-        if not others:
+        lang2 = second_lang()
+        if not lang2:
             fail("站点只有一种语言，无法创建第二个语言版本")
-        targets.append((file_for(section_dir, slug, others[0]), titles[1]))
+        targets.append((file_for(section_dir, slug, lang2), titles[1]))
 
     for path, _ in targets:
         if os.path.exists(path):
@@ -127,9 +149,17 @@ def create(section_dir, slug, titles):
             f.write(TEMPLATE.format(title=json.dumps(title, ensure_ascii=False), date=now))
         print(f"已创建：{rel(path)}")
 
+    section = os.path.relpath(section_dir, CONTENT_DIR).replace(os.sep, "/")
+    rel_url = f"{section}/{slug}/" if section != "." else f"{slug}/"
     if len(targets) == 1:
-        print("\n这是共用版本，中英文站都会显示它。以后想补翻译：")
-        print(f'  python new_post.py {slug} --translate en "English Title"')
+        print("\n这是共用版本，中英文站都会显示它（" + "、".join(f"{site_name(l)} {site_path(l, rel_url)}" for l in LANGS) + "）。以后想补翻译：")
+        opt = f" --section {section}" if section != "posts" else ""
+        print(f'  python new_post.py {slug}{opt} --translate {second_lang() or DEFAULT_LANG} "English Title"')
+    else:
+        lang2 = second_lang()
+        shown = [l for l in LANGS if l != lang2]
+        print(f"\n{os.path.basename(targets[0][0])} 显示在" + "、".join(f"{site_name(l)} {site_path(l, rel_url)}" for l in shown)
+              + f"；{os.path.basename(targets[1][0])} 显示在{site_name(lang2)} {site_path(lang2, rel_url)}。")
     print("\n写完后把 draft: true 改成 draft: false 即可发布。")
 
 
@@ -224,7 +254,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("用法:")[1])
     parser.add_argument("slug", nargs="?", help="文件名（英文小写 + 连字符），如 dark-galaxy")
-    parser.add_argument("titles", nargs="*", help="标题；给两个则同时创建两个语言版本")
+    parser.add_argument("titles", nargs="*", help="标题；给两个时：第一个 → 共用版本 xxx.md，第二个 → 英文专属 xxx.en.md")
     parser.add_argument("--section", default="posts", help="栏目目录，默认 posts")
     parser.add_argument("--translate", metavar="LANG", help="为已有文章补充该语言的专属版本")
     parser.add_argument("--status", action="store_true", help="查看所有页面的双语状态")
@@ -246,7 +276,7 @@ def main():
         if not args.titles:
             fail("请提供标题，例如：python new_post.py dark-galaxy \"暗星系中的中性氢\"")
         if len(args.titles) > 2:
-            fail("最多提供两个标题（中文、英文）")
+            fail("最多提供两个标题（共用版本的标题、英文版的标题）")
         create(section_dir, args.slug, args.titles)
 
 

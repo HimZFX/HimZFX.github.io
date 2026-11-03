@@ -1,0 +1,59 @@
+{{- /*
+  论文 / 报告 / 近况（data/publications|talks|news/*.yaml）里的链接 → 安全的 href。返回 dict：
+    href      可以直接写进 href 的地址；值无效或为空时是 ""
+    external  true = 外部网址（新标签页打开）
+    viewer    true = 本站的 PDF / 图片，href 指向在线预览页 /viewer/?file=…&lang=<页面语言>
+
+  参数：dict "url" <原值> "lang" <页面语言> "kind" "file"|"page" "where" <出错时提示的位置>
+    kind = "file"  文件（pdf、slides、cv）：以 / 开头的网站路径，漏写开头的 / 时补上（documents/x.pdf → /documents/x.pdf）；
+                   PDF / 图片走在线预览页，其他文件直接链接到文件本身
+    kind = "page"  页面（近况的 link）：以 / 开头的路径原样使用（/posts/x/）；不以 / 开头的（posts/x/）跟随页面语言，
+                   中文站自动变成 /zh/posts/x/（和首页按钮的写法一样）
+
+  只接受 http:// / https:// 网址和网站路径；javascript:、data:、mailto: 等其他写法一律丢弃并在构建时警告。
+  写成本站完整网址（https://<baseURL>/documents/x.pdf）时当作网站路径处理，这样 PDF 也能走预览页。
+*/ -}}
+{{- $u := trim (string (.url | default "")) " \t\r\n" -}}
+{{- $lang := .lang | default site.Language.Lang -}}
+{{- $kind := .kind | default "file" -}}
+{{- $out := dict "href" "" "external" false "viewer" false -}}
+{{- $base := strings.TrimSuffix "/" site.BaseURL -}}
+{{- if and $base (hasPrefix (lower $u) (lower (printf "%s/" $base))) -}}
+  {{- $u = substr $u (len $base) -}}
+{{- end -}}
+{{- if not $u -}}
+  {{- /* 没写：什么也不输出 */ -}}
+{{- else if findRE `[\x00-\x1f\x7f"<>\\]` $u -}}
+  {{- warnf "%s：链接 %q 里有引号、尖括号、反斜杠或控制字符，已忽略" .where $u -}}
+{{- else if findRE `^(?i)https?://[^/?#\s]+(?:[/?#]\S*)?$` $u -}}
+  {{- $out = dict "href" $u "external" true "viewer" false -}}
+{{- else if findRE `^(?i)https?:` $u -}}
+  {{- warnf "%s：网址 %q 格式不对（不能有空格），已忽略" .where $u -}}
+{{- else if or (findRE `^[a-zA-Z][a-zA-Z0-9+.-]*:` $u) (hasPrefix $u "//") -}}
+  {{- warnf "%s：链接 %q 不是 http(s) 网址或网站路径（例如 /documents/x.pdf），已忽略" .where $u -}}
+{{- else if eq $kind "page" -}}
+  {{- if hasPrefix $u "/" -}}
+    {{- $out = dict "href" $u "external" false "viewer" false -}}
+  {{- else -}}
+    {{- $out = dict "href" ($u | relLangURL) "external" false "viewer" false -}}
+  {{- end -}}
+{{- else -}}
+  {{- /* 文件：整个值都是路径（文件名里的空格、#、? 也是文件名的一部分） */ -}}
+  {{- if not (hasPrefix $u "/") -}}{{- $u = printf "/%s" (strings.TrimPrefix "./" $u) -}}{{- end -}}
+  {{- $ext := lower (strings.TrimPrefix "." (path.Ext $u)) -}}
+  {{- if in (slice "pdf" "png" "jpg" "jpeg" "gif" "webp" "avif" "svg") $ext -}}
+    {{- $q := replace (urlquery $u) "+" "%20" -}}
+    {{- $out = dict "href" (printf "%s?file=%s&lang=%s" ("viewer/" | relURL) $q (urlquery $lang)) "external" false "viewer" true -}}
+  {{- else -}}
+    {{- /* 直接链接到文件：和 {{< pdf >}} 的「下载」一样逐段处理，已经是 %XX 编码的段保持不变 */ -}}
+    {{- $href := "" -}}
+    {{- range split (strings.TrimPrefix "/" $u) "/" -}}
+      {{- $seg := . -}}
+      {{- if ne (len (findRE `%[0-9A-Fa-f]{2}` $seg)) (strings.Count "%" $seg) -}}{{- $seg = replace $seg "%" "%25" -}}{{- end -}}
+      {{- $seg = replace (replace (replace $seg "#" "%23") "?" "%3F") " " "%20" -}}
+      {{- $href = printf "%s/%s" $href $seg -}}
+    {{- end -}}
+    {{- $out = dict "href" $href "external" false "viewer" false -}}
+  {{- end -}}
+{{- end -}}
+{{- return $out -}}

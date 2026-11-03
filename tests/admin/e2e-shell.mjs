@@ -312,10 +312,12 @@ async function main() {
     await test('navigating between all routes never crashes (missing views → friendly error)', async () => {
       const { context, page, st } = await newPage();
       await openAdmin(page, mock);
-      // navigation order: 文章 · 页面 · 课程 · 首页 · 背景 · 资料
-      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => a.dataset.route)), ['posts', 'pages', 'courses', 'profile', 'background', 'files']);
-      assert.deepEqual(await page.$$eval('.nav-item .nav-label', (els) => els.map((e) => e.textContent)), ['文章', '页面', '课程', '首页设置', '背景动画', '资料']);
-      for (const [testid, route] of [['nav-pages', 'pages'], ['nav-courses', 'courses'], ['nav-profile', 'profile'], ['nav-background', 'background'], ['nav-files', 'files'], ['nav-posts', 'posts']]) {
+      // navigation order: 文章 · 页面 · 课程 · 学术 · 首页 · 背景 · 资料 (desktop sidebar lists all of them; 「更多」 is phone-only)
+      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => a.dataset.route)), ['posts', 'pages', 'courses', 'academic', 'profile', 'background', 'files']);
+      assert.deepEqual(await page.$$eval('.nav-item .nav-label', (els) => els.map((e) => e.textContent)), ['文章', '页面', '课程', '学术', '首页设置', '背景动画', '资料']);
+      assert.ok(await page.$$eval('.nav-item', (els) => els.every((a) => a.getBoundingClientRect().height >= 40)), 'every route visible in the desktop sidebar');
+      assert.equal(await page.isVisible('[data-testid="nav-more"]'), false, '「更多」 is hidden on desktop');
+      for (const [testid, route] of [['nav-pages', 'pages'], ['nav-courses', 'courses'], ['nav-academic', 'academic'], ['nav-profile', 'profile'], ['nav-background', 'background'], ['nav-files', 'files'], ['nav-posts', 'posts']]) {
         await page.click(`[data-testid="${testid}"]`);
         await waitViewReady(page, route);
         assert.equal(await page.evaluate(() => location.hash.split('?')[0]), '#/' + route);
@@ -375,8 +377,9 @@ async function main() {
       await openAdmin(page, mock, { path: '/admin/#/files' });
       await waitViewReady(page, 'files');
       const ctx = JSON.parse(await page.textContent('[data-testid="t-ctx"]'));
-      assert.deepEqual(ctx.langs, ['zh', 'en']);
-      assert.equal(ctx.defaultLang, 'zh');
+      // languages.toml: en weight 1, zh weight 2; hugo.toml: defaultContentLanguage = "en" (English at /, Chinese at /zh/)
+      assert.deepEqual(ctx.langs, ['en', 'zh']);
+      assert.equal(ctx.defaultLang, 'en');
       assert.equal(ctx.zh, '中文站');
       assert.equal(ctx.en, '英文');
       assert.equal(ctx.fr, 'fr 站');
@@ -385,6 +388,36 @@ async function main() {
       assert.ok(ctx.hasRepo && ctx.files > 0);
       assert.equal((await page.textContent('#page-title')).trim(), '测试视图');
       await context.close();
+    });
+
+    await test('ctx: defaultLang follows hugo.toml (a zh-default configuration still works)', async () => {
+      const HUGO = 'config/_default/hugo.toml';
+      const LANGS = 'config/_default/languages.toml';
+      const origHugo = mock.readFile(HUGO);
+      const origLangs = mock.readFile(LANGS);
+      try {
+        mock.setFile(HUGO, origHugo.replace(/^defaultContentLanguage = "en"/m, 'defaultContentLanguage = "zh"'));
+        mock.setFile(LANGS, origLangs.replace(/weight = 1/, 'weight = 3'));
+        const { context, page } = await newPage();
+        await fakeView(page, 'files', PUBLISH_VIEW);
+        await openAdmin(page, mock, { path: '/admin/#/files' });
+        await waitViewReady(page, 'files');
+        const ctx = JSON.parse(await page.textContent('[data-testid="t-ctx"]'));
+        assert.deepEqual(ctx.langs, ['zh', 'en'], 'sorted by weight');
+        assert.equal(ctx.defaultLang, 'zh');
+        await context.close();
+        // no defaultContentLanguage at all → Hugo's own default, English
+        mock.setFile(HUGO, origHugo.replace(/^defaultContentLanguage = .*$/m, ''));
+        const p2 = await newPage();
+        await fakeView(p2.page, 'files', PUBLISH_VIEW);
+        await openAdmin(p2.page, mock, { path: '/admin/#/files' });
+        await waitViewReady(p2.page, 'files');
+        assert.equal(JSON.parse(await p2.page.textContent('[data-testid="t-ctx"]')).defaultLang, 'en');
+        await p2.context.close();
+      } finally {
+        mock.setFile(HUGO, origHugo);
+        mock.setFile(LANGS, origLangs);
+      }
     });
 
     await test('ctx.publish: overlay → commit → toast → deploy indicator running → success', async () => {
@@ -901,18 +934,48 @@ export default async function mount(container) {
       await page.waitForTimeout(400);
       const nav = await page.evaluate(() => {
         const r = document.querySelector('.sidenav').getBoundingClientRect();
-        return { bottom: Math.round(r.bottom), top: Math.round(r.top), width: Math.round(r.width), h: innerHeight, w: innerWidth, items: [...document.querySelectorAll('.nav-item')].map((a) => a.getBoundingClientRect().width > 0) };
+        const shown = (el) => el.getBoundingClientRect().width > 0;
+        return {
+          bottom: Math.round(r.bottom), top: Math.round(r.top), width: Math.round(r.width), h: innerHeight, w: innerWidth,
+          tabs: [...document.querySelectorAll('.nav-item, .nav-more')].filter(shown).map((a) => a.dataset.route || a.dataset.testid),
+          hidden: [...document.querySelectorAll('.nav-item')].filter((a) => !shown(a)).map((a) => a.dataset.route),
+        };
       });
       assert.equal(nav.bottom, nav.h, 'tab bar sits at the bottom');
       assert.equal(nav.width, nav.w);
-      assert.ok(nav.items.every(Boolean));
+      // phone: 4 frequent tabs + 「更多」; the other three live in the 「更多」 sheet
+      assert.deepEqual(nav.tabs, ['posts', 'pages', 'courses', 'academic', 'nav-more']);
+      assert.deepEqual(nav.hidden, ['profile', 'background', 'files']);
       assert.equal(await page.isVisible('[data-testid="logout"]'), true);
       await page.screenshot({ path: path.join(SHOTS, 'mobile-posts.png') });
-      for (const route of ['pages', 'courses', 'profile', 'background', 'files']) {
+      for (const route of ['pages', 'courses', 'academic']) {
         await page.tap(`[data-testid="nav-${route}"]`);
         await waitViewReady(page, route);
+        assert.equal(await page.getAttribute(`[data-testid="nav-${route}"]`, 'aria-current'), 'page');
+        assert.ok(!(await page.$eval('[data-testid="nav-more"]', (b) => b.classList.contains('active'))), '「更多」 not highlighted for a bottom-bar route');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${route}: horizontal scroll`);
       }
+      for (const route of ['profile', 'background', 'files']) {
+        await page.tap('[data-testid="nav-more"]');
+        await page.waitForSelector('[data-testid="more-sheet"]');
+        // the sheet lists exactly the three less frequent views, in order
+        assert.deepEqual(await page.$$eval('[data-testid="more-sheet"] .more-sheet-item', (els) => els.map((a) => a.getAttribute('href'))), ['#/profile', '#/background', '#/files']);
+        if (route === 'profile') await page.screenshot({ path: path.join(SHOTS, 'mobile-more-sheet.png') });
+        const item = await page.$eval(`[data-testid="more-${route}"]`, (a) => { const r = a.getBoundingClientRect(); return { h: r.height, w: r.width }; });
+        assert.ok(item.h >= 44 && item.w >= 200, 'sheet items are big tap targets: ' + JSON.stringify(item));
+        await page.tap(`[data-testid="more-${route}"]`);
+        await waitViewReady(page, route);
+        await page.waitForSelector('[data-testid="more-sheet"]', { state: 'detached' });
+        assert.ok(await page.$eval('[data-testid="nav-more"]', (b) => b.classList.contains('active')), `「更多」 highlighted while on ${route}`);
+        assert.match(await page.getAttribute('[data-testid="nav-more"]', 'aria-label'), new RegExp('当前'));
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${route}: horizontal scroll`);
+      }
+      // the current view is marked inside the sheet; Esc closes it
+      await page.tap('[data-testid="nav-more"]');
+      await page.waitForSelector('[data-testid="more-sheet"]');
+      assert.equal(await page.getAttribute('[data-testid="more-files"]', 'aria-current'), 'page');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-testid="more-sheet"]', { state: 'detached' });
       // editor route hides the tab bar
       await page.evaluate(() => { location.hash = '#/edit?new=post'; });
       await waitViewReady(page, 'edit');
@@ -923,14 +986,14 @@ export default async function mount(container) {
       await page.setViewportSize({ width: 360, height: 740 });
       await page.waitForTimeout(200);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), '360: horizontal scroll');
-      // six tabs still fit at 360 px: every tab ≥ 56 px wide, icon + short label inside its own box, no overlap
-      const tabs = await page.evaluate(() => [...document.querySelectorAll('.nav-item')].map((a) => {
+      // the five visible tabs fit at 360 px: every tab ≥ 56 px wide, icon + short label inside its own box, no overlap
+      const tabs = await page.evaluate(() => [...document.querySelectorAll('.nav-item, .nav-more')].filter((a) => a.getBoundingClientRect().width > 0).map((a) => {
         const r = a.getBoundingClientRect();
         const l = a.querySelector('.nav-label-short').getBoundingClientRect();
         const i = a.querySelector('.nav-icon').getBoundingClientRect();
         return { left: r.left, right: r.right, width: r.width, labelIn: l.left >= r.left - 0.5 && l.right <= r.right + 0.5 && l.width > 0, iconIn: i.width > 0 && i.left >= r.left && i.right <= r.right, overflow: a.scrollWidth > a.clientWidth + 1 };
       }));
-      assert.equal(tabs.length, 6);
+      assert.equal(tabs.length, 5);
       for (const t of tabs) {
         assert.ok(t.width >= 56, `tab too narrow at 360: ${t.width}`);
         assert.ok(t.labelIn && t.iconIn && !t.overflow, 'tab content fits: ' + JSON.stringify(t));

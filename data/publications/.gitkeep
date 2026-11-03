@@ -1,0 +1,3 @@
+# 论文：每篇一个 YAML 文件，例如 data/publications/2026-zhong-hi-dark.yaml（文件名 = id）。
+# 字段见 SITE_GUIDE.md「论文、报告与近况」和 layouts/partials/academic/publications.html。
+# 注意：这个文件夹里只能放 .yaml / .yml（以及这种以点开头的文件），放 README.md 之类的会让 Hugo 构建失败。

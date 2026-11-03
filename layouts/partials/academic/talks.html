@@ -1,0 +1,42 @@
+{{- /*
+  读取 data/talks/*.yaml（每个报告一个文件，文件名 = id），返回 dict：
+    upcoming  日期 ≥ 构建当天的报告，最近的在前
+    past      更早的报告，最新的在前（没写日期或日期无效的排在最后）
+  每项是 dict：id key title event location date("YYYY-MM-DD" 或 "") year kind abstract note slides video url
+  kind：talk | poster | seminar | invited | outreach | other（没写 = talk）
+
+  「即将进行 / 往期」按网站构建的那一天划分（静态网站：报告过去之后，下次发布网站时才会移到「往期」）。
+*/ -}}
+{{- $today := now.Format "2006-01-02" -}}
+{{- $list := slice -}}
+{{- range $key, $t := site.Data.talks | default dict -}}
+  {{- if not (reflect.IsMap $t) -}}
+    {{- warnf "data/talks/%s：内容不是「键: 值」格式，已跳过" $key -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $title := trim (string ($t.title | default "")) " \t\r\n" -}}
+  {{- if not $title -}}
+    {{- warnf "data/talks/%s：没有 title，已跳过" $key -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $date := partial "academic/date.html" $t.date -}}
+  {{- if and $t.date (not $date) }}{{ warnf "data/talks/%s：date %q 不是有效的 YYYY-MM-DD 日期，已忽略" $key (string $t.date) }}{{ end -}}
+  {{- $kind := lower (trim (string ($t.kind | default "talk")) " ") -}}
+  {{- if not (in (slice "talk" "poster" "seminar" "invited" "outreach" "other") $kind) -}}
+    {{- warnf "data/talks/%s：kind %q 无效（talk / poster / seminar / invited / outreach / other），按 other 处理" $key $kind -}}
+    {{- $kind = "other" -}}
+  {{- end -}}
+  {{- $str := dict -}}
+  {{- range slice "event" "location" "abstract" "note" "slides" "video" "url" -}}
+    {{- $v := index $t . -}}
+    {{- $str = merge $str (dict . (cond (ne $v nil) (trim (string $v) " \t\r\n") "")) -}}
+  {{- end -}}
+  {{- /* 注意：cond 会先算出两个分支，所以年份不能写成 cond … (int (substr $date 0 4)) 0（日期无效时会让构建失败） */ -}}
+  {{- $year := 0 -}}
+  {{- with $date }}{{ $year = int (substr . 0 4) }}{{ end -}}
+  {{- $list = $list | append (merge $str (dict "id" (string ($t.id | default $key)) "key" $key "title" $title "date" $date
+      "year" $year "kind" $kind
+      "upcoming" (and (ne $date "") (ge $date $today)) "sort" (cond (ne $date "") $date "0000-00-00"))) -}}
+{{- end -}}
+{{- $list = sort $list "title" -}}
+{{- return dict "upcoming" (sort (where $list "upcoming" true) "sort") "past" (sort (where $list "upcoming" false) "sort" "desc") -}}

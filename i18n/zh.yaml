@@ -33,3 +33,98 @@
   translation: "这门课的内容还在整理中。"
 - id: courses_draft
   translation: "草稿"
+
+# ---------- {{< pdf >}} 短代码（layouts/shortcodes/pdf.html） ----------
+- id: pdf_preview_title
+  translation: "预览："
+- id: pdf_open_new
+  translation: "在新页面打开"
+- id: pdf_download
+  translation: "下载"
+
+# ---------- 语言提示（layouts/partials/features/lang-hint.html） ----------
+# 显示在「中文页」上、给浏览器首选其他语言的读者看，所以文字要用「那种语言」写：
+# lang_hint_<语言代码> / lang_hint_close_<语言代码>（语言代码 = languages.toml 里的表名）。
+- id: lang_hint_en
+  translation: "This page is also available in English"
+- id: lang_hint_close_en
+  translation: "Dismiss"
+
+# ---------- 论文 / 报告 / 近况（layouts/publications|talks|news/、layouts/partials/academic/） ----------
+- id: pub_group_refereed
+  translation: "同行评审论文"
+- id: pub_group_pending
+  translation: "已投稿与准备中"
+- id: pub_group_other
+  translation: "会议论文与其他"
+- id: pub_undated
+  translation: "未注明年份"
+- id: pub_status_accepted
+  translation: "已接收"
+- id: pub_status_submitted
+  translation: "已投稿"
+- id: pub_status_inprep
+  translation: "准备中"
+- id: pub_kind_proceedings
+  translation: "会议论文"
+- id: pub_kind_preprint
+  translation: "预印本"
+- id: pub_kind_thesis
+  translation: "学位论文"
+- id: pub_selected
+  translation: "代表作"
+- id: pub_et_al
+  translation: " 等"
+- id: pub_author_count
+  translation:
+    other: "（共 {{ .Count }} 位作者）"
+- id: pub_code
+  translation: "代码"
+- id: pub_slides
+  translation: "幻灯片"
+- id: pub_copy
+  translation: "复制"
+- id: pub_copied
+  translation: "已复制"
+- id: pub_profiles
+  translation: "其他网站上的论文列表"
+- id: pub_empty
+  translation: "这里还没有列出论文。"
+- id: talk_upcoming
+  translation: "即将进行"
+- id: talk_undated
+  translation: "未注明日期"
+- id: talk_kind_talk
+  translation: "报告"
+- id: talk_kind_poster
+  translation: "海报"
+- id: talk_kind_seminar
+  translation: "讨论班"
+- id: talk_kind_invited
+  translation: "特邀报告"
+- id: talk_kind_outreach
+  translation: "科普"
+- id: talk_slides
+  translation: "幻灯片"
+- id: talk_video
+  translation: "视频"
+- id: talk_event
+  translation: "会议主页"
+- id: talk_abstract
+  translation: "摘要"
+- id: talk_empty
+  translation: "这里还没有列出报告。"
+- id: news_title
+  translation: "近况"
+- id: news_all
+  translation: "全部近况"
+- id: news_more
+  translation: "详情"
+- id: news_empty
+  translation: "暂时还没有近况。"
+- id: cv_button
+  translation: "简历"
+
+# ---------- 背景动画（assets/js/background/core.js） ----------
+- id: bg_toggle
+  translation: "背景动画"

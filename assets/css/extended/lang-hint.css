@@ -1,0 +1,68 @@
+/* 语言提示「本页有中文版 →」（layouts/partials/features/lang-hint.html、assets/js/lang-hint.js）。
+   固定在页面底部中间，不占文档流：出现时页面内容不会被推动。颜色只用主题变量，深浅色自动。
+   左右各留出 64px，避开左下角的背景动画开关和右下角的「回到顶部」按钮。 */
+.lang-hint {
+    position: fixed;
+    left: 50%;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    width: max-content;
+    max-width: calc(100vw - 128px);
+    padding: 3px 3px 3px 14px;
+    background: var(--entry);
+    color: var(--primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.lang-hint-link {
+    padding: 5px 0;
+    color: inherit;
+    text-decoration: none;
+}
+
+.lang-hint-link:hover,
+.lang-hint-link:focus-visible {
+    text-decoration: underline;
+}
+
+.lang-hint-close {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: calc(var(--radius) - 2px);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--secondary);
+    font-size: 18px;
+    line-height: 30px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.lang-hint-close:hover,
+.lang-hint-close:focus-visible {
+    color: var(--primary);
+    background: var(--code-bg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .lang-hint {
+        animation: lang-hint-in 0.25s ease-out;
+    }
+}
+
+@keyframes lang-hint-in {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 8px);
+    }
+}

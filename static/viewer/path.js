@@ -95,10 +95,13 @@ export function parseFileParam(raw, origin) {
   return { ok: true, path, href, name, ext, kind };
 }
 
-/** Viewer link for a validated site path (same shape as the admin's viewerUrlFor). */
+/**
+ * Viewer link for a validated site path (same shape as the admin's viewerUrlFor): lang is written whenever it is
+ * given (the viewer's own 「在新页面打开」 always passes its interface language, so the new tab keeps it).
+ */
 export function viewerHref(path, { lang, embed, page } = {}) {
   let q = '?file=' + encodeURIComponent(path);
-  if (lang === 'en') q += '&lang=en';
+  if (lang) q += '&lang=' + encodeURIComponent(lang);
   if (embed) q += '&embed=1';
   if (page && page > 1) q += '&page=' + page;
   return q;

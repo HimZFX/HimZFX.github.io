@@ -6,6 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -13,7 +14,7 @@ import {
   parseContentPath, groupPages, resolveForLang, variantLabel, languageStatus, statusText,
   isPost, variantPath, slugify, suggestSlug, isValidSlug, imageDirFor, sitePathFor,
   shadowWarnings, isDraftFm, viewerUrlFor, isPreviewable, isPdfPath, isViewerFilePath, referencesSitePath,
-  VIEWER_PATH,
+  VIEWER_PATH, langPrefix, langSitePath, langSiteUrl,
 } from '../../static/admin/js/content.js';
 import { safeFileName, timestampName, extOf } from '../../static/admin/js/images.js';
 import * as drafts from '../../static/admin/js/drafts.js';
@@ -242,6 +243,51 @@ describe('synthetic bilingual cases', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('site URLs per language (default language at /, others under /<lang>/)', () => {
+  // The repository's own config: English is the default language, Chinese lives under /zh/.
+  const HUGO_TOML = fs.readFileSync(path.join(REPO_ROOT, 'config/_default/hugo.toml'), 'utf8');
+  const DEFAULT = /^defaultContentLanguage\s*=\s*"([^"]+)"/m.exec(HUGO_TOML)[1];
+
+  test('the repository uses English as the default language', () => {
+    assert.equal(DEFAULT, 'en');
+    assert.match(HUGO_TOML, /^defaultContentLanguageInSubdir\s*=\s*false\b/m);
+  });
+
+  test('langPrefix / langSitePath / langSiteUrl (en default)', () => {
+    assert.equal(langPrefix('en', 'en'), '');
+    assert.equal(langPrefix('zh', 'en'), 'zh/');
+    assert.equal(langPrefix('shared', 'en'), '');
+    assert.equal(langPrefix(null, 'en'), '');
+    assert.equal(langSitePath('posts/a/', 'en', 'en'), '/posts/a/');
+    assert.equal(langSitePath('/posts/a/', 'zh', 'en'), '/zh/posts/a/');
+    assert.equal(langSitePath('', 'zh', 'en'), '/zh/');
+    assert.equal(langSitePath('', 'en', 'en'), '/');
+    assert.equal(langSiteUrl('https://himzfx.github.io/', 'courses/lab/', 'zh', 'en'), 'https://himzfx.github.io/zh/courses/lab/');
+    assert.equal(langSiteUrl('http://127.0.0.1:9', 'courses/lab/', 'en', 'en'), 'http://127.0.0.1:9/courses/lab/');
+  });
+
+  test('a zh-default configuration still works (prefix follows the default language, not a hard-coded one)', () => {
+    assert.equal(langPrefix('zh', 'zh'), '');
+    assert.equal(langPrefix('en', 'zh'), 'en/');
+    assert.equal(langSitePath('posts/a/', 'en', 'zh'), '/en/posts/a/');
+    assert.equal(langSiteUrl('https://x.io', '', 'zh', 'zh'), 'https://x.io/');
+  });
+
+  test('statusText keeps 「中英」 whatever the language order (languages.toml: en weight 1, zh weight 2)', () => {
+    const L2 = ['en', 'zh'];
+    const shared = languageStatus(group(['content/posts/a.md'], L2), L2);
+    assert.deepEqual(Object.keys(shared.perLang), ['en', 'zh']);
+    assert.equal(statusText(shared, { langs: L2, langName: ctxLike.langName }), '中英共用');
+    const split = languageStatus(group(['content/posts/a.md', 'content/posts/a.en.md'], L2), L2);
+    assert.equal(statusText(split, { langs: L2, langName: ctxLike.langName }), '中英分开');
+    const three = languageStatus(group(['content/posts/a.md', 'content/posts/a.ja.md'], ['en', 'ja', 'zh']), ['en', 'ja', 'zh']);
+    assert.equal(statusText(three, { langName: (l) => ({ zh: '中文', en: '英文', ja: '日文' }[l]) }), '中英日分开');
+    // without a language list the built-in fallback mirrors languages.toml
+    assert.equal(statusText(languageStatus(group(['content/posts/a.md'], undefined), undefined)), '中英共用');
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('labels and paths', () => {
   test('variantLabel', () => {
     assert.equal(variantLabel('shared', ctxLike), '共用版本');
@@ -309,8 +355,11 @@ describe('online viewer links', () => {
 
   test('viewerUrlFor: lang / embed / page / absolute', () => {
     const site = 'https://himzfx.github.io/';
-    assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'zh' }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+    // lang is written whenever it is given — the default language (en) too; no lang = the viewer decides
+    assert.equal(viewerUrlFor('/documents/a.pdf'), '/viewer/?file=%2Fdocuments%2Fa.pdf');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'zh' }), '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=zh');
     assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'en' }), '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'zh', embed: true, page: 2 }), '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=zh&embed=1&page=2');
     assert.equal(viewerUrlFor('/documents/a.pdf', { lang: 'en', embed: true }), '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en&embed=1');
     assert.equal(viewerUrlFor('/documents/a.pdf', { embed: true, page: 3 }), '/viewer/?file=%2Fdocuments%2Fa.pdf&embed=1&page=3');
     assert.equal(viewerUrlFor('/documents/a.pdf', { page: 1 }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
@@ -321,6 +370,8 @@ describe('online viewer links', () => {
       'http://127.0.0.1:8080/viewer/?file=%2Fdocuments%2Fa.pdf');
     assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true, siteUrl: site, lang: 'en' }),
       'https://himzfx.github.io/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en');
+    assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true, siteUrl: site, lang: 'zh' }),
+      'https://himzfx.github.io/viewer/?file=%2Fdocuments%2Fa.pdf&lang=zh');
     // absolute without a site URL → still a usable relative link
     assert.equal(viewerUrlFor('/documents/a.pdf', { absolute: true }), '/viewer/?file=%2Fdocuments%2Fa.pdf');
   });
@@ -363,6 +414,7 @@ describe('online viewer links', () => {
       `见 [讲义](${encodeURI(p)})`,
       `[讲义](${viewerUrlFor(p)})`,
       `[讲义](${viewerUrlFor(p, { absolute: true, siteUrl: 'https://himzfx.github.io/', lang: 'en' })})`,
+      `[讲义](${viewerUrlFor(p, { lang: 'zh' })})`,
       `<a href="${viewerUrlFor(p, { embed: true }).replace('&', '&amp;')}">x</a>`,
       `{{< pdf "${p}" >}}`,
       `{{< pdf "${p}" height="80vh" >}}`,

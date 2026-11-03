@@ -30,6 +30,6 @@
 
   {{- $autoplay := .Param "background.autoplay" | default "home" }}
   {{- $autoStart := or (eq $autoplay "all") (and (eq $autoplay "home") .IsHome) }}
-<script defer src="{{ $js.RelPermalink }}" data-autoplay="{{ $autoStart }}"
+<script defer src="{{ $js.RelPermalink }}" data-autoplay="{{ $autoStart }}" data-label="{{ i18n "bg_toggle" }}"
   {{- with $js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
 {{- end }}

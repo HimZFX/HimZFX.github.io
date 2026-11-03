@@ -1,0 +1,35 @@
+{{- /*
+  一条近况（<li>）。参数：dict "n" <academic/news.html 返回的一项> "lang" <页面语言>
+
+  text 可以用行内 Markdown（**粗体**、*斜体*、[链接](网址)、`代码`、$公式$）。为了安全，先把 < > & " ' 转义再交给 Markdown，
+  所以 text 里写的 HTML 标签会原样显示成文字；Markdown 链接 / 图片只保留 http(s)、mailto、#锚点和网站路径，
+  其他（javascript: 等）会被去掉。link 是这条近况的「详情」链接（见 academic/url.html，kind = "page"）。
+*/ -}}
+{{- $n := .n -}}
+{{- $html := $n.text | htmlEscape | markdownify | string -}}
+{{- /* Hugo 渲染 Markdown 链接时已经把 javascript: 等危险网址换成了 #ZgotmplZ：这种链接只保留文字 */ -}}
+{{- if in $html "#ZgotmplZ" -}}
+  {{- warnf "data/news/%s：text 里有不安全的链接（不是 http(s) 网址或网站路径），已只保留文字" $n.key -}}
+  {{- $html = replaceRE `<a href="#ZgotmplZ"[^>]*>((?:.|\n)*?)</a>` "$1" $html -}}
+  {{- $html = replaceRE `<img src="#ZgotmplZ"[^>]*>` "" $html -}}
+{{- end -}}
+{{- /* 网址也先被转义过一次（& → &amp;），渲染时又转义一次：解两次得到原来写的网址，检查后只转义一次写回，
+     否则 [x](https://a.org/?p=1&q=2) 会变成 …?p=1&amp;amp;q=2 */ -}}
+{{- range findRE `(href|src)="[^"]*"` $html -}}
+  {{- $attr := replaceRE `^(href|src)=(?:.|\n)*$` "$1" . -}}
+  {{- $v := replaceRE `^(href|src)="([^"]*)"$` "$2" . | htmlUnescape | htmlUnescape -}}
+  {{- if not (or (findRE `^(?i)(https?://|mailto:)` $v) (findRE `^[^:]*$` $v)) -}}
+    {{- warnf "data/news/%s：text 里的链接 %q 不是 http(s) 网址或网站路径，已去掉" $n.key $v -}}
+    {{- $html = replace $html . "" -}}
+  {{- else -}}
+    {{- $html = replace $html . (printf `%s="%s"` $attr (htmlEscape $v)) -}}
+  {{- end -}}
+{{- end -}}
+{{- $u := partial "academic/url.html" (dict "url" $n.link "lang" .lang "kind" "page" "where" (printf "data/news/%s link" $n.key)) -}}
+<li class="news-item">
+  <time class="news-date" datetime="{{ $n.date }}">{{ time.Format ":date_medium" (time.AsTime $n.date) }}</time>
+  <div class="news-text">
+    {{- $html | safeHTML -}}
+    {{- with $u.href }} <a class="news-more" href="{{ . }}"{{ if $u.external }} target="_blank" rel="noopener noreferrer"{{ end }}>{{ i18n "news_more" }}</a>{{ end -}}
+  </div>
+</li>

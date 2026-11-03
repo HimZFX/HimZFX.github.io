@@ -1,0 +1,27 @@
+{{- /*
+  读取 data/news/*.yaml（每条一个文件，文件名建议 <YYYY-MM-DD>-<简短英文>.yaml），返回某种语言的近况列表，最新的在前。
+  参数：页面语言（"en" / "zh"）。每项是 dict：key date("YYYY-MM-DD") year text link
+    text  该语言的文字：text_<语言>（例如 text_zh）存在时用它，否则用 text（各语言共用）
+    link  可选：网站路径或网址（见 academic/url.html，kind = "page"：/posts/x/ 原样，posts/x/ 跟随页面语言）
+  没有日期或日期无效、或该语言没有文字的条目会被跳过（构建时警告）。同一天的按文件名倒序。
+*/ -}}
+{{- $lang := . -}}
+{{- $list := slice -}}
+{{- range $key, $n := site.Data.news | default dict -}}
+  {{- if not (reflect.IsMap $n) -}}
+    {{- warnf "data/news/%s：内容不是「键: 值」格式，已跳过" $key -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $date := partial "academic/date.html" $n.date -}}
+  {{- if not $date -}}
+    {{- warnf "data/news/%s：date %q 不是有效的 YYYY-MM-DD 日期，已跳过" $key (string ($n.date | default "")) -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $text := trim (string (index $n (printf "text_%s" $lang) | default $n.text | default "")) " \t\r\n" -}}
+  {{- if not $text -}}
+    {{- warnf "data/news/%s：没有 text，已跳过" $key -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $list = $list | append (dict "key" $key "date" $date "year" (int (substr $date 0 4)) "text" $text "link" (trim (string ($n.link | default "")) " ") "sort" (printf "%s %s" $date $key)) -}}
+{{- end -}}
+{{- return sort $list "sort" "desc" -}}

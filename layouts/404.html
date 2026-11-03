@@ -1,0 +1,26 @@
+{{- define "main" }}
+{{- /*
+  覆盖 PaperMod 的 404.html：外观完全不变（页面中间一个大大的 404），只多了一小段把旧网址转到新网址的脚本。
+
+  以前中文是默认语言（在 / 下），英文在 /en/ 下；现在默认语言是英文（在 / 下），中文在 /zh/ 下。
+  旧的英文链接 /en/<路径>/ 因此不存在了（Hugo 只为 /en/ 本身生成了跳转页），访问时 GitHub Pages 返回本页，
+  脚本把地址换成 /<路径>/：保留 ?查询 和 #锚点，用 location.replace（不留一条 404 的历史记录）。
+  /en 和 /en/ 都转到首页。只是本站自己的一段内联脚本，不加载任何外部文件。
+
+  规则从配置推出来，没有写死语言：默认语言放在根路径时（hugo.toml 的 defaultContentLanguageInSubdir = false），
+  /<默认语言代码>/… → /…；默认语言放在子目录时什么都不做。转过去的页面也不存在时就停在那里的 404，不会来回跳。
+*/ -}}
+{{- $default := site.Sites.Default }}
+{{- if not $default.LanguagePrefix }}
+<script>
+  (function (base, lang) {
+    var path = location.pathname;
+    if (path.indexOf(base) !== 0) return;
+    var rest = path.slice(base.length);
+    if (rest !== lang && rest.indexOf(lang + "/") !== 0) return;
+    location.replace(base + rest.slice(lang.length + 1) + location.search + location.hash);
+  })({{ "" | relURL }}, {{ $default.Language.Lang }});
+</script>
+{{- end }}
+<div class="not-found">404</div>
+{{- end }}{{/* end main */ -}}

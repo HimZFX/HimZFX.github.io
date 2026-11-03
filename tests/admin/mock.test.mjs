@@ -538,8 +538,14 @@ describe('exportTo + buildSite (pinned Hugo)', { skip: !fs.existsSync(hugoBin())
     const b = listFiles(fromRepo.outDir).filter((p) => !p.startsWith('admin/'));
     assert.deepEqual(a, b);
     const pages = a.filter((p) => p.endsWith('.html'));
-    assert.ok(pages.includes('index.html') && pages.includes('en/index.html'), pages.join(', '));
+    // English (default language) at /, Chinese under /zh/; en/index.html is only Hugo's redirect to /
+    assert.ok(pages.includes('index.html') && pages.includes('zh/index.html'), pages.join(', '));
     assert.ok(pages.includes('posts/first-physics-note/index.html'));
+    assert.ok(pages.includes('zh/posts/first-physics-note/index.html'));
+    assert.ok(!pages.some((p) => p.startsWith('en/') && p !== 'en/index.html'), pages.join(', '));
+    assert.match(fs.readFileSync(path.join(fromRepo.outDir, 'en/index.html'), 'utf8'), /http-equiv="?refresh"? content="0; url=https:\/\/HimZFX\.github\.io\/"/);
+    assert.match(fs.readFileSync(path.join(fromRepo.outDir, 'index.html'), 'utf8'), /<html lang="?en"? /);
+    assert.match(fs.readFileSync(path.join(fromRepo.outDir, 'zh/index.html'), 'utf8'), /<html lang="?zh"? /);
     // identical rendered home page (fingerprinted CSS/JS hashes included)
     assert.equal(fs.readFileSync(path.join(fromExport.outDir, 'index.html'), 'utf8'), fs.readFileSync(path.join(fromRepo.outDir, 'index.html'), 'utf8'));
     // building never writes into the source repository
@@ -562,9 +568,13 @@ describe('exportTo + buildSite (pinned Hugo)', { skip: !fs.existsSync(hugoBin())
       const m2 = await startMock({ seedDir: null, siteDir });
       try {
         const { outDir } = await buildSite({ repoDir: dir, outDir: siteDir, baseURL: m2.url + '/' });
-        const zh = fs.readFileSync(path.join(outDir, 'posts/mock-roundtrip/index.html'), 'utf8');
-        assert.match(zh, /正文 mock roundtrip/);
-        assert.ok(fs.existsSync(path.join(outDir, 'en/posts/mock-roundtrip/index.html')));
+        // shared xxx.md → on the English site (default language, /) and on the Chinese site (/zh/)
+        const en = fs.readFileSync(path.join(outDir, 'posts/mock-roundtrip/index.html'), 'utf8');
+        assert.match(en, /正文 mock roundtrip/);
+        assert.match(fs.readFileSync(path.join(outDir, 'zh/posts/mock-roundtrip/index.html'), 'utf8'), /正文 mock roundtrip/);
+        assert.ok(!fs.existsSync(path.join(outDir, 'en/posts/mock-roundtrip/index.html')));
+        const zhPage = await fetch(m2.url + '/zh/posts/mock-roundtrip/');
+        assert.equal(zhPage.status, 200);
         const page = await fetch(m2.url + '/posts/mock-roundtrip/');
         assert.equal(page.status, 200);
         const html = await page.text();

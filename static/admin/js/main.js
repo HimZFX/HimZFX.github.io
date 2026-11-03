@@ -25,6 +25,7 @@ const ROUTES = {
   edit: 'editor',
   pages: 'pages',
   courses: 'courses',
+  academic: 'academic',
   profile: 'profile',
   background: 'background',
   files: 'files',
@@ -32,13 +33,18 @@ const ROUTES = {
 };
 const DEFAULT_ROUTE = 'posts';
 
+/**
+ * 导航。电脑上左侧全部列出；手机底部标签栏只放 more 不为 true 的几项 +「更多」，
+ * 其余（不常用的）放进「更多」弹出的底部抽屉（每个标签至少 56px 宽，360px 的手机上也放得下）。
+ */
 const NAV = [
   { route: 'posts', label: '文章', short: '文章', icon: 'post', testid: 'nav-posts' },
   { route: 'pages', label: '页面', short: '页面', icon: 'page', testid: 'nav-pages' },
   { route: 'courses', label: '课程', short: '课程', icon: 'course', testid: 'nav-courses' },
-  { route: 'profile', label: '首页设置', short: '首页', icon: 'home', testid: 'nav-profile' },
-  { route: 'background', label: '背景动画', short: '背景', icon: 'background', testid: 'nav-background' },
-  { route: 'files', label: '资料', short: '资料', icon: 'files', testid: 'nav-files' },
+  { route: 'academic', label: '学术', short: '学术', icon: 'academic', testid: 'nav-academic' },
+  { route: 'profile', label: '首页设置', short: '首页', icon: 'home', testid: 'nav-profile', more: true },
+  { route: 'background', label: '背景动画', short: '背景', icon: 'background', testid: 'nav-background', more: true },
+  { route: 'files', label: '资料', short: '资料', icon: 'files', testid: 'nav-files', more: true },
 ];
 
 const ROUTE_TITLES = {
@@ -46,6 +52,7 @@ const ROUTE_TITLES = {
   edit: '编辑',
   pages: '页面',
   courses: '课程',
+  academic: '学术',
   profile: '首页设置',
   background: '背景动画',
   files: '资料',
@@ -401,12 +408,14 @@ async function loadSite(id, token, { client, user }, remember = tokenRemembered(
 }
 
 /**
- * 读取语言列表与默认语言（失败时回退到 ['zh', 'en'] / 'zh'）。
+ * 读取语言列表（languages.toml，按 weight 排序）与默认语言（hugo.toml 的 defaultContentLanguage）。
+ * 读不到时回退到 ['en', 'zh']（与仓库里 languages.toml 的顺序相同）；没写 defaultContentLanguage 时和 Hugo 一样是 'en'；
+ * 默认语言不在语言列表里时用列表的第一个。视图一律用 ctx.defaultLang，不要假设哪种语言在根路径。
  * @returns {Promise<{ langs: string[], defaultLang: string, names: Record<string, string> }>}
  */
 async function readLanguages(repo) {
-  let langs = ['zh', 'en'];
-  let defaultLang = 'zh';
+  let langs = ['en', 'zh'];
+  let defaultLang = 'en';
   const names = {};
   const toml = mods && mods.toml;
   if (!toml || typeof toml.parse !== 'function') return { langs, defaultLang, names };
@@ -675,6 +684,9 @@ function setTitle(text) {
   document.title = t ? `${t} · ${APP_NAME}` : `${APP_NAME} · ${SITE_NAME}`;
 }
 
+/** ctx.publish 的 afterCommit 最多等多久（毫秒），见 publish() */
+const AFTER_COMMIT_LIMIT_MS = 10000;
+
 const PHASE_TEXT = {
   prepare: '正在准备文件…',
   check: '正在检查网站上的最新版本…',
@@ -699,13 +711,16 @@ function siteLink(url) {
 
 /**
  * 视图提交修改的唯一入口（§4 ctx.publish）。
- * @param {{ message: string, changes: Array<object>, summary?: string|string[], viewUrl?: string, viewLabel?: string }} opts
+ * @param {{ message: string, changes: Array<object>, summary?: string|string[], viewUrl?: string, viewLabel?: string, afterCommit?: (result: object) => any }} opts
  *        viewUrl / viewLabel（扩展，可选）：发布的内容在网站上的地址（例如文章页）和链接文字（默认「打开看看」）。
  *        部署完成后「已上线 ✓」指向这里，提示里也会带上这个链接；不传时指向网站首页。
+ *        afterCommit（扩展，可选）：提交成功后、遮罩关闭之前要做完的收尾（例如清理本机草稿），可以是异步的。
+ *        遮罩和「正在发布」状态会一直保持到它结束 —— 遮罩消失时，这次发布连同视图的收尾就都完成了，
+ *        用户（和测试）不会在收尾途中离开或刷新页面。它出错只记日志，不影响发布结果（已经提交了）。
  * @returns {Promise<{ commitSha: string, shas: Record<string,string>, unchanged?: boolean, alreadyApplied?: boolean } | { conflict: true, reloaded: boolean, paths: string[] }>}
  *        alreadyApplied：这些修改其实已经在网站上了（上一次发布成功了，只是没收到 GitHub 的回复）。
  */
-async function publish({ message, changes, summary, viewUrl, viewLabel } = {}) {
+async function publish({ message, changes, summary, viewUrl, viewLabel, afterCommit } = {}) {
   const s = session;
   if (!s || !s.ready) throw new Error('还没有登录');
   if (publishing) {
@@ -750,6 +765,21 @@ async function publish({ message, changes, summary, viewUrl, viewLabel } = {}) {
     console.error('[publish] failed', err);
     toast(`发布失败：${errorMessage(err)}`, { type: 'error', timeout: 9000 });
     throw err;
+  }
+  if (typeof afterCommit === 'function') {
+    // 最多等 AFTER_COMMIT_LIMIT_MS：收尾一般只是几次 IndexedDB 读写，但浏览器的 IndexedDB 偶尔会卡住不回应
+    // （Safari 出过这种问题），不能让「正在发布」遮罩因此永远挡着。超时后照常关遮罩，收尾在后台继续。
+    let timer;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => afterCommit(result)),
+        new Promise((resolve) => { timer = setTimeout(() => { console.warn('[publish] afterCommit timed out'); resolve(); }, AFTER_COMMIT_LIMIT_MS); }),
+      ]);
+    } catch (err) {
+      console.warn('[publish] afterCommit failed', err);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   overlay.close();
   publishing = false;
@@ -979,26 +1009,49 @@ function renderShell() {
 
   const navItems = NAV.map((item) => {
     const a = h('a', {
-      class: 'nav-item', href: '#/' + item.route, dataset: { testid: item.testid, route: item.route },
+      class: ['nav-item', item.more && 'nav-item-more'], href: '#/' + item.route, dataset: { testid: item.testid, route: item.route },
     },
       h('span', { class: 'nav-icon' }, svgIcon(item.icon)),
       h('span', { class: 'nav-label' }, item.label),
       item.short ? h('span', { class: 'nav-label-short' }, item.short) : null);
     return a;
   });
+  // 手机底部标签栏的「更多」：弹出底部抽屉，列出 more 的几项（电脑上隐藏）
+  const moreBtn = h('button', {
+    type: 'button', class: 'nav-more', 'aria-haspopup': 'dialog', 'aria-label': '更多页面',
+    dataset: { testid: 'nav-more' },
+  },
+    h('span', { class: 'nav-icon' }, svgIcon('more')),
+    h('span', { class: 'nav-label-short' }, '更多'));
+  moreBtn.addEventListener('click', () => openMoreSheet());
 
   const sidenav = h('nav', { class: 'sidenav', 'aria-label': '主导航' },
     h('a', { class: 'btn btn-primary nav-new', href: '#/edit?new=post', dataset: { testid: 'nav-new-post' } },
       svgIcon('plus'), '写新文章'),
-    h('div', { class: 'nav-list' }, navItems),
+    h('div', { class: 'nav-list' }, navItems, moreBtn),
     h('div', { class: 'sidenav-footer muted' },
       h('div', {}, '发布后约 1–2 分钟生效'),
       h('div', {}, `${REPO.owner}/${REPO.repo}`)));
 
   viewHost = h('main', { class: 'main', id: 'main', tabindex: '-1' });
   render(app, h('div', { class: 'shell' }, topbar, sidenav, viewHost));
-  shell = { title, deploy, navItems, topbar };
+  shell = { title, deploy, navItems, topbar, moreBtn };
   setTitle('');
+}
+
+/** 手机上「更多」弹出的底部抽屉：不常用的几个页面。 */
+function openMoreSheet() {
+  const current = shell && shell.moreBtn ? shell.moreBtn.dataset.current : '';
+  let m = null;
+  const links = NAV.filter((item) => item.more).map((item) => {
+    const a = h('a', {
+      class: ['more-sheet-item', item.route === current && 'active'], href: '#/' + item.route,
+      dataset: { testid: `more-${item.route}` }, 'aria-current': item.route === current ? 'page' : undefined,
+    }, h('span', { class: 'nav-icon' }, svgIcon(item.icon)), h('span', {}, item.label), svgIcon('chevron-right'));
+    a.addEventListener('click', () => { if (m) m.close(); });
+    return a;
+  });
+  m = modal({ title: '更多', testid: 'more-sheet', className: 'more-sheet', content: h('nav', { class: 'more-sheet-list', 'aria-label': '更多页面' }, links) });
 }
 
 function userAvatar(user) {
@@ -1041,6 +1094,13 @@ function updateNav(info) {
     a.classList.toggle('active', on);
     if (on) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
+  }
+  // 当前页面在「更多」里时，手机上高亮「更多」（屏幕阅读器读出当前是哪一页）
+  const moreItem = NAV.find((item) => item.more && item.route === active);
+  if (shell.moreBtn) {
+    shell.moreBtn.classList.toggle('active', !!moreItem);
+    shell.moreBtn.dataset.current = moreItem ? moreItem.route : '';
+    shell.moreBtn.setAttribute('aria-label', moreItem ? `更多页面（当前：${moreItem.label}）` : '更多页面');
   }
 }
 

@@ -472,7 +472,7 @@ await test('delete warns about posts that reference the file only via a viewer l
   await page.waitForSelector(sel('confirm-ok'));
   await page.waitForSelector(sel('files-delete-refs'));
   const refs = await page.textContent(sel('files-delete-refs'));
-  assert.match(refs, /有 2 篇文章或页面引用了它/);
+  assert.match(refs, /有 2 处（文章、页面、论文 \/ 报告 \/ 近况或网站设置）引用了它/);
   assert.match(refs, /content\/posts\/uses-viewer-link\.md/);
   assert.match(refs, /content\/posts\/uses-embed\.md/);
   assert.doesNotMatch(refs, /other-viewer/);
@@ -484,6 +484,40 @@ await test('delete warns about posts that reference the file only via a viewer l
     // the site's {{< pdf >}} shortcode is not in this checkout → keep the final Hugo build working
     mock.setFiles({ 'content/posts/uses-embed.md': null });
   }
+});
+
+await test('delete also warns about the academic data files and the CV setting that use the file (regression)', async () => {
+  const PAPER = 'static/documents/papers/Zhong 2025.pdf';
+  const CV = 'static/documents/cv/My-CV.pdf';
+  const paramsBefore = mock.readFile('config/_default/params.toml');
+  assert.match(paramsBefore, /^cv = ""/m, 'precondition: cv is empty in params.toml');
+  mock.setFiles({
+    [PAPER]: '%PDF-1.4 paper\n',
+    [CV]: '%PDF-1.4 cv\n',
+    'data/publications/zhong2025.yaml': 'id: "zhong2025"\ntitle: "A paper"\nauthors:\n  - "Zhong, F."\nyear: 2025\npdf: "/documents/papers/Zhong 2025.pdf"\n',
+    'data/talks/2025-01-01-x.yaml': 'id: "2025-01-01-x"\ntitle: "A talk"\ndate: "2025-01-01"\nslides: "/viewer/?file=%2Fdocuments%2Fpapers%2FZhong%202025.pdf"\n',
+    'config/_default/params.toml': paramsBefore.replace(/^cv = ""/m, 'cv = "/documents/cv/My-CV.pdf"'),
+  });
+  await page.reload();
+  await waitView(page);
+  for (const [file, want] of [
+    [PAPER, [/data\/publications\/zhong2025\.yaml/, /data\/talks\/2025-01-01-x\.yaml/]],
+    [CV, [/config\/_default\/params\.toml/]],
+  ]) {
+    await page.waitForSelector(rowSel(file));
+    await page.click(`${rowSel(file)} ${sel('files-delete')}`);
+    await page.waitForSelector(sel('confirm-ok'));
+    await page.waitForSelector(sel('files-delete-refs'));
+    const refs = await page.textContent(sel('files-delete-refs'));
+    for (const re of want) assert.match(refs, re, `${file}: ${refs}`);
+    assert.match(refs, new RegExp(`有 ${want.length} 处`));
+    await page.click(sel('confirm-cancel'));
+    await page.waitForSelector(sel('confirm-cancel'), { state: 'detached' });
+  }
+  // put things back for the later tests and the final build
+  mock.setFiles({ [PAPER]: null, [CV]: null, 'data/publications/zhong2025.yaml': null, 'data/talks/2025-01-01-x.yaml': null, 'config/_default/params.toml': paramsBefore });
+  await page.reload();
+  await waitView(page);
 });
 
 await test('re-upload report.pdf via drag & drop (kept for the build check)', async () => {

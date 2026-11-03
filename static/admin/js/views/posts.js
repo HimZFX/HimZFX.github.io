@@ -20,7 +20,7 @@ import {
 } from '../ui.js';
 import {
   groupPages, languageStatus, statusText, isPost, isDraftFm, shadowWarnings,
-  imageDirFor, parseContentPath,
+  imageDirFor, parseContentPath, langPrefix as siteLangPrefix,
 } from '../content.js';
 import { splitDocument, parseFrontMatter } from '../frontmatter.js';
 import { listDrafts, deleteDraft, draftKeyForPath } from '../drafts.js';
@@ -90,14 +90,14 @@ export function safeHref(url, base) {
   }
 }
 
-/** 某语言的网址前缀：默认语言在根目录 ''，其他语言 'en/'。 */
+/** 某语言的网址前缀：默认语言（ctx.defaultLang）在根目录 ''，其他语言 '<语言>/'（例如 'zh/'）。见 content.langPrefix。 */
 export function langPrefix(lang, ctx) {
-  return !lang || lang === ctx.defaultLang ? '' : `${lang}/`;
+  return siteLangPrefix(lang, ctx.defaultLang);
 }
 
 /**
  * 一个页面在某语言站点上的网址（按 Hugo 的默认规则推算）。
- *   content/posts/a.md            → /posts/a/      （英文站 /en/posts/a/）
+ *   content/posts/a.md            → /posts/a/      （默认语言英文站；中文站 /zh/posts/a/）
  *   content/about.md              → /about/
  *   content/research/_index.md    → /research/
  *   content/_index.md             → /
@@ -107,7 +107,7 @@ export function langPrefix(lang, ctx) {
  * @param {string} lang
  * @param {object} fm 该语言实际使用的文件的 front matter
  * @param {object} ctx
- * @returns {string} 相对网站根的路径，如 '/en/posts/a/'
+ * @returns {string} 相对网站根的路径，如 '/zh/posts/a/'
  */
 export function pagePath(group, lang, fm, ctx) {
   const prefix = '/' + langPrefix(lang, ctx);

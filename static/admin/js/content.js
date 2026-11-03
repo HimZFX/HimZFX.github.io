@@ -12,7 +12,8 @@
 
 /** 内部兜底的语言名，ctxLike 没给 langName 时使用。 */
 const FALLBACK_LANG_NAMES = { zh: '中文', en: '英文', ja: '日文', ko: '韩文', fr: '法文', de: '德文' };
-const DEFAULT_LANGS = ['zh', 'en'];
+/** 调用方没给语言列表时的兜底（与 languages.toml 的顺序一致：英文 weight 1、中文 weight 2）。 */
+const DEFAULT_LANGS = ['en', 'zh'];
 
 function langsOr(langs) {
   return Array.isArray(langs) && langs.length ? langs : DEFAULT_LANGS;
@@ -164,12 +165,17 @@ export function statusText(status, ctxLike) {
  * 把语言名拼成短语。全是「X文」形式的两字名称时用简称：中、英 → '中英'；
  * 否则用顿号连接：'中文、Deutsch'。
  * compact=false 且只有一种语言时返回完整名称（'仅中文'）。
+ * 简称里「中」总在最前（「中英」是固定说法），其余按语言列表的顺序（languages.toml 的 weight）——
+ * 所以默认语言是英文、列表是 ['en', 'zh'] 时仍然是「中英共用」，而不是「英中共用」。
  */
 function joinNames(langs, ctxLike, compact) {
   const names = langs.map((l) => nameOf(l, ctxLike));
   if (names.length === 1 && !compact) return names[0];
   const short = names.every((n) => n.length === 2 && n.endsWith('文'));
-  if (short) return names.map((n) => n[0]).join('');
+  if (short) {
+    const chars = names.map((n) => n[0]);
+    return [...chars.filter((c) => c === '中'), ...chars.filter((c) => c !== '中')].join('');
+  }
   return names.join('、') + (compact ? ' ' : '');
 }
 
@@ -190,6 +196,46 @@ export function variantPath(dir, base, langOrNull) {
   const prefix = dir ? `${dir}/` : '';
   const lang = langOrNull && langOrNull !== 'shared' ? langOrNull : null;
   return lang ? `${prefix}${base}.${lang}.md` : `${prefix}${base}.md`;
+}
+
+// ---------------------------------------------------------------------------
+// 各语言站点的网址
+//
+// 与 Hugo 的规则一致（hugo.toml：defaultContentLanguageInSubdir = false）：默认语言（ctx.defaultLang，
+// 来自 hugo.toml 的 defaultContentLanguage，现在是英文）在网站根路径 /，其他语言在 /<语言代码>/ 下（中文 /zh/）。
+// 后台所有「在网站上查看」的链接、网址预览都通过这几个函数，不要在视图里自己拼 '/en/'、'/zh/'。
+
+/**
+ * 某语言站点的网址前缀（相对网站根，不带开头的 /）：默认语言 ''，其他语言 '<语言>/'。
+ * @param {string|null|undefined} lang 语言代码；空 / 'shared' 按默认语言处理
+ * @param {string} defaultLang 默认语言（ctx.defaultLang）
+ * @example langPrefix('zh', 'en')  // 'zh/'
+ * @example langPrefix('en', 'en')  // ''
+ */
+export function langPrefix(lang, defaultLang) {
+  return !lang || lang === 'shared' || lang === defaultLang ? '' : `${lang}/`;
+}
+
+/**
+ * 网站上的路径（以 / 开头）：把相对网站根的路径放到某语言站点下。
+ * @param {string} rel 相对网站根的路径，例如 'posts/a/'（开头的 / 会被去掉）
+ * @param {string|null|undefined} lang
+ * @param {string} defaultLang
+ * @example langSitePath('posts/a/', 'zh', 'en')  // '/zh/posts/a/'
+ * @example langSitePath('posts/a/', 'en', 'en')  // '/posts/a/'
+ * @example langSitePath('', 'zh', 'en')          // '/zh/'（中文首页）
+ */
+export function langSitePath(rel, lang, defaultLang) {
+  return '/' + langPrefix(lang, defaultLang) + String(rel || '').replace(/^\/+/, '');
+}
+
+/**
+ * langSitePath 的完整网址版本。
+ * @param {string} siteUrl 网站根地址，例如 ctx.siteUrl = 'https://himzfx.github.io/'
+ * @example langSiteUrl('https://x.io/', 'courses/a/', 'zh', 'en')  // 'https://x.io/zh/courses/a/'
+ */
+export function langSiteUrl(siteUrl, rel, lang, defaultLang) {
+  return String(siteUrl || '/').replace(/\/?$/, '/') + langSitePath(rel, lang, defaultLang).slice(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,8 +381,13 @@ export function shadowWarnings(group, fmByPath, langs) {
 //
 // 安卓手机、尤其是微信内置浏览器打不开 PDF（只能下载），所以资料的链接默认指向网站自己的
 // 阅读器页面：/viewer/?file=<encodeURIComponent(网站路径)>（PDF.js 渲染 PDF，图片可以放大，
-// 都带「下载」按钮）。可选参数：lang=en（英文界面，默认中文）、embed=1（嵌在文章里的精简样式）、
+// 都带「下载」按钮）。可选参数：lang=zh / lang=en（界面语言）、embed=1（嵌在文章里的精简样式）、
 // page=N（从第 N 页开始）。文章正文里也可以用 {{< pdf "/documents/x.pdf" >}} 直接嵌入阅读器。
+//
+// lang 的约定（网站模板、后台、阅读器三方一致）：链接属于某一种语言时写 lang=<该语言>（默认语言也写）——
+// 网站的 {{< pdf >}} 和课程资料列表总是写页面语言，后台编辑器里语言专属版本（xxx.en.md / xxx.zh.md）插入的链接写该语言；
+// 所有语言共用的链接（共用版本 xxx.md 里的、「复制预览链接」得到的）不写 lang，由阅读器自己判断：
+// 来源页面在 /zh/ 下 → 中文；在网站其他页面 → 默认语言；没有来源 → 浏览器语言 → 默认语言（见 static/viewer/lang.js）。
 
 /** 阅读器页面在网站上的路径。 */
 export const VIEWER_PATH = '/viewer/';
@@ -405,18 +456,20 @@ function encodeQueryValue(s) {
  *
  * @param {string} sitePath 网站路径（未编码），例如 '/documents/讲义-第1章.pdf'（sitePathFor 的结果）
  * @param {{ lang?: string, embed?: boolean, absolute?: boolean, siteUrl?: string, page?: number }} [opts]
- *   lang：界面语言，'zh'（默认，不写进网址）或 'en' 等；embed：嵌入文章用的精简样式；
+ *   lang：界面语言（'zh'、'en' …），给了就写进网址（默认语言也写）；不给 = 阅读器自己判断（见上面的约定）；
+ *   embed：嵌入文章用的精简样式；
  *   absolute：返回完整网址（需要 siteUrl，例如 ctx.siteUrl = 'https://himzfx.github.io/'）；
  *   page：从第几页开始（> 1 时才写进网址）。
  * @returns {string|null} 路径不合法时返回 null
  * @example viewerUrlFor('/documents/a b.pdf')  // '/viewer/?file=%2Fdocuments%2Fa%20b.pdf'
+ * @example viewerUrlFor('/documents/a.pdf', { lang: 'zh' })  // '/viewer/?file=%2Fdocuments%2Fa.pdf&lang=zh'
  * @example viewerUrlFor('/documents/a.pdf', { lang: 'en', embed: true, absolute: true, siteUrl: 'https://x.io/' })
  *   // 'https://x.io/viewer/?file=%2Fdocuments%2Fa.pdf&lang=en&embed=1'
  */
 export function viewerUrlFor(sitePath, { lang, embed, absolute, siteUrl, page } = {}) {
   if (!isViewerFilePath(sitePath)) return null;
   let q = 'file=' + encodeQueryValue(sitePath);
-  if (lang && lang !== 'zh') q += '&lang=' + encodeQueryValue(String(lang));
+  if (lang) q += '&lang=' + encodeQueryValue(String(lang));
   if (embed) q += '&embed=1';
   const n = Number(page);
   if (Number.isInteger(n) && n > 1) q += '&page=' + n;

@@ -6,3 +6,5 @@
 {{- partial "features/math.html" . -}}
 {{- partial "features/holiday-favicon.html" . -}}
 {{- partial "features/background.html" . -}}
+{{- partial "features/lang-hint.html" . -}}
+{{- if .IsHome }}{{ partial "features/viewer-site.html" . }}{{ end -}}

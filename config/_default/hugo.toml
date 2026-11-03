@@ -3,7 +3,7 @@
 #
 # 配置按用途拆成了同目录下的几个文件，Hugo 会自动合并它们：
 #   hugo.toml       ← 本文件：网址、标题、主题、默认语言
-#   languages.toml  ← 语言列表（中 / 英）及各语言的差异项
+#   languages.toml  ← 语言列表（英 / 中）及各语言的差异项
 #   module.toml     ← ★ 双语共享机制（一般不需要改）
 #   params.toml     ← 首页、社交链接、背景动画、评论等功能参数
 #   markup.toml     ← Markdown 与数学公式渲染
@@ -16,7 +16,28 @@ baseURL = "https://HimZFX.github.io/"
 title = "HimZFX's Lab"
 theme = "PaperMod"
 
-# 默认语言：中文在根路径 /，其他语言在 /<语言代码>/（如 /en/）
-defaultContentLanguage = "zh"
+# 默认语言：英文在根路径 /，其他语言在 /<语言代码>/（中文在 /zh/）。
+# 网站模板、管理后台、new_post.py 都按这里的默认语言生成网址（资料预览页读构建时生成的 /viewer/site.js）。
+# 以前中文在 / 、英文在 /en/；旧的 /en/xxx/ 链接会被 layouts/404.html 自动转到 /xxx/。
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = false   # false = 默认语言不加 /en/ 前缀，直接放在 / 下
 
 enableEmoji = true
+
+# ------------------------------------------------------------
+# 搜索引擎收录：目前【禁止】
+#
+# 下面的 cascade 给全站每个页面加上 robotsNoIndex，PaperMod 会因此输出
+# <meta name="robots" content="noindex, nofollow">；robots.txt（模板见
+# layouts/robots.txt）也跟着这个开关，额外禁止抓取 /documents/、/viewer/、/admin/
+# （PDF 等文件无法带 noindex 标记）。
+#
+# 以后想允许被搜索到：把 robotsNoIndex 改成 false（或删掉整个 [[cascade]] 块），
+# 网页和 robots.txt 会一起恢复为允许收录。单个页面也可以在 front matter 里写
+# robotsNoIndex: true 单独禁止。
+# ------------------------------------------------------------
+enableRobotsTXT = true
+
+[[cascade]]
+  [cascade.params]
+    robotsNoIndex = true

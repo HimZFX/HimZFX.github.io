@@ -1,0 +1,85 @@
+{{- /*
+  首页的头像、名字、简介、社交图标和按钮（覆盖 PaperMod 的 index_profile.html；PaperMod 原有的部分一字未改）。
+  本站加了两处，都只在有内容时输出：
+    - 简历按钮：params.toml 的 cv（简历 PDF 的网站路径，例如 /documents/cv.pdf）不为空时，在配置的按钮后面加一个
+      「CV / 简历」按钮，用在线预览页打开（lang = 首页语言）；写成 https:// 网址时直接打开那个网址。
+    - 近况：头像下方显示 data/news/ 里最新的几条（条数见 params.toml [news] homeCount，0 = 不显示），
+      比 homeCount 多时加「全部近况 / All news」链接到 /news/。没有近况时整块不显示。
+*/ -}}
+{{- $page := . -}}
+{{- $lang := .Language.Lang -}}
+{{- $cv := partial "academic/url.html" (dict "url" site.Params.cv "lang" $lang "kind" "file" "where" "params.toml cv") -}}
+<div class="profile">
+    {{- with site.Params.profileMode }}
+    <div class="profile_inner">
+        {{- if .imageUrl -}}
+        {{- $img := "" }}
+        {{- if not (urls.Parse .imageUrl).IsAbs }}
+            {{- $img = resources.Get .imageUrl }}
+        {{- end }}
+        {{- if $img }}
+            {{- $processableFormats := (slice "jpg" "jpeg" "png" "tif" "bmp" "gif") -}}
+            {{- if hugo.IsExtended -}}
+                {{- $processableFormats = $processableFormats | append "webp" -}}
+            {{- end -}}
+            {{- $prod := (hugo.IsProduction | or (eq site.Params.env "production")) }}
+            {{- if and (in $processableFormats $img.MediaType.SubType) (eq $prod true)}}
+                {{- if (not (and (not .imageHeight) (not .imageWidth))) }}
+                    {{- $img = $img.Resize (printf "%dx%d" .imageWidth .imageHeight) }}
+                {{- else if .imageHeight }}
+                    {{- $img = $img.Resize (printf "x%d" .imageHeight) }}
+                {{ else if .imageWidth }}
+                    {{- $img = $img.Resize (printf "%dx" .imageWidth) }}
+                {{ else }}
+                    {{- $img = $img.Resize "150x150" }}
+                {{- end }}
+            {{- end }}
+            <img draggable="false" src="{{ $img.Permalink }}" alt="{{ .imageTitle | default "profile image" }}" title="{{ .imageTitle }}"
+                height="{{ .imageHeight | default 150 }}" width="{{ .imageWidth | default 150 }}" />
+        {{- else }}
+        <img draggable="false" src="{{ .imageUrl | absURL }}" alt="{{ .imageTitle | default "profile image" }}" title="{{ .imageTitle }}"
+            height="{{ .imageHeight | default 150 }}" width="{{ .imageWidth | default 150 }}" />
+        {{- end }}
+        {{- end }}
+        <h1>{{ .title | default site.Title | markdownify }}</h1>
+        <span>{{ .subtitle | markdownify }}</span>
+        {{- partial "social_icons.html" -}}
+
+        {{- if or .buttons $cv.href }}
+        <div class="buttons">
+            {{- range .buttons }}
+            <a class="button" href="{{ trim .url " " }}" rel="noopener" title="{{ .name }}">
+                <span class="button-inner">
+                    {{ .name }}
+                    {{- if (findRE "://" .url) }}&nbsp;
+                    <svg fill="none" shape-rendering="geometricPrecision" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round" stroke-width="2.5" viewBox="0 0 24 24" height="14" width="14">
+                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"></path>
+                        <path d="M15 3h6v6"></path>
+                        <path d="M10 14L21 3"></path>
+                    </svg>
+                    {{- end }}
+                </span>
+            </a>
+            {{- end }}
+            {{- with $cv.href }}
+            <a class="button button-cv" href="{{ . }}" rel="noopener" title="{{ i18n "cv_button" }}"{{ if $cv.external }} target="_blank"{{ end }}>
+                <span class="button-inner">
+                    {{ i18n "cv_button" }}
+                    {{- if $cv.external }}&nbsp;
+                    <svg fill="none" shape-rendering="geometricPrecision" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round" stroke-width="2.5" viewBox="0 0 24 24" height="14" width="14">
+                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"></path>
+                        <path d="M15 3h6v6"></path>
+                        <path d="M10 14L21 3"></path>
+                    </svg>
+                    {{- end }}
+                </span>
+            </a>
+            {{- end }}
+        </div>
+        {{- end }}
+        {{- partial "academic/home-news.html" $page }}
+    </div>
+    {{- end}}
+</div>
