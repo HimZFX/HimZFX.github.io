@@ -2,6 +2,7 @@
 title: "科研"
 menu:
   main:
+    identifier: research
     weight: 20
 description: "我的科研项目与成果"
 hidemeta: true

@@ -2,6 +2,7 @@
 title: "Research"
 menu:
   main:
+    identifier: research
     weight: 20
 description: "My research projects and publications"
 hidemeta: true

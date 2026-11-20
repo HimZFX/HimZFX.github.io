@@ -3,6 +3,7 @@ title: "关于我"
 linkTitle: "关于"   # 菜单里显示的名字
 menu:
   main:
+    identifier: about   # 菜单编号：子页面用 parent: about 挂到这一项下面（下拉菜单）
     weight: 10    # 菜单顺序，数字越小越靠左
 layout: "about"   # 告诉 Hugo 这是一个特殊页面
 summary: "about"
