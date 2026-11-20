@@ -711,7 +711,7 @@ export default async function mount(container, params, ctx) {
       h('div', { class: 'page-header' }, h('div', {}, h('h1', {}, '首页设置'))),
       h('div', { class: 'card' }, errorState('首页设置读取失败', {
         detail: errorMessage(err),
-        retry: () => ctx.navigate('#/profile', { replace: true }),
+        retry: () => ctx.navigate('#/settings?tab=home', { replace: true }),
       })));
     return {};
   }
@@ -2057,7 +2057,7 @@ export default async function mount(container, params, ctx) {
       return confirmDialog({
         title: '首页设置还没有发布',
         message: kept
-          ? '刚才的修改（包括新头像）还没有发布到网站。离开后它们会保存在这台设备上，下次打开「首页设置」时可以恢复。确定要离开吗？'
+          ? '刚才的修改（包括新头像）还没有发布到网站。离开后它们会保存在这台设备上，下次打开「设置 › 首页」时可以恢复。确定要离开吗？'
           : '离开后，刚才的修改（包括新头像）会丢失。确定要离开吗？',
         okText: '仍然离开',
         cancelText: '留下来',

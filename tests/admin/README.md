@@ -16,9 +16,14 @@ node --test tests/admin/*.test.mjs
 node --test tests/admin/mock.test.mjs
 
 # 端到端测试（Playwright + Chromium，每个界面一个脚本）
+# e2e-shell：登录、侧栏顺序和分隔线、手机底栏与「更多」、旧地址跳转（不留历史）、标签页（键盘、replaceState、不重新挂载）、
+#            切换标签页 / 离开分组时的未保存提醒、标签页模块缺失时的提示、CSP、401
 node tests/admin/e2e-shell.mjs
+# e2e-editor：发表 / 更新、语言版本、自动保存、冲突、手机预览、高亮，以及文章分类（所有语言版本一个提交、注释保留、不分类、新文章）
 node tests/admin/e2e-editor.mjs
-# … e2e-lists / e2e-profile / e2e-background / e2e-files
+# … e2e-lists（博客列表的状态 / 分类筛选，设置 › 菜单与页面的两层菜单树）/ e2e-profile / e2e-background / e2e-files
+# 后台的侧栏：关于 / 研究 / 博客 / 课程 / 资料 / 设置；旧地址 #/academic、#/profile、#/background、#/pages 自动跳到新地址，
+# 所以 e2e 脚本里等视图时用新的路由名（body[data-view-ready="settings"]），标签页再等 body[data-tab-ready="settings:pages"]
 
 # 「课程」页：新建课程（中英文）、批量上传（每个文件一篇子推文 / 只放进资料）、子推文和课程的顺序（只改 weight 那一行）、
 # 冲突、新子推文（编辑器）、分组改名、拒绝 .html / .svg 等文件、手机布局，最后用 Hugo 构建检查课程页和子推文里的阅读器；
@@ -29,6 +34,13 @@ node tests/admin/e2e-courses.mjs
 # 构建时生成的资料列表、子推文的面包屑和课程内上一篇 / 下一篇、英文站、手机与深色模式，以及草稿课程、嵌套子栏目等边界情况
 node tests/admin/e2e-courses-site.mjs
 
+# 网站的顶部菜单分组和博客分类（layouts/partials/header.html、nav/tree.html、subnav.html、layouts/_default/baseof.html、
+# layouts/categories/、post_meta.html、assets/js/nav.js、assets/css/extended/nav.css）：下拉菜单（悬停 / 点 ▾ / 键盘 / 手机面板 / 没有 JS）、
+# 栏目子导航、当前栏目下划线、分类页和分类总览、空分类不进菜单、所有页面 noindex、手机 360 / 390 与深色模式。
+# 构建三次：真实仓库（只有 Blog 有 ▾）、子页面都打开的夹具（论文 / 报告在 Research ▾、近况在 About ▾、只有中文的随笔）、
+# 长名字夹具（下拉菜单挂在最后一项 Course Materials 下、名字很长时不超出窗口）
+node tests/admin/e2e-nav-site.mjs
+
 # 网站的资料在线预览页（static/viewer/，PDF.js）和 {{< pdf >}} 短代码：懒加载、缩放、中文非嵌入字体、
 # 链接过滤、错误提示、参数校验 / 绕过尝试、手机与微信、深色模式、令牌不可读、CSP、界面语言（?lang → 来源页面 → 浏览器语言 → 默认英文）
 node tests/admin/e2e-viewer.mjs
@@ -38,7 +50,7 @@ node tests/admin/e2e-viewer.mjs
 node tests/admin/e2e-lang.mjs
 
 # 「学术」（论文 / 报告与海报 / 近况）：粘贴 ADS 导出的 BibTeX → 自动填表 → 上传论文 PDF → 保存后 data/publications/<id>.yaml 逐字检查；
-# 手填论文、修改、保存时冲突（别处改了同一个文件）、论文设置（params.toml 精确修改）、「在顶部菜单显示」开关（两个 _index 文件只改 menu）、
+# 手填论文、修改、保存时冲突（别处改了同一个文件）、论文设置（params.toml 精确修改）、「在菜单里显示（放在 Research ▾ / About ▾ 下）」开关（两个 _index 文件只改 menu：parent + weight，旧写法原地迁移）、
 # 报告 / 近况的增删改、首页设置里的简历 CV 上传 / 更换和 ORCID / NASA ADS 社交图标、手机 390 / 360，最后 Hugo 构建检查网站页面
 node tests/admin/e2e-academic.mjs
 
@@ -48,18 +60,22 @@ node tests/admin/e2e-academic-site.mjs
 
 # 跨界面的完整使用流程（登录 → 写文章 + 英文版 → 上传 PDF 并在两种语言的文章里插入预览链接和嵌入阅读器 →
 # 换头像和简介 → 换背景动画 → 调整菜单 → 删除草稿 → 新建课程「近代物理实验」并批量上传两份实验报告 →
-# 学术：粘贴 BibTeX 添加论文（带 PDF）→ 论文设置 → 打开论文 / 报告的菜单 → 添加带幻灯片的报告 → 两条近况 → 上传简历 → ORCID / ADS 图标 →
-# Hugo 构建后检查两种语言的网站（课程总页的分组、单元页、子推文里的阅读器、课程内上一篇 / 下一篇；首页近况、CV 按钮、图标、
+# 学术：粘贴 BibTeX 添加论文（带 PDF）→ 论文设置 → 打开论文 / 报告的菜单（放进 Research ▾，检查两个 _index 文件逐字）→ 添加带幻灯片的报告 → 两条近况 → 上传简历 → ORCID / ADS 图标 →
+# Hugo 构建后检查两种语言的网站（顶层菜单仍是 4 项、Research ▾ 里有论文和报告；课程总页的分组、单元页、子推文里的阅读器、课程内上一篇 / 下一篇；首页近况、CV 按钮、图标、
 # 论文页加粗的名字和 PDF、报告页的幻灯片），并以访客身份打开预览链接和嵌入的阅读器，确认 PDF 真的显示出来；
 # 旧的 /en/<路径>/（带 ?query#hash、/en/、/en/viewer/?file=…）跳到新网址；中文浏览器在英文页上看到语言提示）
 node tests/admin/e2e-journey.mjs
 ```
 
 每个 e2e 脚本都会把 Hugo 构建结果和截图放进自己的目录（默认在系统临时目录下），可以用环境变量指定：
-`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`、`LANG_E2E_DIR`、`ACADEMIC_E2E_DIR`、`ACADEMIC_SITE_E2E_DIR`。
+`SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`、`LANG_E2E_DIR`、`ACADEMIC_E2E_DIR`、`ACADEMIC_SITE_E2E_DIR`、`NAV_SITE_E2E_DIR`。
 
 > 网站的默认语言是英文（`/`），中文在 `/zh/`。e2e 脚本里的网址按这个写：英文页 `/posts/x/`、中文页 `/zh/posts/x/`；
-> 内容文件的命名不变（`xxx.md` 共用、`xxx.en.md` 英文、`xxx.zh.md` 中文）。`viewer-lang.test.mjs` 是阅读器界面语言（`static/viewer/lang.js`）的单元测试；`academic.test.mjs` 是「学术」的 BibTeX 解析和数据文件写法的单元测试。
+> 内容文件的命名不变（`xxx.md` 共用、`xxx.en.md` 英文、`xxx.zh.md` 中文）。`viewer-lang.test.mjs` 是阅读器界面语言（`static/viewer/lang.js`）的单元测试；`academic.test.mjs` 是「学术」的 BibTeX 解析和数据文件写法的单元测试；`menu.test.mjs` 是网站下拉菜单（menu.main.parent）、博客分类（categories）和后台旧地址跳转的单元测试。
+
+> 网站的下拉菜单是 `#menu` 里的 `<div class="nav-sub" id="nav-sub-<编号>">`（不是嵌套的 `<ul>`）。后台的构建检查
+> （`e2e-lists` / `e2e-courses` / `e2e-journey` / `e2e-academic`）取顶层菜单项时先去掉这些 div，`e2e-journey` 从 `div#nav-sub-<编号>` 读下拉菜单；
+> 改 `layouts/partials/header.html` 的这些钩子时要同步这些测试（约定见 docs/admin-architecture.md 第 16 节）。
 
 > 说明：Node 22 的 `node --test <目录>` 并不会去目录里找测试文件，而是把目录当成模块运行，
 > 所以这里放了一个 `index.js`，由它依次加载本目录的全部 `*.test.mjs`。

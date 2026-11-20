@@ -1,4 +1,5 @@
-// tests/admin/e2e-lists.mjs — Playwright end-to-end test for the 文章 (posts.js) and 页面 (pages.js) views.
+// tests/admin/e2e-lists.mjs — Playwright end-to-end test for the 博客 (posts.js: list, status + category filters) and
+// 设置 › 菜单与页面 (pages.js: the two-level menu tree, order, 「放在哪个栏目下」, 新建栏目) views.
 //
 // Run from the repo root:   node tests/admin/e2e-lists.mjs
 // Env:
@@ -52,7 +53,10 @@ const waitView = (page, route) => page.waitForSelector(`body[data-view-ready="${
 async function goto(page, hash, route) {
   await page.evaluate((h) => { location.hash = h; }, hash);
   await waitView(page, route);
+  // the pages view lives in a tab of 设置
+  if (route === 'settings') await page.waitForSelector('body[data-tab-ready="settings:pages"]', { state: 'attached', timeout: 20000 });
 }
+const PAGES = '#/settings?tab=pages';
 
 /** Re-mount a view (navigate away and back) so it re-reads drafts / repo state. */
 async function remount(page, hash, route) {
@@ -87,7 +91,9 @@ async function noHorizontalScroll(page) {
 function navItems(html) {
   const m = /<ul id=["']?menu["']?[^>]*>([\s\S]*?)<\/ul>/.exec(html);
   assert.ok(m, 'nav menu not found in built page');
-  return [...m[1].matchAll(/<a\b[^>]*href=["']?([^"' >]+)["']?[^>]*>([\s\S]*?)<\/a>/g)]
+  // top-level items only: the dropdown panels (<div class="nav-sub">…</div>, links a.nav-sub-link) are left out
+  const top = m[1].replace(/<div\b[^>]*\bnav-sub\b[^>]*>[\s\S]*?<\/div>/g, '');
+  return [...top.matchAll(/<a\b[^>]*href=["']?([^"' >]+)["']?[^>]*>([\s\S]*?)<\/a>/g)]
     .map((x) => ({ href: x[1], text: x[2].replace(/<[^>]+>/g, '').trim() }));
 }
 
@@ -154,9 +160,9 @@ async function main() {
     });
 
     await step('posts: seeded posts → 中英共用 / 仅英文 / shadow warning, sorted by date', async () => {
-      mock.setFile('content/posts/shared-only.md', '---\ntitle: "共用文章"\ndate: 2026-01-10T09:00:00+08:00\ndraft: false\n---\n\n正文\n');
-      mock.setFile('content/posts/en-only.en.md', '---\ntitle: "English Only Note"\ndate: 2026-02-01\ndraft: true\n---\n\nBody\n');
-      mock.setFile('content/posts/shadowed.md', '---\ntitle: "被遮住的文章"\ndate: 2025-12-20\ndraft: false\n---\n\n共用正文\n');
+      mock.setFile('content/posts/shared-only.md', '---\ntitle: "共用文章"\ndate: 2026-01-10T09:00:00+08:00\ndraft: false\ncategories: [essays]\n---\n\n正文\n');
+      mock.setFile('content/posts/en-only.en.md', '---\ntitle: "English Only Note"\ndate: 2026-02-01\ndraft: true\ncategories: physics\n---\n\nBody\n');
+      mock.setFile('content/posts/shadowed.md', '---\ntitle: "被遮住的文章"\ndate: 2025-12-20\ndraft: false\ncategories: [notes]\n---\n\n共用正文\n');
       mock.setFile('content/posts/shadowed.en.md', '---\ntitle: "Shadowed (EN draft)"\ndate: 2025-12-20\ndraft: true\n---\n\nEnglish draft\n');
       mock.setFile('content/posts/no-date.md', '---\ntitle: "没有日期的文章"\ndraft: "false"\n---\n\nx\n');
       mock.setFile('static/images/posts/shared-only/a.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
@@ -207,6 +213,46 @@ async function main() {
       assert.equal((await rowKeys(page)).length, 0);
       await page.fill('[data-testid="posts-search"]', '');
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="post-row"]').length === 5);
+    });
+
+    await step('posts: category chips 全部 / 科研笔记 / 随笔 / 未分类 with counts; category badges on every row', async () => {
+      const count = async (id) => (await page.textContent(`[data-testid="posts-cat-${id}"]`)).replace(/\s+/g, '');
+      assert.deepEqual(await page.$$eval('[data-testid="posts-cats"] [role="tab"]', (els) => els.map((e) => e.dataset.testid)),
+        ['posts-cat-all', 'posts-cat-notes', 'posts-cat-essays', 'posts-cat-none']);
+      // shadowed: the English (default-language) version has no category → 未分类, with a 各语言分类不同 hint
+      assert.equal(await count('all'), '全部5');
+      assert.equal(await count('notes'), '科研笔记1');
+      assert.equal(await count('essays'), '随笔1');
+      assert.equal(await count('none'), '未分类2');
+      const badges = (k) => page.$$eval(`[data-testid="post-row"][data-key="${k}"] [data-testid="post-category"]`, (els) => els.map((e) => `${e.dataset.cat}:${e.textContent}`));
+      assert.deepEqual(await badges('content/posts/first-physics-note'), ['notes:科研笔记']);
+      assert.deepEqual(await badges('content/posts/shared-only'), ['essays:随笔']);
+      assert.deepEqual(await badges('content/posts/en-only'), ['physics:physics'], 'unknown keys shown raw');
+      assert.deepEqual(await badges('content/posts/no-date'), []);
+      assert.ok(await page.$('[data-testid="post-row"][data-key="content/posts/shadowed"] [data-testid="post-category-mixed"]'));
+      await page.click('[data-testid="posts-cat-notes"]');
+      await waitRows(page, ['content/posts/first-physics-note']);
+      assert.equal(await page.evaluate(() => location.hash), '#/posts?cat=notes', 'the chip is kept in the address (replaceState)');
+      assert.equal(await page.getAttribute('[data-testid="posts-cat-notes"]', 'aria-selected'), 'true');
+      await page.click('[data-testid="posts-cat-essays"]');
+      await waitRows(page, ['content/posts/shared-only']);
+      await page.click('[data-testid="posts-cat-none"]');
+      await waitRows(page, ['content/posts/shadowed', 'content/posts/no-date']);
+      // combined with the status filter and search
+      await page.click('[data-testid="posts-filter-draft"]');
+      await waitRows(page, ['content/posts/shadowed']);
+      await page.click('[data-testid="posts-filter-all"]');
+      await page.fill('[data-testid="posts-search"]', 'zzz-nothing');
+      await page.waitForSelector('[data-testid="posts-no-match"]');
+      await page.fill('[data-testid="posts-search"]', '');
+      await page.screenshot({ path: path.join(SHOTS, 'posts-category-none.png'), fullPage: true });
+      // opening the address directly selects the chip
+      await page.evaluate(() => { location.hash = '#/posts?cat=essays'; });
+      await page.waitForFunction(() => document.querySelector('[data-testid="posts-cat-essays"]')?.getAttribute('aria-selected') === 'true');
+      await waitRows(page, ['content/posts/shared-only']);
+      await page.click('[data-testid="posts-cat-all"]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-testid="post-row"]').length === 5);
+      assert.equal(await page.evaluate(() => location.hash), '#/posts');
     });
 
     await step('posts: 编辑 and 写新文章 navigate to the editor routes', async () => {
@@ -310,7 +356,9 @@ async function main() {
     });
 
     await step('pages: lists sections sorted by menu weight with zh/en names', async () => {
-      await goto(page, '#/pages', 'pages');
+      // the old address still works (redirect to 设置 › 菜单与页面)
+      await goto(page, '#/pages', 'settings');
+      assert.equal(await page.evaluate(() => location.hash), PAGES);
       assert.deepEqual(await rowKeys(page, 'pages-list', 'page-row'), [
         'content/about', 'content/research/_index', 'content/posts/_index', 'content/courses/_index',
       ]);
@@ -330,6 +378,18 @@ async function main() {
         '#/edit?path=content%2Fresearch%2F_index.en.md');
       assert.equal(await page.isDisabled('[data-testid="pages-save-order"]'), true, 'nothing to save yet');
       assert.equal(await innerText(page, '[data-testid="nav-preview-en"]'), '英文站 About Research Blog Course Materials');
+      // the 4 top-level items are fixed: no 「放在哪个栏目下」, a 固定栏目 badge; each says its dropdown is empty for now
+      assert.equal(await page.$$eval('[data-testid="pages-list"] [data-testid="page-row"] [data-testid="page-place"]', (els) => els.length), 0);
+      assert.equal(await page.$$eval('[data-testid="pages-list"] [data-testid="page-fixed"]', (els) => els.length), 4);
+      assert.deepEqual(await page.$$eval('[data-testid="page-children-empty"]', (els) => els.map((e) => e.dataset.parent)), ['about', 'research', 'posts', 'courses']);
+      // pages not in the menu (news / publications / talks) can be attached; blog category pages cannot
+      assert.deepEqual(await rowKeys(page, 'pages-other-list', 'page-row'), [
+        'content/categories/essays/_index', 'content/categories/notes/_index', 'content/news/_index', 'content/publications/_index', 'content/talks/_index',
+      ]);
+      assert.equal(await page.$('[data-testid="page-row"][data-key="content/categories/notes/_index"] [data-testid="page-place"]'), null);
+      assert.ok(await page.$('[data-testid="page-row"][data-key="content/categories/notes/_index"] [data-testid="page-category-note"]'));
+      assert.deepEqual(await page.$$eval('[data-testid="page-row"][data-key="content/news/_index"] [data-testid="page-place"] option', (els) => els.map((e) => `${e.value}:${e.textContent}`)),
+        ['none:不在菜单', 'about:About ▾（关于）', 'research:Research ▾（研究）', 'posts:Blog ▾（博客）', 'courses:Course Materials ▾（课程）', 'top:顶层（独立一项）']);
       // the page draft saved earlier shows up here
       assert.deepEqual(await page.$$eval('[data-testid="draft-row"]', (els) => els.map((e) => e.dataset.key)), ['file:content/about.md']);
       await page.screenshot({ path: path.join(SHOTS, 'pages-desktop.png'), fullPage: true });
@@ -358,7 +418,14 @@ async function main() {
       await page.click('[data-testid="nav-posts"]');
       await page.waitForSelector('[data-testid="confirm-cancel"]');
       await page.click('[data-testid="confirm-cancel"]');
-      assert.equal(await page.evaluate(() => location.hash), '#/pages');
+      assert.equal(await page.evaluate(() => location.hash), PAGES);
+      // switching to another tab of 设置 asks too
+      await page.click('[data-testid="settings-tab-home"]');
+      await page.waitForSelector('[data-testid="confirm-cancel"]');
+      await page.click('[data-testid="confirm-cancel"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      assert.equal(await page.getAttribute('[data-testid="settings-tab-pages"]', 'aria-selected'), 'true');
+      assert.equal(await page.evaluate(() => location.hash), PAGES);
 
       await page.click('[data-testid="pages-save-order"]');
       await page.waitForFunction((n) => document.querySelector('[data-testid="pages-save-order"]')?.disabled && !document.querySelector('[data-testid="overlay"]'), before);
@@ -381,10 +448,12 @@ async function main() {
       assert.equal(about, eol(aboutOrig.replace('weight: 10    #', 'weight: 20    #')), 'only the weight changed in about.md');
       assert.equal(mock.readFile('content/about.en.md'), eol(aboutEnOrig.replace('weight: 10', 'weight: 20')));
       assert.equal(bodyOf(about), eol(bodyOf(aboutOrig)), 'body untouched');
-      assert.match(mock.readFile('content/research/_index.md'), /menu:\n  main:\n    weight: 10\n/);
-      assert.match(mock.readFile('content/research/_index.en.md'), /menu:\n  main:\n    weight: 10\n/);
+      // the menu identifier (what the dropdown children hang on) is kept
+      assert.match(mock.readFile('content/research/_index.md'), /menu:\n  main:\n    identifier: research\n    weight: 10\n/);
+      assert.match(mock.readFile('content/research/_index.en.md'), /menu:\n  main:\n    identifier: research\n    weight: 10\n/);
+      assert.ok(about.includes('    identifier: about   # 菜单编号'), about);
       const courses = mock.readFile('content/courses/_index.md');
-      assert.match(courses, /menu:\n  main:\n    weight: 5\n/);
+      assert.match(courses, /menu:\n  main:\n    identifier: courses\n    weight: 5\n/);
       assert.ok(courses.includes('hidemeta: true  # 列表页隐藏日期等信息'));
       assert.match(mock.readFile('content/courses/_index.en.md'), /weight: 5\n/);
       assert.equal(mock.readFile('content/posts/_index.md'), postsIndexOrig, 'unchanged page not rewritten');
@@ -425,7 +494,15 @@ async function main() {
       assert.deepEqual(await page.$$eval('.modal [data-testid^="new-section-name-"]', (els) => els.map((e) => [e.dataset.testid, e.placeholder])),
         [['new-section-name-en', 'e.g. Projects'], ['new-section-name-zh', '例如：项目']]);
       assert.match(await page.textContent('.modal'), /英文名称.*中文名称（可选）/);
+      // 「放在哪个栏目下」 defaults to 不在菜单 (no order field); 顶层 → order = after the last top-level item
+      assert.equal(await page.inputValue('[data-testid="new-section-place"]'), 'none');
+      assert.equal(await page.isVisible('[data-testid="new-section-weight"]'), false);
+      await page.selectOption('[data-testid="new-section-place"]', 'top');
       assert.equal(await page.inputValue('[data-testid="new-section-weight"]'), '40', 'default = max + 10');
+      await page.selectOption('[data-testid="new-section-place"]', 'research');
+      assert.equal(await page.inputValue('[data-testid="new-section-weight"]'), '10', 'first child of Research');
+      assert.match(await page.textContent('.modal'), /Research ▾ 下拉菜单里数字越小越靠上/);
+      await page.selectOption('[data-testid="new-section-place"]', 'top');
       // validation: empty
       await page.click('[data-testid="new-section-ok"]');
       await page.waitForSelector('.modal .error:not([hidden])');
@@ -457,7 +534,7 @@ async function main() {
     });
 
     await step('pages: section without a Chinese name → only shared _index.md', async () => {
-      await goto(page, '#/pages', 'pages');
+      await goto(page, PAGES, 'settings');
       assert.deepEqual(await rowKeys(page, 'pages-list', 'page-row'), [
         'content/courses/_index', 'content/research/_index', 'content/about', 'content/posts/_index', 'content/projects/_index',
       ]);
@@ -467,13 +544,14 @@ async function main() {
       await page.fill('[data-testid="new-section-name-zh"]', '');
       await page.fill('[data-testid="new-section-name-en"]', 'Teaching');
       assert.equal(await page.inputValue('[data-testid="new-section-slug"]'), 'teaching', 'suggested from the English (default-language) name');
+      await page.selectOption('[data-testid="new-section-place"]', 'top');
       assert.equal(await page.inputValue('[data-testid="new-section-weight"]'), '40');
       await page.click('[data-testid="new-section-ok"]');
       await page.waitForFunction(() => location.hash === '#/edit?path=content%2Fteaching%2F_index.md');
       assert.equal(mock.readFile('content/teaching/_index.md'), '---\ntitle: "Teaching"\nmenu:\n  main:\n    weight: 40\n---\n\nWrite the section introduction here…\n');
       assert.equal(mock.readFile('content/teaching/_index.zh.md'), undefined);
       assert.equal(mock.readFile('content/teaching/_index.en.md'), undefined);
-      await goto(page, '#/pages', 'pages');
+      await goto(page, PAGES, 'settings');
       const t = await rowText(page, 'content/teaching/_index', 'page-row');
       assert.ok(t.includes('中英共用') && t.includes('中文 Teaching'), t);
     });
@@ -498,7 +576,7 @@ async function main() {
       await page.emulateMedia({ colorScheme: 'dark' });
       await goto(page, '#/posts', 'posts');
       await page.screenshot({ path: path.join(SHOTS, 'posts-dark-desktop.png'), fullPage: true });
-      await goto(page, '#/pages', 'pages');
+      await goto(page, PAGES, 'settings');
       await page.screenshot({ path: path.join(SHOTS, 'pages-dark-desktop.png'), fullPage: true });
       await page.emulateMedia({ colorScheme: 'light' });
     });
@@ -521,6 +599,134 @@ async function main() {
       // deleted posts are gone from the built site
       assert.ok(!fs.existsSync(path.join(site2, 'posts', 'shared-only', 'index.html')));
       assert.ok(!fs.existsSync(path.join(site2, 'zh', 'posts', 'shared-only', 'index.html')));
+    });
+
+    await step('pages tree: attach 论文 / 报告与海报 under Research, reorder inside the dropdown, move / detach, new section with a parent (exact commits)', async () => {
+      await remount(page, PAGES, 'settings');
+      const orig = {};
+      for (const f of ['content/publications/_index.md', 'content/publications/_index.zh.md', 'content/talks/_index.md', 'content/talks/_index.zh.md', 'content/teaching/_index.md']) orig[f] = mock.readFile(f);
+      const eol = (t) => t.replace(/\n*$/, '\n');
+      const withMenu = (text, parent, w) => text.replace(/^(---\n[\s\S]*?)\n---\n/, `$1\nmenu:\n  main:\n    parent: ${parent}\n    weight: ${w}\n---\n`);
+      const tree = () => page.$$eval('[data-testid="pages-list"] > [data-testid="page-row"]', (els) => els.map((e) => `${e.dataset.level}${e.dataset.parent ? '@' + e.dataset.parent : ''}:${e.dataset.key.replace(/^content\//, '')}:${e.querySelector('[data-testid="page-weight"]')?.value ?? ''}`));
+      const row = (key) => `[data-testid="page-row"][data-key="${key}"]`;
+      const saved = async () => {
+        await page.waitForFunction(() => /没有修改/.test(document.querySelector('[data-testid="pages-savebar"]')?.textContent || '') && !document.querySelector('[data-testid="overlay"]'));
+      };
+
+      // 1. attach both under Research (order defaults to the end of that dropdown: 10, 20)
+      let before = mock.commits.length;
+      await page.selectOption(`${row('content/publications/_index')} [data-testid="page-place"]`, 'research');
+      await page.selectOption(`${row('content/talks/_index')} [data-testid="page-place"]`, 'research');
+      assert.deepEqual(await tree(), [
+        'top:courses/_index:5', 'top:research/_index:10', 'child@research:publications/_index:10', 'child@research:talks/_index:20',
+        'top:about:25', 'top:posts/_index:30', 'top:projects/_index:35', 'top:teaching/_index:40',
+      ]);
+      assert.equal(await innerText(page, '[data-testid="nav-preview-en"]'), '英文站 Course Materials Research ▾ Publications · Talks & Posters About Blog My Projects Teaching');
+      assert.equal(await innerText(page, '[data-testid="nav-preview-zh"]'), '中文站 课程资料 科研 ▾ 论文 · 报告与海报 关于 博客 项目 Teaching');
+      assert.match(await page.textContent('[data-testid="pages-savebar"]'), /已修改 2 个页面/);
+      await page.screenshot({ path: path.join(SHOTS, 'pages-tree-dirty-desktop.png'), fullPage: true });
+      await page.click('[data-testid="pages-save-order"]');
+      await saved();
+      assert.equal(mock.commits.length, before + 1, 'one commit');
+      let c = mock.commits.at(-1);
+      assert.equal(c.message, 'admin: 调整菜单');
+      assert.deepEqual(c.changes.map((x) => `${x.status}:${x.path}`).sort(), [
+        'modified:content/publications/_index.md', 'modified:content/publications/_index.zh.md',
+        'modified:content/talks/_index.md', 'modified:content/talks/_index.zh.md',
+      ]);
+      assert.equal(mock.readFile('content/publications/_index.md'), eol(withMenu(orig['content/publications/_index.md'], 'research', 10)));
+      assert.equal(mock.readFile('content/publications/_index.md'), '---\ntitle: "Publications"\ndescription: "Papers, preprints and other writing."\nmenu:\n  main:\n    parent: research\n    weight: 10\n---\n');
+      assert.equal(mock.readFile('content/publications/_index.zh.md'), eol(withMenu(orig['content/publications/_index.zh.md'], 'research', 10)));
+      assert.equal(mock.readFile('content/talks/_index.md'), eol(withMenu(orig['content/talks/_index.md'], 'research', 20)));
+      assert.equal(mock.readFile('content/talks/_index.zh.md'), eol(withMenu(orig['content/talks/_index.zh.md'], 'research', 20)));
+      await page.waitForSelector(`${row('content/publications/_index')}[data-level="child"]`);
+      assert.equal(await page.$('[data-testid="page-children-empty"][data-parent="research"]'), null);
+
+      // 2. reorder inside the dropdown: 报告与海报 ↑ swaps the two numbers; only weight lines change
+      before = mock.commits.length;
+      await page.click(`${row('content/talks/_index')} [data-testid="page-up"]`);
+      assert.deepEqual((await tree()).slice(1, 4), ['top:research/_index:10', 'child@research:talks/_index:10', 'child@research:publications/_index:20']);
+      assert.equal(await page.isDisabled(`${row('content/talks/_index')} [data-testid="page-up"]`), true, 'first in its dropdown');
+      await page.click('[data-testid="pages-save-order"]');
+      await saved();
+      assert.equal(mock.commits.length, before + 1);
+      c = mock.commits.at(-1);
+      assert.equal(c.message, 'admin: 调整菜单顺序');
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), ['content/publications/_index.md', 'content/publications/_index.zh.md', 'content/talks/_index.md', 'content/talks/_index.zh.md']);
+      assert.equal(mock.readFile('content/talks/_index.zh.md'), eol(withMenu(orig['content/talks/_index.zh.md'], 'research', 10)));
+      assert.equal(mock.readFile('content/publications/_index.md'), eol(withMenu(orig['content/publications/_index.md'], 'research', 20)));
+
+      // 3. Teaching (top level) → About ▾ ; 论文 → 不在菜单 (back to the original files, byte for byte)
+      before = mock.commits.length;
+      await page.selectOption(`${row('content/teaching/_index')} [data-testid="page-place"]`, 'about');
+      await page.selectOption(`${row('content/publications/_index')} [data-testid="page-place"]`, 'none');
+      assert.deepEqual(await rowKeys(page, 'pages-other-list', 'page-row'), [
+        'content/categories/essays/_index', 'content/categories/notes/_index', 'content/news/_index', 'content/publications/_index',
+      ]);
+      assert.equal(await page.inputValue(`${row('content/teaching/_index')} [data-testid="page-weight"]`), '10', 'first child of About');
+      await page.click('[data-testid="pages-save-order"]');
+      await saved();
+      assert.equal(mock.commits.length, before + 1);
+      c = mock.commits.at(-1);
+      assert.equal(c.message, 'admin: 调整菜单');
+      assert.deepEqual(c.changes.map((x) => `${x.status}:${x.path}`).sort(), [
+        'modified:content/publications/_index.md', 'modified:content/publications/_index.zh.md', 'modified:content/teaching/_index.md',
+      ]);
+      assert.equal(mock.readFile('content/publications/_index.md'), orig['content/publications/_index.md']);
+      assert.equal(mock.readFile('content/publications/_index.zh.md'), orig['content/publications/_index.zh.md']);
+      assert.equal(mock.readFile('content/teaching/_index.md'), '---\ntitle: "Teaching"\nmenu:\n  main:\n    weight: 10\n    parent: about\n---\n\nWrite the section introduction here…\n');
+      assert.deepEqual(await tree(), [
+        'top:courses/_index:5', 'top:research/_index:10', 'child@research:talks/_index:10',
+        'top:about:25', 'child@about:teaching/_index:10', 'top:posts/_index:30', 'top:projects/_index:35',
+      ]);
+
+      // 4. 新建栏目 straight into a dropdown: parent + order written exactly like the contract
+      before = mock.commits.length;
+      await page.click('[data-testid="pages-new-section"]');
+      await page.fill('[data-testid="new-section-name-en"]', 'Lab Notes');
+      await page.selectOption('[data-testid="new-section-place"]', 'research');
+      assert.equal(await page.inputValue('[data-testid="new-section-weight"]'), '20', 'after 报告与海报 (10)');
+      await page.click('[data-testid="new-section-ok"]');
+      await page.waitForFunction(() => location.hash === '#/edit?path=content%2Flab-notes%2F_index.md');
+      assert.equal(mock.commits.length, before + 1);
+      assert.equal(mock.commits.at(-1).message, 'admin: 新建栏目《Lab Notes》（Research ▾ 下）');
+      assert.equal(mock.readFile('content/lab-notes/_index.md'), '---\ntitle: "Lab Notes"\nmenu:\n  main:\n    parent: research\n    weight: 20\n---\n\nWrite the section introduction here…\n');
+      await goto(page, PAGES, 'settings');
+      assert.deepEqual((await tree()).slice(1, 4), ['top:research/_index:10', 'child@research:talks/_index:10', 'child@research:lab-notes/_index:20']);
+
+      // 5. a page whose parent does not exist is shown with a warning and can be fixed with the select
+      mock.setFile('content/orphan/_index.md', '---\ntitle: "Orphan"\nmenu:\n  main:\n    parent: nowhere\n    weight: 5\n---\n');
+      await page.click('[data-testid="pages-refresh"]');
+      await page.waitForSelector(`${row('content/orphan/_index')} [data-testid="page-orphan"]`);
+      assert.equal(await page.inputValue(`${row('content/orphan/_index')} [data-testid="page-place"]`), 'nowhere');
+      mock.setFile('content/orphan/_index.md', null);
+      await page.click('[data-testid="pages-refresh"]');
+      await page.waitForSelector(row('content/orphan/_index'), { state: 'detached' });
+
+      // phone widths + dark mode
+      for (const [w, hgt] of [[390, 844], [360, 740]]) {
+        await page.setViewportSize({ width: w, height: hgt });
+        await page.waitForTimeout(150);
+        await noHorizontalScroll(page);
+        await page.screenshot({ path: path.join(SHOTS, `pages-tree-mobile-${w}.png`), fullPage: true });
+      }
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.screenshot({ path: path.join(SHOTS, 'pages-tree-mobile-360-dark.png'), fullPage: true });
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.screenshot({ path: path.join(SHOTS, 'pages-tree-dark-desktop.png'), fullPage: true });
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.screenshot({ path: path.join(SHOTS, 'pages-tree-desktop.png'), fullPage: true });
+
+      // the site still builds with the dropdown entries
+      const exp = path.join(OUT, 'export-tree');
+      fs.rmSync(exp, { recursive: true, force: true });
+      mock.exportTo(exp);
+      const site3 = path.join(OUT, 'site-tree');
+      await buildSite({ repoDir: exp, outDir: site3, baseURL: mock.url + '/' });
+      assert.ok(fs.existsSync(path.join(site3, 'lab-notes', 'index.html')));
+      assert.ok(fs.existsSync(path.join(site3, 'talks', 'index.html')));
+      fs.rmSync(exp, { recursive: true, force: true });
+      fs.rmSync(site3, { recursive: true, force: true });
     });
 
     await step('posts: a future-dated post shows 定时发表 (not 已发表); a new-post draft whose file exists says 可能已经发表过了', async () => {
@@ -559,6 +765,37 @@ async function main() {
           await d.deleteDraft('new:e2e-lists-fresh');
         });
         mock.setFile('content/posts/lecture-later.md', null);
+      }
+    });
+
+    await step('pages tree: menu order must be a non-zero integer; a TOML page is locked (no place / order controls, file never written)', async () => {
+      const row = (key) => `[data-testid="page-row"][data-key="${key}"]`;
+      const TOML = '+++\ntitle = "Toml Page"\n[menu.main]\nparent = "research"\nweight = 15\n+++\n\nToml.\n';
+      mock.setFile('content/tomlpage.md', TOML);
+      try {
+        await goto(page, PAGES, 'settings');
+        await page.click('[data-testid="pages-refresh"]');
+        await page.waitForSelector(`${row('content/tomlpage')} [data-testid="page-locked"]`);
+        assert.equal(await page.$(`${row('content/tomlpage')} [data-testid="page-place"]`), null, 'no place select');
+        assert.equal(await page.$(`${row('content/tomlpage')} [data-testid="page-weight"]`), null, 'no order input');
+        // Hugo weights are integers and 0 = "no weight" (sorted last on the site): refused, save disabled, reason shown
+        const w = `${row('content/talks/_index')} [data-testid="page-weight"]`;
+        for (const [v, re] of [['1.5', /整数/], ['0', /不能是 0/], ['', /请填一个数字/], ['10000000', /太大/]]) {
+          await page.fill(w, v);
+          assert.equal(await page.isDisabled('[data-testid="pages-save-order"]'), true, v);
+          assert.match(await page.textContent('[data-testid="pages-savebar"]'), re, v);
+          assert.equal(await page.getAttribute(w, 'aria-invalid'), 'true', v);
+        }
+        await page.fill(w, '30');
+        assert.equal(await page.getAttribute(w, 'aria-invalid'), 'false');
+        assert.equal(await page.isDisabled('[data-testid="pages-save-order"]'), false);
+        await page.click('[data-testid="pages-reset-order"]');
+        assert.match(await page.textContent('[data-testid="pages-savebar"]'), /没有修改/);
+        // nothing about the TOML file was committed by any of this
+        assert.equal(mock.readFile('content/tomlpage.md'), TOML);
+      } finally {
+        mock.setFile('content/tomlpage.md', null);
+        await page.click('[data-testid="pages-refresh"]').catch(() => {});
       }
     });
 

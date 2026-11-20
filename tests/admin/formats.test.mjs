@@ -333,9 +333,11 @@ describe('frontmatter: content/about.md 的注释', () => {
   test('about.md 带行内注释的行（如 layout / hidemeta）在各种修改后都保留', () => {
     assert.ok(commented.some((l) => /^layout:/.test(l)), 'about.md 应有 layout 行尾注释');
     assert.ok(commented.some((l) => /^hidemeta:/.test(l)), 'about.md 应有 hidemeta 行尾注释');
+    // 改菜单顺序时后台保留 main 下的其他键（identifier 等，pages.menuWithWeight / sitemenu.menuWithMain），这里也一样
+    const parsed = parseFrontMatter(doc.fmText);
     const variants = [
       { title: 'X' }, { draft: true }, { tags: ['t'] }, { summary: undefined },
-      { menu: { main: { weight: 3 } } }, { description: 'd' }, { linkTitle: '关于' },
+      { menu: { ...parsed.menu, main: { ...parsed.menu.main, weight: 3 } } }, { description: 'd' }, { linkTitle: '关于' },
     ];
     for (const u of variants) {
       const out = setFields(doc.fmText, u);

@@ -1,12 +1,15 @@
 /**
- * views/academic.js — 「学术」：论文 / 报告与海报 / 近况（#/academic?tab=publications|talks|news）。
+ * views/academic.js — 论文 / 报告与海报 / 近况的管理界面，一次显示其中一类（params.section）。
+ *   它不是单独的路由：「研究」（#/research?tab=publications|talks，views/research.js）和
+ *   「关于」（#/about?tab=news，views/about.js）把它放进自己的标签页。旧地址 #/academic?tab=… 由外壳跳转到那里。
  *
  * - 每条记录一个 YAML 文件：data/publications/<id>.yaml、data/talks/<id>.yaml、data/news/<日期>-<slug>.yaml
  *   （字段约定见 academic.js 和 docs/admin-architecture.md 第 15 节）。保存 / 删除 = 一个提交，带 baseSha 防覆盖。
  * - 论文：粘贴 BibTeX（ADS / arXiv 导出）自动填表；PDF 上传到 static/documents/papers/（和 YAML 同一个提交）。
  * - 报告与海报：幻灯片上传到 static/documents/talks/（或填网址）。
  * - 近况：页面上直接快速添加。
- * - 每个标签页：「在顶部菜单显示」开关（只改 content/<栏目>/_index*.md 的 menu）、设置卡片（params.toml，tomlpatch 精确修改）。
+ * - 每一类：「在菜单里显示（放在 Research ▾ / About ▾ 下）」开关（只改 content/<栏目>/_index*.md 的 menu.main：
+ *   打开 = parent + weight（sitemenu.SECTION_MENU_DEFAULTS），关闭 = 去掉）、设置卡片（params.toml，tomlpatch 精确修改）。
  *
  * 安全：界面全部用 h() / textContent 生成；上传只接受 PDF（并经过 uploads.js 的检查）。
  *
@@ -21,22 +24,19 @@ import {
   SECTIONS, SECTION_KEYS, PUB_STATUSES, PUB_STATUS_LABELS, PUB_KINDS, PUB_KIND_LABELS, TALK_KINDS, TALK_KIND_LABELS,
   GROUP_BY, GROUP_BY_LABELS, parseBibtex, bibToPublication, publicationIdFor, talkIdFor, newsIdFor, isValidId,
   entryFileText, parseYamlEntry, formValues, idFromPath, groupPublications, splitTalks, sortNews, isMyName, todayISO,
-  isIsoDate, normalizeArxiv, normalizeDoi, normalizeAdsBibcode, normalizeSocialUrl, menuWithoutMain, nextMenuWeight,
+  isIsoDate, normalizeArxiv, normalizeDoi, normalizeAdsBibcode, normalizeSocialUrl,
   academicIndexDocument, identifierError,
 } from '../academic.js';
+import { mainMenuEntry, patchMainMenu, SECTION_MENU_DEFAULTS, PARENT_LABELS } from '../sitemenu.js';
 import { parseToml, getIn, setValue } from '../tomlpatch.js';
-import { splitDocument, parseFrontMatter, setFields } from '../frontmatter.js';
+import { splitDocument, parseFrontMatter } from '../frontmatter.js';
 import { langSitePath, langSiteUrl, sitePathFor, viewerUrlFor, isPdfPath } from '../content.js';
 import { safeFileName, extOf } from '../images.js';
 import {
   checkUploads, needsReview, gitignoreMatcher, uploadReviewSections, refusedContent, mapLimit,
 } from '../uploads.js';
-import { joinDocument } from '../courses.js';
-import { mainMenuOf, patchMenuWeight } from './pages.js';
-import { readFrontMatters } from './posts.js';
 import { PATHS } from '../config.js';
 
-const TAB_LABELS = { publications: '论文', talks: '报告与海报', news: '近况' };
 const TAB_ICONS = { publications: 'post', talks: 'clock', news: 'send' };
 const ITEM_NAME = { publications: '论文', talks: '报告', news: '近况' };
 
@@ -49,11 +49,10 @@ const uid = (p) => `ac-${p}-${++seq}`;
  * @param {object} ctx
  */
 export default async function mount(container, params, ctx) {
-  ctx.setTitle('学术');
   const repo = ctx.repo;
   const langs = ctx.langs && ctx.langs.length ? ctx.langs : ['en', 'zh'];
   const st = {
-    tab: SECTION_KEYS.includes(params.tab) ? params.tab : 'publications',
+    tab: SECTION_KEYS.includes(params.section) ? params.section : SECTION_KEYS.includes(params.tab) ? params.tab : 'publications',
     disposed: false,
     entries: { publications: null, talks: null, news: null },
     menu: { publications: null, talks: null, news: null },
@@ -63,27 +62,10 @@ export default async function mount(container, params, ctx) {
     settingsOpen: null,
   };
 
-  const root = h('div', { class: 'view ac-view stack' });
+  const root = h('div', { class: 'view ac-view stack', dataset: { testid: `academic-${st.tab}` } });
   render(container, root);
-
-  const tabBtns = {};
-  const tabBar = h('div', { class: 'tabs ac-tabs', role: 'tablist', 'aria-label': '学术内容' },
-    SECTION_KEYS.map((k) => {
-      const b = h('button', {
-        type: 'button', class: 'tab', role: 'tab', id: `ac-tab-${k}`, 'aria-controls': 'ac-panel',
-        dataset: { testid: `academic-tab-${k}` },
-      }, svgIcon(TAB_ICONS[k]), TAB_LABELS[k], h('span', { class: 'badge badge-gray ac-tab-count', dataset: { testid: `academic-count-${k}` } }));
-      b.addEventListener('click', () => selectTab(k));
-      tabBtns[k] = b;
-      return b;
-    }));
-  const panel = h('div', { class: 'ac-panel stack', id: 'ac-panel', role: 'tabpanel' });
-  render(root,
-    h('div', { class: 'page-header' },
-      h('div', {},
-        h('h1', {}, '学术'),
-        h('p', { class: 'page-desc' }, '论文、报告与海报、近况。每条记录是一个小文件，保存后约 1–2 分钟在网站上生效。'))),
-    tabBar, panel);
+  const panel = h('div', { class: 'ac-panel stack' });
+  render(root, panel);
   render(panel, loadingState('正在读取…'));
 
   // 隐藏的文件选择框（上传 PDF）
@@ -146,9 +128,17 @@ export default async function mount(container, params, ctx) {
         if (doc.kind !== 'yaml' && doc.kind !== 'none') error = '设置区不是 YAML 格式';
         fm = parseFrontMatter(doc.fmText);
       } catch (err) { error = errorMessage(err); }
-      out.push({ path: p, sha: e.sha, text, fm, error, ...(fm ? mainMenuOf(fm) : { inMenu: false, weight: null }) });
+      out.push({ path: p, sha: e.sha, text, fm, error, ...(fm ? mainMenuEntry(fm) : { inMenu: false, weight: null, parent: null, identifier: null }) });
     }
-    return { variants: out, inMenu: out.some((v) => v.inMenu), exists: out.length > 0 };
+    const parent = SECTION_MENU_DEFAULTS[kind].parent;
+    const attached = out.filter((v) => v.inMenu && v.parent === parent);
+    return {
+      variants: out,
+      inMenu: attached.length > 0,
+      // 以前的写法：在顶部菜单里单独一项（或挂在别的上级下面）
+      legacy: out.filter((v) => v.inMenu && v.parent !== parent),
+      exists: out.length > 0,
+    };
   }
 
   async function loadAll() {
@@ -175,27 +165,8 @@ export default async function mount(container, params, ctx) {
   // ---------------------------------------------------------------------------
   // 渲染
 
-  function selectTab(k) {
-    if (st.tab === k) return;
-    st.tab = k;
-    try { history.replaceState(history.state, '', `#/academic?tab=${k}`); } catch { /* ignore */ }
-    renderAll();
-    tabBtns[k].focus();
-  }
-
   function renderAll() {
     if (st.disposed) return;
-    for (const k of SECTION_KEYS) {
-      const on = k === st.tab;
-      tabBtns[k].classList.toggle('active', on);
-      tabBtns[k].setAttribute('aria-selected', on ? 'true' : 'false');
-      tabBtns[k].tabIndex = on ? 0 : -1;
-      const list = st.entries[k];
-      const cnt = tabBtns[k].querySelector('.ac-tab-count');
-      cnt.textContent = list ? String(list.length) : '';
-      cnt.hidden = !list || !list.length;
-    }
-    panel.setAttribute('aria-labelledby', `ac-tab-${st.tab}`);
     if (st.loadError) {
       render(panel, h('div', { class: 'card' }, errorState('读取失败', {
         detail: errorMessage(st.loadError),
@@ -213,11 +184,13 @@ export default async function mount(container, params, ctx) {
     return (st.entries[kind] || []).filter((e) => !e.error).length;
   }
 
-  // ---- 顶部菜单开关 ----
+  // ---- 菜单开关：放在 Research ▾ / About ▾ 下 ----
   function menuCard(kind) {
-    const m = st.menu[kind] || { variants: [], inMenu: false, exists: false };
+    const m = st.menu[kind] || { variants: [], inMenu: false, legacy: [], exists: false };
     const def = SECTIONS[kind];
-    const sw = h('input', { type: 'checkbox', checked: m.inMenu, 'aria-label': `在网站顶部菜单显示「${def.titles.zh}」`, dataset: { testid: `academic-menu-${kind}` } });
+    const spec = SECTION_MENU_DEFAULTS[kind];
+    const parentName = PARENT_LABELS[spec.parent];
+    const sw = h('input', { type: 'checkbox', checked: m.inMenu, 'aria-label': `在网站菜单里显示「${def.titles.zh}」（放在 ${parentName} 下拉菜单里）`, dataset: { testid: `academic-menu-${kind}` } });
     sw.addEventListener('change', () => {
       const want = sw.checked;
       sw.checked = !want; // 发布成功后才真正切换
@@ -230,7 +203,17 @@ export default async function mount(container, params, ctx) {
     let note = null;
     if (m.inMenu && n === 0) {
       note = h('div', { class: 'banner banner-warning ac-banner', dataset: { testid: `academic-menu-empty-${kind}` } }, svgIcon('warning'),
-        h('span', {}, `顶部菜单里已经有「${def.titles.zh} / ${def.titles.en}」，但还没有任何${ITEM_NAME[kind]}：访客点进去只会看到一句「暂无内容」。添加第一条之后就好了。`));
+        h('span', {}, `${parentName} ▾ 下拉菜单里已经有「${def.titles.en} / ${def.titles.zh}」，但还没有任何${ITEM_NAME[kind]}：访客点进去只会看到一句「暂无内容」。添加第一条之后就好了。`));
+    } else if (!m.inMenu && m.legacy.length) {
+      note = h('div', { class: 'banner banner-info ac-banner', dataset: { testid: `academic-menu-legacy-${kind}` } }, svgIcon('info'),
+        h('span', {}, (() => {
+          // 挂在别的栏目下（例如在「设置 › 菜单与页面」里放到了 About ▾）≠ 顶部菜单里单独的一项
+          const others = [...new Set(m.legacy.map((v) => v.parent).filter(Boolean))];
+          const where = others.length
+            ? `放在 ${others.map((p) => `${PARENT_LABELS[p] || p} ▾`).join('、')} 下拉菜单里`
+            : '是网站顶部菜单里单独的一项（以前的写法）';
+          return `现在「${def.titles.zh}」${where}。打开开关会把它移到 ${parentName} ▾ 下拉菜单里；关上开关（再点一次）就从菜单里去掉。`;
+        })()));
     } else if (!m.inMenu && n === 0) {
       note = h('p', { class: 'muted small ac-menu-hint', dataset: { testid: `academic-menu-hint-${kind}` } },
         `还没有${ITEM_NAME[kind]}，建议先添加内容，再打开菜单开关。`);
@@ -245,56 +228,39 @@ export default async function mount(container, params, ctx) {
         h('label', { class: 'ac-menu-label' },
           h('span', { class: 'switch' }, sw, h('span', {})),
           h('span', { class: 'ac-menu-text' },
-            h('strong', {}, '在顶部菜单显示'),
-            h('span', { class: 'muted small' }, m.inMenu ? `已显示（${def.titles.en} / ${def.titles.zh}）` : '目前不显示（页面仍然可以通过网址打开）'))),
+            h('strong', {}, `在菜单里显示（放在 ${parentName} ▾ 下）`),
+            h('span', { class: 'muted small', dataset: { testid: `academic-menu-state-${kind}` } }, m.inMenu
+              ? `已显示：网站菜单 ${parentName} ▾ → ${def.titles.en} / ${def.titles.zh}，这一栏的页面顶部也有它的标签`
+              : '目前不显示（页面仍然可以通过网址打开）'))),
         links),
       note);
-  }
-
-  async function menuWeight(kind) {
-    const own = new Set(indexPaths(kind));
-    const paths = repo.list('content/').map((e) => e.path)
-      .filter((p) => /^content\/[^/]+\.md$/.test(p) || /^content\/[^/]+\/_index(\.[a-z-]+)?\.md$/.test(p))
-      .filter((p) => !own.has(p));
-    const fms = await readFrontMatters(repo, paths);
-    const weights = [];
-    for (const [, r] of fms) {
-      const m = r && r.fm ? mainMenuOf(r.fm) : null;
-      if (m && m.inMenu && m.weight != null) weights.push(m.weight);
-    }
-    return nextMenuWeight(weights);
   }
 
   async function toggleMenu(kind, on) {
     if (ctx.isPublishing && ctx.isPublishing()) { toast('正在发布，请稍候', { type: 'info' }); return; }
     const def = SECTIONS[kind];
+    const spec = SECTION_MENU_DEFAULTS[kind];
+    const parentName = PARENT_LABELS[spec.parent];
     const m = await loadMenu(kind);
     const changes = [];
     try {
       if (on) {
-        const weight = await menuWeight(kind);
         if (!m.exists) {
-          changes.push({ path: `${def.pageDir}/_index.md`, content: academicIndexDocument(kind, ctx.defaultLang, weight), baseSha: null });
+          changes.push({ path: `${def.pageDir}/_index.md`, content: academicIndexDocument(kind, ctx.defaultLang, spec.weight, spec.parent), baseSha: null });
           for (const l of langs) {
             if (l === ctx.defaultLang) continue;
-            changes.push({ path: `${def.pageDir}/_index.${l}.md`, content: academicIndexDocument(kind, l, weight), baseSha: null });
+            changes.push({ path: `${def.pageDir}/_index.${l}.md`, content: academicIndexDocument(kind, l, spec.weight, spec.parent), baseSha: null });
           }
         } else {
           for (const v of m.variants) {
-            if (v.inMenu) continue;
-            changes.push({ path: v.path, content: patchMenuWeight(v.text, weight, v.path), baseSha: v.sha });
+            if (v.inMenu && v.parent === spec.parent) continue; // 已经挂在这个上级下面：顺序可能在「菜单与页面」里调过，不动
+            changes.push({ path: v.path, content: patchMainMenu(v.text, spec, v.path), baseSha: v.sha });
           }
         }
       } else {
         for (const v of m.variants) {
           if (!v.inMenu) continue;
-          const doc = splitDocument(v.text);
-          const fmText = setFields(doc.fmText, { menu: menuWithoutMain(v.fm.menu) });
-          const out = joinDocument(fmText, doc.body);
-          if (splitDocument(out).body !== doc.body || mainMenuOf(parseFrontMatter(splitDocument(out).fmText)).inMenu) {
-            throw new Error(`修改 ${v.path} 时校验未通过，已取消`);
-          }
-          changes.push({ path: v.path, content: out, baseSha: v.sha });
+          changes.push({ path: v.path, content: patchMainMenu(v.text, null, v.path), baseSha: v.sha });
         }
       }
     } catch (err) {
@@ -305,7 +271,7 @@ export default async function mount(container, params, ctx) {
     let res;
     try {
       res = await ctx.publish({
-        message: on ? `admin: 在顶部菜单显示「${def.titles.zh}」` : `admin: 从顶部菜单移除「${def.titles.zh}」`,
+        message: on ? `admin: 在菜单里显示「${def.titles.zh}」（${parentName} ▾ 下）` : `admin: 从菜单移除「${def.titles.zh}」`,
         changes,
         summary: changes.map((c) => c.path),
         viewUrl: langSiteUrl(ctx.siteUrl, `${kind}/`, ctx.defaultLang, ctx.defaultLang),
@@ -316,7 +282,7 @@ export default async function mount(container, params, ctx) {
     st.menu[kind] = await loadMenu(kind);
     renderAll();
     if (res && !res.conflict && on && entryCount(kind) === 0) {
-      toast(`已加到顶部菜单。注意：还没有任何${ITEM_NAME[kind]}，页面上暂时只有一句「暂无内容」`, { type: 'warning', timeout: 8000 });
+      toast(`已放进 ${parentName} ▾ 菜单。注意：还没有任何${ITEM_NAME[kind]}，页面上暂时只有一句「暂无内容」`, { type: 'warning', timeout: 8000 });
     }
   }
 

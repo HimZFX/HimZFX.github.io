@@ -90,6 +90,14 @@
 .lists-delete .checkbox { align-items: flex-start; line-height: 1.6; }
 .lists-delete .checkbox span { word-break: break-all; }
 
+/* 分类筛选 */
+.lists-catbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lists-catbar-label { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.lists-catbar-label .icon { width: 14px; height: 14px; }
+.lists-cats { min-width: 0; flex-wrap: wrap; overflow: visible; row-gap: 6px; }
+.lists-catbar { align-items: flex-start; }
+.lists-catbar-label { height: 32px; }
+
 /* ---------- 页面：分组标题 ---------- */
 .lists-section-head { padding: 0 4px; }
 .lists-section-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
@@ -119,6 +127,17 @@ a.lists-url:hover { color: var(--primary-text); text-decoration: none; }
 .lists-weight { width: 76px; height: 32px; text-align: center; }
 .lists-weight.is-changed { border-color: var(--warning); background: var(--warning-soft); }
 .lists-weight-lg { max-width: 160px; }
+
+/* 菜单树：栏目下面的子页面缩进 */
+.lists-tree .lists-page-row.is-child { padding-left: 44px; background: var(--bg); }
+.lists-tree-branch { margin-right: 8px; color: var(--muted); font-weight: 400; }
+.lists-tree-empty { padding: 8px 20px 10px 44px; background: var(--bg); list-style: none; }
+.lists-tree .lists-page-row.is-orphan { border-left: 3px solid var(--warning); }
+.lists-place-wrap { display: inline-flex; align-items: center; gap: 0; min-width: 0; }
+.lists-place { width: auto; max-width: 220px; height: 32px; padding-top: 0; padding-bottom: 0; }
+.lists-place.is-changed { border-color: var(--warning); background-color: var(--warning-soft); }
+.lists-nav-kids { font-size: 12.5px; }
+.lists-nav-note { margin: 10px 0 0; }
 
 /* 保存条：有未保存修改时贴在底部 */
 .lists-savebar {
@@ -183,6 +202,10 @@ a.lists-url:hover { color: var(--primary-text); text-decoration: none; }
   .lists-row { padding-top: 14px; padding-bottom: 12px; }
   .lists-row .list-item-actions { width: 100%; justify-content: flex-end; margin-left: 0; }
   .lists-page-actions { justify-content: space-between; }
+  .lists-tree .lists-page-row.is-child { padding-left: 26px; }
+  .lists-tree-empty { padding-left: 26px; }
+  .lists-place-wrap { flex: 1 1 100%; }
+  .lists-place { flex: 1 1 auto; max-width: none; }
   .lists-drafts { border-left-width: 0; border-top: 3px solid var(--info); }
   .lists-drafts .card-header .muted { display: none; }
   .lists-nav-preview { padding: 12px 14px; }

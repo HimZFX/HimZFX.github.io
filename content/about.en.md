@@ -3,6 +3,7 @@ title: "About Me"
 linkTitle: "About"
 menu:
   main:
+    identifier: about
     weight: 10
 layout: "about"
 summary: "about"

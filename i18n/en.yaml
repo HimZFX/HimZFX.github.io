@@ -132,3 +132,33 @@
 # ---------- Background animation (assets/js/background/core.js) ----------
 - id: bg_toggle
   translation: "Background animation"
+
+# ---------- Menu groups (layouts/partials/header.html, layouts/partials/nav/, layouts/partials/subnav.html) ----------
+# subnav_self_<identifier>: how a top menu item calls ITSELF inside its own dropdown / sub-page tabs
+# (identifier = menu.main.identifier in the page's front matter). Missing → the page's linkTitle / title.
+- id: subnav_self_about
+  translation: "About me"
+- id: subnav_self_research
+  translation: "Overview"
+- id: subnav_self_posts
+  translation: "All posts"
+- id: subnav_self_courses
+  translation: "All courses"
+# the ▾ button next to a top menu item that has sub-pages (screen readers; .Name = the menu item)
+- id: nav_submenu_show
+  translation: "Show {{ .Name }} submenu"
+# the row of sub-page tabs at the top of a section page (screen readers)
+- id: subnav_label
+  translation: "{{ .Name }} pages"
+
+# ---------- Blog categories (layouts/categories/, layouts/partials/post_meta.html) ----------
+- id: categories_title
+  translation: "Categories"
+- id: category_label
+  translation: "Category"
+- id: category_post_count
+  translation:
+    one: "{{ .Count }} post"
+    other: "{{ .Count }} posts"
+- id: category_empty
+  translation: "No posts in this category yet."

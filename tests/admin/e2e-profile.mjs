@@ -54,7 +54,8 @@ async function step(name, fn) {
 // helpers
 
 const tid = (id) => `[data-testid="${id}"]`;
-const waitView = (page, route) => page.waitForSelector(`body[data-view-ready="${route}"]`, { state: 'attached', timeout: 20000 });
+// 首页设置 is the 首页 tab of 设置 (#/settings?tab=home); the old address #/profile redirects there
+const waitView = (page, route) => page.waitForSelector(route === 'profile' ? 'body[data-tab-ready="settings:home"]' : `body[data-view-ready="${route}"]`, { state: 'attached', timeout: 20000 });
 
 async function gotoProfile(page) {
   await page.evaluate(() => { location.hash = '#/files'; });
@@ -490,7 +491,14 @@ async function main() {
       await page.waitForSelector(tid('confirm-cancel'));
       await page.click(tid('confirm-cancel'));
       await page.waitForTimeout(200);
-      assert.ok(await page.evaluate(() => location.hash.startsWith('#/profile')), 'stayed on profile');
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=home', 'stayed on 设置 › 首页');
+      // switching to another tab of 设置 asks as well
+      await page.click(tid('settings-tab-background'));
+      await page.waitForSelector(tid('confirm-cancel'));
+      await page.click(tid('confirm-cancel'));
+      await page.waitForTimeout(200);
+      assert.equal(await page.getAttribute(tid('settings-tab-home'), 'aria-selected'), 'true');
+      assert.equal(await page.inputValue(tid('profile-title')), 'Unsaved name');
       assert.equal(await page.inputValue(tid('profile-title')), 'Unsaved name');
       await page.click(tid('profile-reset'));
       await page.click(tid('confirm-ok'));

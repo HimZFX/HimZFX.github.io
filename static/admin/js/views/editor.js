@@ -17,6 +17,9 @@
  * 保存时把 blob 地址换成网站路径 /images/posts/<文件名>/<图片名>，图片和文章在同一次提交里上传。
  * 本机自动保存时 blob 地址换成 admin-pending://<图片名> 占位，图片 Blob 一起存进 IndexedDB。
  *
+ * 博客分类（sitemenu.js）：文章的「分类」下拉框（不分类 / 科研笔记 / 随笔）写 front matter 的 categories: [notes] / [essays]
+ * （不分类 = 去掉这个键）。分类属于整篇文章：保存一个语言版本时，其他已有的语言版本分类不同的话，在同一个提交里一起改。
+ *
  * 安全（§2.3）：界面全部用 h() / textContent 生成；正文 HTML 只由 Vditor 自己渲染（例外 c），
  * 预览只写进无脚本的沙箱 iframe（preview.js，例外 b）。
  *
@@ -38,6 +41,10 @@ import { uploadBlockReason, BLOCKED_UPLOAD_EXPLAIN } from '../uploads.js';
 import * as drafts from '../drafts.js';
 import { parseToml } from '../tomlpatch.js';
 import { renderPreview, ensureVditor, loadIconScript, VDITOR_MARKDOWN } from '../preview.js';
+import {
+  CATEGORY_KEYS, CATEGORY_LABELS, categoryChoice, categoriesOf, sameCategories, patchCategories, tidyCategoriesLine, menuWeightError,
+} from '../sitemenu.js';
+import { pageHome, newPageHome } from '../navmap.js';
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -588,7 +595,7 @@ class Editor {
         autoRestore = rec;
         await this.openPath(draftPath);
       } else if (draftPath && !(f.newGroup && f.kind === 'page')) {
-        throw userError('这份草稿对应的文件已经不存在了', `「${draftPath}」可能已经被删除或改名。可以在「文章」列表里丢弃这份本机草稿。`);
+        throw userError('这份草稿对应的文件已经不存在了', `「${draftPath}」可能已经被删除或改名。可以在「博客」的文章列表里丢弃这份本机草稿。`);
       } else {
         this.openNewFromDraft(p.draft, rec);
         await this.checkPublishedTwin(rec);
@@ -1367,12 +1374,12 @@ class Editor {
   }
 
   renderFatal(title, detail) {
-    const back = this.kind === 'page' ? '#/pages' : '#/posts';
+    const back = this.kind === 'page' ? this.listHash() : '#/posts';
     render(this.container,
       h('div', { class: 'card ed-fatal', dataset: { testid: 'editor-error' } },
         errorState(title, { detail }),
         h('div', { class: 'row', style: { justifyContent: 'center', paddingBottom: '12px' } },
-          h('a', { class: 'btn btn-primary', href: back }, svgIcon('back'), this.kind === 'page' ? '返回页面列表' : '返回文章列表'))));
+          h('a', { class: 'btn btn-primary', href: back }, svgIcon('back'), this.kind === 'page' ? '返回' : '返回文章列表'))));
   }
 
   get active() {
@@ -2499,7 +2506,7 @@ class Editor {
       items.push(this.field('摘要', desc, { id: 'ed-desc', optional: true }));
 
       items.push(this.field('标签', this.chipInput(f.tags, (list) => set('tags', list), { placeholder: '输入后按回车添加', testid: 'editor-tags', id: 'ed-tags' }), { id: 'ed-tags', optional: true }));
-      items.push(this.field('分类', this.chipInput(f.categories, (list) => set('categories', list), { placeholder: '输入后按回车添加', testid: 'editor-categories', id: 'ed-cats' }), { id: 'ed-cats', optional: true }));
+      items.push(this.categoryField(v));
 
       items.push(this.coverField(v));
 
@@ -2545,17 +2552,29 @@ class Editor {
     if (this.kind !== 'post' && !(this.courseSlug() && !v.baseForm.inMenu)) {
       const lt = h('input', { class: 'input', type: 'text', id: 'ed-linktitle', value: f.linkTitle, placeholder: f.title || '和标题相同', dataset: { testid: 'editor-linktitle' } });
       lt.addEventListener('input', () => set('linkTitle', lt.value));
-      items.push(this.field('菜单名称', lt, { id: 'ed-linktitle', hint: '顶部菜单里显示的名字，留空则使用标题。', optional: true }));
+      items.push(this.field('菜单名称', lt, { id: 'ed-linktitle', hint: '菜单里显示的名字（顶部菜单或下拉菜单），留空则使用标题。', optional: true }));
 
       const weight = h('input', { class: 'input', type: 'number', id: 'ed-weight', step: 1, inputmode: 'numeric', value: f.weight, dataset: { testid: 'editor-weight' } });
-      const weightField = this.field('菜单顺序', weight, { id: 'ed-weight', hint: '数字越小越靠左。只修改当前这个语言版本。' });
+      // 下拉菜单：menu.main.parent（放在哪个栏目下在「设置 › 菜单与页面」里改；这里保留原来的 parent / identifier）
+      const mainMenu = isPlainObject(v.fm.menu) && isPlainObject(v.fm.menu.main) ? v.fm.menu.main : {};
+      const parent = typeof mainMenu.parent === 'string' && mainMenu.parent ? mainMenu.parent : null;
+      const PARENT_NAMES = { about: 'About', research: 'Research', posts: 'Blog', courses: 'Course Materials' };
+      const where = parent ? `${PARENT_NAMES[parent] || parent} ▾ 下拉菜单里` : '顶部菜单';
+      const weightField = this.field('菜单顺序', weight, {
+        id: 'ed-weight',
+        hint: `${parent ? '同一个下拉菜单里数字越小越靠上' : '数字越小越靠左'}。只修改当前这个语言版本；所有语言一起改、换栏目请到「设置 › 菜单与页面」。`,
+      });
       weightField.hidden = !f.inMenu;
       weight.addEventListener('input', () => set('weight', weight.value.trim()));
-      items.push(this.switchField('显示在顶部菜单', f.inMenu, (on) => {
+      // 4 个固定栏目（About / Research / Blog / Course Materials）：不能从菜单里去掉（子页面靠它的 identifier 挂上去）
+      const fixedTop = !parent && f.inMenu && v.baseForm.inMenu && ['about', 'research', 'posts', 'courses'].includes(mainMenu.identifier);
+      const sw = this.switchField(parent ? `显示在菜单里（${where}）` : '显示在顶部菜单', f.inMenu, (on) => {
         f.inMenu = on;
         weightField.hidden = !on;
         this.changed();
-      }, { testid: 'editor-inmenu' }));
+      }, { testid: 'editor-inmenu', hint: fixedTop ? `这是顶部菜单的固定栏目「${PARENT_NAMES[mainMenu.identifier]}」，不能从菜单里去掉（它的下拉菜单靠它）。` : null });
+      if (fixedTop) sw.querySelector('input').disabled = true;
+      items.push(sw);
       items.push(weightField);
     }
     if (this.kind !== 'post') {
@@ -2565,6 +2584,36 @@ class Editor {
     }
     render(els.settingsBody, items);
     this.renderStatus();
+  }
+
+  /**
+   * 文章的「分类」：不分类 / 科研笔记 / 随笔（写了别的或多个分类时多一项「保持原样」）。
+   * 分类属于整篇文章：改了就同时改所有语言版本的表单，保存时其他已有的语言版本一起写（doSave）。
+   */
+  categoryField(v) {
+    const f = v.form;
+    const choice = categoryChoice(f.categories);
+    // 「保持原样」的原值：打开时文件里写的（或者现在表单里的）
+    const keepList = categoryChoice(v.baseForm.categories) === 'keep' ? v.baseForm.categories
+      : choice === 'keep' ? f.categories : null;
+    const sel = h('select', { class: 'input', id: 'ed-category', dataset: { testid: 'editor-category' } },
+      h('option', { value: '' }, '不分类'),
+      CATEGORY_KEYS.map((k) => h('option', { value: k }, CATEGORY_LABELS[k])),
+      keepList ? h('option', { value: 'keep' }, `保持原样（${keepList.join(', ')}）`) : null);
+    sel.value = choice;
+    sel.addEventListener('change', () => {
+      const list = sel.value === 'keep' ? [...(keepList || [])] : sel.value ? [sel.value] : [];
+      for (const x of this.variants.values()) x.form.categories = [...list];
+      this.changed();
+    });
+    const multi = this.variants.size > 1;
+    return this.field('分类', sel, {
+      id: 'ed-category',
+      hint: h('span', { dataset: { testid: 'editor-category-hint' } },
+        '分类对中英文版本同时生效。',
+        multi ? '保存时其他语言版本的分类也一起改成这个。' : '',
+        '网站菜单 Blog ▾ 下按分类列出文章；不分类的文章只出现在「全部文章」里。'),
+    });
   }
 
   /** 新文章 / 新子推文的「文件名（网址）」输入框。 */
@@ -3141,9 +3190,12 @@ class Editor {
         return false;
       }
     }
-    if (this.kind === 'page' && v.form.inMenu && v.form.weight && !/^-?\d+$/.test(v.form.weight)) {
+    // 只检查改过的顺序（文件里原来手写的 1.5 之类不挡住保存别的修改）；0 在网站上 = 没有顺序（排到最后）
+    const wErr = this.kind === 'page' && v.form.inMenu && v.form.weight && v.form.weight !== (v.baseForm && v.baseForm.weight)
+      ? menuWeightError(v.form.weight) : null;
+    if (wErr) {
       this.toggleSettings(true);
-      toast('菜单顺序请填写整数', { type: 'warning' });
+      toast(wErr, { type: 'warning' });
       return false;
     }
     return true;
@@ -3254,10 +3306,13 @@ class Editor {
         newFm = this.courseItem
           ? newFrontMatter(this.newFields(v, mode, imgDir), ['title', 'weight', 'description', 'draft'])
           : newFrontMatter(this.newFields(v, mode, imgDir));
+        // 分类写成和网站约定一样的 categories: [notes]（不带引号）
+        if (this.kind === 'post') newFm = tidyCategoriesLine(newFm);
       } else {
         const updates = this.computeUpdates(v, mode, imgDir);
         const hasUpdates = Object.keys(updates).length > 0;
         newFm = v.fmText === null && !hasUpdates ? null : setFields(v.fmText ?? '', updates);
+        if (newFm !== null && Object.prototype.hasOwnProperty.call(updates, 'categories')) newFm = tidyCategoriesLine(newFm);
       }
       if (fb.unchanged && newFm !== null) {
         // 正文没改：保留结束分隔线之后的原文（逐字节不变）
@@ -3291,6 +3346,30 @@ class Editor {
     }
 
     const changes = [{ path, content, baseSha: v.exists ? v.sha : null }];
+    // 分类属于整篇文章：其他已有的语言版本分类不同 → 同一个提交里一起改（只改 categories 那一行）
+    const catSync = [];
+    if (this.kind === 'post') {
+      let finalCats;
+      try { finalCats = categoriesOf(parseFrontMatter(splitDocument(content).fmText)); } catch { finalCats = null; }
+      const skipped = [];
+      if (finalCats) {
+        for (const w of this.variants.values()) {
+          if (w === v || !w.exists || !w.path || w.path === path || w.conflict) continue;
+          if (sameCategories(categoriesOf(w.fm), finalCats)) continue;
+          const wText = w.fmText === null ? w.rawBody : `---\n${w.fmText}\n---\n${w.rawBody}`;
+          try {
+            const out = patchCategories(wText, finalCats, w.path);
+            if (out !== wText) {
+              changes.push({ path: w.path, content: out, baseSha: w.sha });
+              catSync.push({ w, content: out, cats: finalCats });
+            }
+          } catch (err) {
+            skipped.push(`${w.path}（${errorMessage(err)}）`);
+          }
+        }
+      }
+      if (skipped.length) toast(`这些版本的分类没能一起修改，请在 GitHub 上手动改：${skipped.join('、')}`, { type: 'warning', timeout: 10000 });
+    }
     let imageCount = 0;
     let docCount = 0;
     for (const name of used) {
@@ -3308,6 +3387,7 @@ class Editor {
     const verb = mode === 'draft' ? '保存草稿' : (v.exists && v.published ? '更新' : '发表');
     const label = this.variants.size > 1 || v.key !== 'shared' ? `（${C.variantLabel(v.key, this.ctx)}）` : '';
     const summary = [`${verb}：${path}`];
+    for (const c of catSync) summary.push(`同步分类（${c.cats.length ? c.cats.join(', ') : '不分类'}）：${c.w.path}`);
     if (imageCount) summary.push(`上传图片 ${imageCount} 张`);
     if (docCount) summary.push(`上传资料 ${docCount} 个`);
 
@@ -3373,6 +3453,20 @@ class Editor {
     v.draftKey = newKey;
     v.draftWritten = false;
     this.group.variants[v.key] = path;
+    // 一起改了分类的其他语言版本：记下新的文件内容（它们自己没保存的修改不受影响）
+    for (const c of catSync) {
+      const w = c.w;
+      const pd = splitDocument(c.content);
+      w.fmText = pd.fmText;
+      w.fm = parseFrontMatter(pd.fmText);
+      w.sha = (res.shas && res.shas[w.path]) || this.repo.entry(w.path)?.sha || w.sha;
+      w.baseForm.categories = [...c.cats];
+      w.form.categories = [...c.cats];
+    }
+    if (this.kind === 'post') {
+      const cats = categoriesOf(v.fm);
+      for (const w of this.variants.values()) if (w !== v && !w.exists) w.form.categories = [...cats];
+    }
 
     if (this.isNewGroup) {
       this.leaving = true;
@@ -3565,10 +3659,19 @@ class Editor {
     return new URL(prefix + rel.toLowerCase(), this.ctx.siteUrl).href;
   }
 
+  /** 「返回」回到哪里：文章 → 博客；课程里的页面 → 这门课；About → 关于；Research → 研究；其他页面 → 设置 › 菜单与页面。 */
   listHash() {
     const course = this.courseSlug();
     if (course) return '#/courses?course=' + encodeURIComponent(course);
-    return this.kind === 'post' ? '#/posts' : '#/pages';
+    if (this.kind === 'post') return '#/posts';
+    return this.pageHomeInfo().hash;
+  }
+
+  pageHomeInfo() {
+    const g = this.group;
+    if (g && g.dir != null && g.base) return pageHome(C.variantPath(g.dir, g.base, null));
+    if (g && g.dir) return newPageHome(g.dir);
+    return pageHome('');
   }
 
   goBack() {

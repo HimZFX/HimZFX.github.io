@@ -303,7 +303,7 @@ export default async function mount(container, params, ctx) {
       hasLanding
         ? h('span', {}, '网站上的「课程资料」页（/courses/）会按这里的顺序列出课程卡片，上面是你写的说明文字。',
           h('a', { href: editHash(repo.has(landing) ? landing : variantPath(COURSES_DIR, '_index', langs.find((l) => repo.has(variantPath(COURSES_DIR, '_index', l))))), dataset: { testid: 'courses-edit-landing' } }, '编辑说明文字'))
-        : h('span', {}, '还没有「课程资料」总页（content/courses/_index.md）。可以在「页面」里新建一个网址为 courses 的栏目。'));
+        : h('span', {}, '还没有「课程资料」总页（content/courses/_index.md）。可以在「设置 › 菜单与页面」里新建一个网址为 courses 的栏目。'));
 
     if (!all.length) {
       render(host, header, landingNote, h('div', { class: 'card', dataset: { testid: 'courses-empty' } },

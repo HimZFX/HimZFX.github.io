@@ -58,7 +58,8 @@ async function step(name, fn) {
 
 const tid = (id) => `[data-testid="${id}"]`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const waitView = (page, route) => page.waitForSelector(`body[data-view-ready="${route}"]`, { state: 'attached', timeout: 20000 });
+// 背景动画 is a tab of 设置 (#/settings?tab=background); the old address #/background redirects there
+const waitView = (page, route) => page.waitForSelector(route === 'background' ? 'body[data-tab-ready="settings:background"]' : `body[data-view-ready="${route}"]`, { state: 'attached', timeout: 20000 });
 
 /** Ask a cassette iframe (by data-testid) for its stats via postMessage, from the admin page. */
 async function frameStats(page, testid, probe) {
@@ -313,8 +314,15 @@ try {
     await page.waitForSelector(tid('confirm-cancel'));
     await page.click(tid('confirm-cancel'));
     await sleep(300);
-    assert.equal(await page.evaluate(() => location.hash), '#/background');
+    assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=background');
     assert.equal(await page.inputValue(tid('bg-param-STAR_COUNT')), '4', 'edits kept');
+    // switching to another tab of 设置 asks as well
+    await page.click(tid('settings-tab-pages'));
+    await page.waitForSelector(tid('confirm-cancel'));
+    await page.click(tid('confirm-cancel'));
+    await sleep(300);
+    assert.equal(await page.getAttribute(tid('settings-tab-background'), 'aria-selected'), 'true');
+    assert.equal(await page.inputValue(tid('bg-param-STAR_COUNT')), '4', 'edits kept after the tab switch was cancelled');
   });
 
   await step('desktop screenshot + no horizontal scroll', async () => {

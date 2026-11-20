@@ -1,0 +1,35 @@
+{{- $scratch := newScratch }}
+
+{{- if not .Date.IsZero -}}
+{{- $scratch.Add "meta" (slice (printf "<span title='%s'>%s</span>" (.Date) (.Date | time.Format (default ":date_long" site.Params.DateFormat)))) }}
+{{- end }}
+
+{{- if (.Param "ShowReadingTime") -}}
+{{- $scratch.Add "meta" (slice (printf "<span>%s</span>" (i18n "read_time" .ReadingTime | default (printf "%d min" .ReadingTime)))) }}
+{{- end }}
+
+{{- if (.Param "ShowWordCount") -}}
+{{- $scratch.Add "meta" (slice (printf "<span>%s</span>" (i18n "words" .WordCount | default (printf "%d words" .WordCount)))) }}
+{{- end }}
+
+{{- if not (.Param "hideAuthor") -}}
+{{- with (partial "author.html" .) }}
+{{- $scratch.Add "meta" (slice (printf "<span>%s</span>" .)) }}
+{{- end }}
+{{- end }}
+
+{{- /* 本站改动（PaperMod 原版见 themes/PaperMod/layouts/partials/post_meta.html）：在日期等信息的最后加上文章的博客分类
+     （front matter 的 categories，例如 [notes] →「科研笔记」，链接到 /categories/notes/）。
+     单篇文章的信息行和文章列表的卡片都用这个 partial；卡片整张是一个链接，分类链接用 CSS 放在它上面（nav.css 的 .post-cat）。
+     分类页没有 _index 文件时用分类的原名。 */ -}}
+{{- with .GetTerms "categories" }}
+{{- $links := slice }}
+{{- range . }}
+{{- $links = $links | append (printf "<a href=\"%s\">%s</a>" .RelPermalink (.LinkTitle | htmlEscape)) }}
+{{- end }}
+{{- $scratch.Add "meta" (slice (printf "<span class=\"post-cat\" title=\"%s\">%s</span>" (i18n "category_label" | htmlEscape) (delimit $links ", "))) }}
+{{- end }}
+
+{{- with ($scratch.Get "meta") }}
+{{- delimit . "&nbsp;·&nbsp;" | safeHTML -}}
+{{- end -}}

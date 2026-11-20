@@ -138,10 +138,29 @@ async function until(cond, { timeout = 20000, msg = 'condition' } = {}) {
   }
 }
 
-/** Click a left-nav item (like a user would) and wait for that view to be mounted. */
+/**
+ * Click a left-nav item (like a user would) and wait for that view to be mounted.
+ * The views that now live in tabs (首页 / 背景动画 / 菜单与页面 under 设置, 论文 / 报告与海报 under 研究, 近况 under 关于)
+ * are opened as the sidebar item + its tab.
+ */
+const TABS = {
+  profile: ['settings', 'home'], background: ['settings', 'background'], pages: ['settings', 'pages'],
+  publications: ['research', 'publications'], talks: ['research', 'talks'], news: ['about', 'news'],
+};
 async function nav(page, route) {
-  await page.click(tid(`nav-${route}`));
-  await page.waitForSelector(`body[data-view-ready="${route}"]`, { state: 'attached', timeout: 30000 });
+  const [r, tab] = TABS[route] || [route, null];
+  // already in that group (another tab of 设置, say): just switch the tab, like a user would
+  const here = await page.evaluate((x) => location.hash.split('?')[0] === `#/${x}` && document.body.dataset.viewReady === x, r);
+  if (!here || !tab) {
+    await page.evaluate(() => { delete document.body.dataset.viewReady; });
+    await page.click(tid(`nav-${r}`));
+    await page.waitForSelector(`body[data-view-ready="${r}"]`, { state: 'attached', timeout: 30000 });
+  }
+  if (tab) {
+    // (a toast from the previous step may float over the tab bar: click the tab itself)
+    await page.$eval(tid(`${r}-tab-${tab}`), (b) => b.click());
+    await page.waitForSelector(`body[data-tab-ready="${r}:${tab}"]`, { state: 'attached', timeout: 30000 });
+  }
 }
 
 /** Change the hash and wait for the view. */
@@ -245,12 +264,22 @@ function missingInOrder(beforeLines, after) {
   return missing;
 }
 
+const anchors = (html) => [...html.matchAll(/<a\b[^>]*href=["']?([^"' >]+)["']?[^>]*>([\s\S]*?)<\/a>/g)]
+  .map((x) => ({ href: x[1], text: x[2].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').trim() }));
+
+/** The top-level menu items (the dropdown panels <div class="nav-sub"> are left out). */
 function navItems(html) {
   const m = /<ul id=["']?menu["']?[^>]*>([\s\S]*?)<\/ul>/.exec(html);
   assert.ok(m, 'nav menu not found in built page');
-  return [...m[1].matchAll(/<a\b[^>]*href=["']?([^"' >]+)["']?[^>]*>([\s\S]*?)<\/a>/g)]
-    .map((x) => ({ href: x[1], text: x[2].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').trim() }));
+  return anchors(m[1].replace(/<div\b[^>]*\bnav-sub\b[^>]*>[\s\S]*?<\/div>/g, ''));
 }
+
+/** The links in the dropdown of the top-level item <identifier> (empty when it has none). */
+function navSub(html, id) {
+  const m = new RegExp(`<div\\b[^>]*\\bid=["']?nav-sub-${id}(?=["' >])[^>]*>([\\s\\S]*?)<\\/div>`).exec(html);
+  return m ? anchors(m[1]) : [];
+}
+
 
 async function fetchSite(mock, p) {
   const res = await fetch(mock.url + p);
@@ -577,7 +606,7 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
-    await step('页面: put 博客 first in the menu → 保存菜单顺序', async () => {
+    await step('设置 › 菜单与页面: put 博客 first in the menu → 保存菜单', async () => {
       await nav(page, 'pages');
       const w = `${tid('page-row')}[data-key="content/posts/_index"] ${tid('page-weight')}`;
       await page.waitForSelector(w);
@@ -701,7 +730,7 @@ async function main() {
       await chooser.setFiles(file);
     };
     await step('学术 · 论文: paste an ADS BibTeX export → fields filled → upload the PDF → 保存并发布 (YAML + PDF in ONE commit)', async () => {
-      await nav(page, 'academic');
+      await nav(page, 'publications');
       await page.waitForSelector(tid('academic-list-publications'));
       await page.click(tid('pub-add'));
       await page.waitForSelector(tid('pub-form'));
@@ -725,7 +754,7 @@ async function main() {
       await page.waitForSelector(`${tid('pub-row')}[data-id="${PAPER_ID}"]`);
     });
 
-    await step('学术 · 论文设置 (my name in bold) → 在顶部菜单显示 for 论文 and 报告与海报 (both _index files, surgical)', async () => {
+    await step('学术 · 论文设置 (my name in bold) → 在菜单里显示（Research ▾ 下）for 论文 and 报告与海报 (both _index files, surgical)', async () => {
       const before = mock.readFile('config/_default/params.toml');
       await page.click(`${tid('academic-settings-publications')} summary`);
       await page.fill(tid('pub-myNames'), 'Zhong, F.\nZhong, Fangxiong');
@@ -741,17 +770,17 @@ async function main() {
         ['talks', '报告与海报', ['content/talks/_index.md', 'content/talks/_index.zh.md']],
       ]) {
         if (tab !== 'publications') {
-          await page.click(tid(`academic-tab-${tab}`));
+          await nav(page, tab);
           await page.waitForSelector(tid(`academic-list-${tab}`));
         }
         const old = Object.fromEntries(files.map((p) => [p, mock.readFile(p)]));
         const m = await clickAndCommit(page, mock, tid(`academic-menu-${tab}`));
-        assert.equal(m.message, `admin: 在顶部菜单显示「${label}」`);
+        assert.equal(m.message, `admin: 在菜单里显示「${label}」（Research ▾ 下）`);
         assert.deepEqual(m.changes.map((x) => x.path).sort(), files);
+        const weight = tab === 'publications' ? 10 : 20;
         for (const p of files) {
-          const added = mock.readFile(p).split('\n').filter((l) => !old[p].split('\n').includes(l));
-          assert.equal(added.length, 1, `${p}: one line added (${JSON.stringify(added)})`);
-          assert.match(added[0], /^menu: \{ main: \{ weight: \d+ \} \}$/, p);
+          // exactly the contract's block, nothing else changed
+          assert.equal(mock.readFile(p), old[p].replace('\n---\n', `\nmenu:\n  main:\n    parent: research\n    weight: ${weight}\n---\n`), p);
         }
         await until(() => page.isChecked(tid(`academic-menu-${tab}`)), { msg: `${tab} menu switch on` });
       }
@@ -777,7 +806,7 @@ async function main() {
     });
 
     await step('学术 · 近况: quick-add two items (one with a Chinese override + link) → one commit each', async () => {
-      await page.click(tid('academic-tab-news'));
+      await nav(page, 'news');
       await page.waitForSelector(tid('news-quick'));
       for (const n of [NEWS_OLD, NEWS_NEW]) {
         await page.fill(tid('news-date'), n.date);
@@ -840,17 +869,19 @@ async function main() {
 
     // -----------------------------------------------------------------------
     await step('every view fits a phone (390x844 and 360x740) without horizontal scroll; screenshots', async () => {
-      const views = [['#/posts', 'posts'], ['#/edit?path=' + encodeURIComponent(POST), 'edit'], ['#/pages', 'pages'],
-        ['#/courses', 'courses'], [`#/courses?course=${COURSE}`, 'courses'], ['#/academic?tab=publications', 'academic'],
-        ['#/profile', 'profile'], ['#/background', 'background'], ['#/files', 'files']];
+      const views = [['#/posts', 'posts'], ['#/edit?path=' + encodeURIComponent(POST), 'edit'], ['#/settings?tab=pages', 'settings', 'pages'],
+        ['#/courses', 'courses'], [`#/courses?course=${COURSE}`, 'courses'], ['#/research?tab=publications', 'research', 'publications'],
+        ['#/research?tab=talks', 'research', 'talks'], ['#/about', 'about', 'me'], ['#/about?tab=news', 'about', 'news'],
+        ['#/settings?tab=home', 'settings', 'home'], ['#/settings?tab=background', 'settings', 'background'], ['#/files', 'files']];
       for (const [w, hgt, label] of [[1280, 800, 'desktop'], [390, 844, 'mobile'], [360, 740, 'mobile360']]) {
         const mp = await context.newPage();
         mp.on('pageerror', (e) => pageErrors.push(e.message));
         await mp.setViewportSize({ width: w, height: hgt });
         await mp.goto(mock.url + '/admin/#/posts', { waitUntil: 'domcontentloaded' });
         await mp.waitForSelector('body[data-testid="app-ready"]', { state: 'attached', timeout: 45000 });
-        for (const [hash, route] of views) {
+        for (const [hash, route, tab] of views) {
           await go(mp, hash, route);
+          if (tab) await mp.waitForSelector(`body[data-tab-ready="${route}:${tab}"]`, { state: 'attached', timeout: 30000 });
           if (route === 'edit') await waitEditor(mp);
           if (route === 'courses') await mp.waitForSelector(`body[data-courses-ready="${hash.includes('?') ? 'detail' : 'list'}"]`, { state: 'attached' });
           await sleep(400);
@@ -860,7 +891,7 @@ async function main() {
             .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right > window.innerWidth + 1 && !el.closest('.tabs, .vditor-toolbar, .ed-tabs, [data-scroll-x]'); })
             .map((el) => `${el.tagName}.${el.className} "${(el.textContent || el.value || '').trim().slice(0, 20)}"`));
           assert.deepEqual(wide, [], `elements past the right edge on ${hash} at ${w}px`);
-          await mp.screenshot({ path: path.join(SHOTS, `${label}-${route}${hash.includes('course=') ? '-detail' : ''}.png`) });
+          await mp.screenshot({ path: path.join(SHOTS, `${label}-${route}${tab ? '-' + tab : ''}${hash.includes('course=') ? '-detail' : ''}.png`) });
         }
         await mp.close();
       }
@@ -939,12 +970,19 @@ async function main() {
         assert.equal(js.status, 200, 'background script served');
       }
 
-      // menu order: 博客 first, in both languages
-      const enNav = navItems((await fetchSite(mock, '/')).bytes.toString('utf8')).map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
-      const zhNav = navItems((await fetchSite(mock, '/zh/')).bytes.toString('utf8')).map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
-      // …and the two academic pages the 学术 view switched on, after the existing items (news stays off the menu)
-      assert.deepEqual(enNav, ['Blog /posts/', 'About /about/', 'Research /research/', 'Course Materials /courses/', 'Publications /publications/', 'Talks & Posters /talks/']);
-      assert.deepEqual(zhNav, ['博客 /zh/posts/', '关于 /zh/about/', '科研 /zh/research/', '课程资料 /zh/courses/', '论文 /zh/publications/', '报告与海报 /zh/talks/']);
+      // menu order: 博客 first, in both languages (top level = the 4 fixed items)
+      const enHome = (await fetchSite(mock, '/')).bytes.toString('utf8');
+      const zhHome = (await fetchSite(mock, '/zh/')).bytes.toString('utf8');
+      const rel = (items) => items.map((x) => `${x.text} ${x.href.replace(mock.url, '')}`);
+      assert.deepEqual(rel(navItems(enHome)), ['Blog /posts/', 'About /about/', 'Research /research/', 'Course Materials /courses/']);
+      assert.deepEqual(rel(navItems(zhHome)), ['博客 /zh/posts/', '关于 /zh/about/', '科研 /zh/research/', '课程资料 /zh/courses/']);
+      // …and the two academic pages the 学术 view switched on are in the Research ▾ dropdown (news stays off the menu)
+      const enResearch = rel(navSub(enHome, 'research'));
+      assert.ok(enResearch.includes('Publications /publications/') && enResearch.includes('Talks & Posters /talks/'), enResearch.join(' | '));
+      assert.ok(enResearch.indexOf('Publications /publications/') < enResearch.indexOf('Talks & Posters /talks/'), 'publications (10) before talks (20)');
+      const zhResearch = rel(navSub(zhHome, 'research'));
+      assert.ok(zhResearch.includes('论文 /zh/publications/') && zhResearch.includes('报告与海报 /zh/talks/'), zhResearch.join(' | '));
+      assert.ok(!/\/news\//.test(rel(navSub(enHome, 'about')).join(' ')), 'news not in the About dropdown');
 
       // the blog lists show the post in the right language
       assert.ok((await fetchSite(mock, '/zh/posts/')).bytes.toString('utf8').includes(TITLE_ZH));

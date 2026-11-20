@@ -2,6 +2,7 @@
 title: "Course Materials"
 menu:
   main:
+    identifier: courses
     weight: 40
 description: "Undergraduate course notes, homework, and review materials for reference."
 hidemeta: true

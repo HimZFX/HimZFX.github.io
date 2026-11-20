@@ -283,7 +283,7 @@ export default async function mount(container, params, ctx) {
     if (st.disposed) return {};
     render(root, h('div', { class: 'card' }, errorState('没能读取背景动画设置', {
       detail: errorMessage(err),
-      retry: () => ctx.navigate('#/background', { replace: true }),
+      retry: () => ctx.navigate('#/settings?tab=background', { replace: true }),
     })));
     return cleanupOnly();
   }
