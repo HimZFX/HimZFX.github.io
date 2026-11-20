@@ -1,0 +1,23 @@
+{{- /*
+  栏目子导航：页面正文最上面的一排标签，例如「科研」一组：概览 · 论文 · 报告与海报。
+  由 layouts/_default/baseof.html 在每个页面的 <main> 开头调用；结构来自 partials/nav/tree.html（和顶部下拉菜单一样）。
+
+  什么时候显示：顶部菜单项至少有一个看得见的子页面，并且当前页面是
+    · 这个菜单项本身（例如 /research/、/about/、/posts/ 及它的翻页），或
+    · 它的某个子页面（front matter 里 menu.main.parent 指向它的页面，例如 /publications/），或
+    · 博客的分类页（/categories/ 总览和 /categories/<分类>/，包括还没有文章、不在菜单里的分类）。
+  不显示：首页、单篇文章、没有子页面的栏目（例如课程资料）。
+  当前页面那一项带 aria-current="page"。样式在 assets/css/extended/nav.css。
+*/ -}}
+{{- range partial "nav/tree.html" . }}
+{{- if .here }}
+<nav class="subnav" aria-label="{{ i18n "subnav_label" (dict "Name" .name) }}" data-testid="subnav" data-nav="{{ .id }}">
+  <ul class="subnav-list">
+    <li><a class="subnav-link" href="{{ .url }}"{{ if .isSelf }} aria-current="page"{{ end }}>{{ .self }}</a></li>
+    {{- range .kids }}
+    <li><a class="subnav-link" href="{{ .url }}"{{ if .current }} aria-current="page"{{ end }}>{{ .name }}</a></li>
+    {{- end }}
+  </ul>
+</nav>
+{{- end }}
+{{- end }}

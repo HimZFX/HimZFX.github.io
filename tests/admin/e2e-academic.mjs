@@ -95,12 +95,6 @@ function fmOf(text) {
   return m ? { fm: loadCore(m[1]) || {}, fmText: m[1], body: m[2] } : null;
 }
 
-function mainWeight(fm) {
-  const m = fm && fm.menu;
-  if (m && typeof m === 'object' && !Array.isArray(m) && m.main) return typeof m.main === 'object' && m.main.weight != null ? Number(m.main.weight) : (fm.weight ?? null);
-  if (m === 'main' || (Array.isArray(m) && m.includes('main'))) return fm.weight ?? null;
-  return undefined;
-}
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -177,11 +171,26 @@ let browser;
 let page;
 const pageErrors = [];
 
+// 论文 / 报告与海报 are tabs of 研究 (#/research), 近况 a tab of 关于 (#/about)
+const HOME = { publications: 'research', talks: 'research', news: 'about' };
 async function gotoAcademic(tab = 'publications') {
   await page.evaluate(() => { location.hash = '#/posts'; });
   await page.waitForSelector('body[data-view-ready="posts"]', { state: 'attached' });
-  await page.evaluate((t) => { location.hash = `#/academic?tab=${t}`; }, tab);
-  await page.waitForSelector('body[data-view-ready="academic"]', { state: 'attached' });
+  await page.evaluate(({ r, t }) => { location.hash = `#/${r}?tab=${t}`; }, { r: HOME[tab], t: tab });
+  await page.waitForSelector(`body[data-view-ready="${HOME[tab]}"]`, { state: 'attached' });
+  await page.waitForSelector(tid(`academic-list-${tab}`));
+}
+
+/** Switch to a section the way a user does: the sidebar item, then the tab. */
+async function openTab(tab) {
+  const route = HOME[tab];
+  if (!(await page.evaluate((r) => location.hash.startsWith(`#/${r}`), route))) {
+    await page.click(tid(`nav-${route}`));
+    await page.waitForSelector(`body[data-view-ready="${route}"]`, { state: 'attached' });
+  }
+  // (a success toast from the previous step may still float over the tab bar: click the tab itself)
+  await page.$eval(tid(`${route}-tab-${tab}`), (b) => b.click());
+  await page.waitForSelector(`body[data-tab-ready="${route}:${tab}"]`, { state: 'attached' });
   await page.waitForSelector(tid(`academic-list-${tab}`));
 }
 
@@ -216,22 +225,36 @@ try {
   if (process.env.DEBUG) page.on('console', (m) => console.log('[console]', m.type(), m.text()));
   await openAdmin(page, mock);
 
-  await step('navigation: 学术 in the sidebar; empty states and menu hints', async () => {
-    await page.click(tid('nav-academic'));
-    await page.waitForSelector('body[data-view-ready="academic"]', { state: 'attached' });
-    assert.equal(await page.getAttribute(tid('nav-academic'), 'aria-current'), 'page');
-    assert.equal(await page.textContent('#page-title'), '学术');
-    assert.equal(await page.getAttribute(tid('academic-tab-publications'), 'aria-selected'), 'true');
+  await step('navigation: 研究 › 论文 / 报告与海报 and 关于 › 近况; empty states and menu hints; old #/academic addresses', async () => {
+    await page.click(tid('nav-research'));
+    await page.waitForSelector('body[data-view-ready="research"]', { state: 'attached' });
+    assert.equal(await page.getAttribute(tid('nav-research'), 'aria-current'), 'page');
+    assert.equal(await page.textContent('#page-title'), '研究');
+    assert.equal(await page.getAttribute(tid('research-tab-overview'), 'aria-selected'), 'true');
+    assert.deepEqual(await page.$$eval(`${tid('research-page')} ${tid('page-version')}`, (els) => els.map((e) => e.dataset.path)), ['content/research/_index.md', 'content/research/_index.en.md']);
+    await openTab('publications');
+    assert.equal(await page.evaluate(() => location.hash), '#/research?tab=publications');
     assert.match(await page.textContent(tid('academic-list-publications')), /还没有论文/);
     assert.ok(await page.isVisible(tid('academic-menu-hint-publications')), 'hint: add content first');
     assert.equal(await page.isChecked(tid('academic-menu-publications')), false);
-    await page.click(tid('academic-tab-talks'));
-    await page.waitForSelector(tid('academic-list-talks'));
-    assert.equal(await page.evaluate(() => location.hash), '#/academic?tab=talks');
+    assert.match(await page.textContent(tid('academic-menu-card-publications')), /在菜单里显示（放在 Research ▾ 下）/);
+    await openTab('talks');
+    assert.equal(await page.evaluate(() => location.hash), '#/research?tab=talks');
     assert.match(await page.textContent(tid('academic-list-talks')), /还没有报告/);
-    await page.click(tid('academic-tab-news'));
+    await openTab('news');
+    assert.equal(await page.evaluate(() => location.hash), '#/about?tab=news');
+    assert.equal(await page.textContent('#page-title'), '关于');
     await page.waitForSelector(tid('news-empty'));
-    await page.click(tid('academic-tab-publications'));
+    assert.match(await page.textContent(tid('academic-menu-card-news')), /在菜单里显示（放在 About ▾ 下）/);
+    // the old addresses still open the right tab
+    for (const [old, now, route, tab] of [['#/academic?tab=talks', '#/research?tab=talks', 'research', 'talks'], ['#/academic?tab=news', '#/about?tab=news', 'about', 'news'], ['#/academic', '#/research', 'research', 'overview']]) {
+      await page.evaluate(() => { location.hash = '#/posts'; });
+      await page.waitForSelector('body[data-view-ready="posts"]', { state: 'attached' });
+      await page.evaluate((h) => { location.hash = h; }, old);
+      await page.waitForSelector(`body[data-tab-ready="${route}:${tab}"]`, { state: 'attached' });
+      assert.equal(await page.evaluate(() => location.hash), now);
+    }
+    await openTab('publications');
     await page.screenshot({ path: path.join(SHOTS, 'empty.png'), fullPage: true });
   });
 
@@ -278,7 +301,7 @@ try {
     assert.equal(mock.readFile(PUB1), PUB1_TEXT);
     assert.ok(mock.readBytes(PAPER_PDF).equals(pdf), 'PDF byte-exact');
     await page.waitForSelector(`${tid('pub-row')}[data-id="2024apj-960-101z"]`);
-    assert.equal(await page.textContent(`${tid('academic-count-publications')}`), '1');
+    assert.equal(await page.textContent(`${tid('research-count-publications')}`), '1');
   });
 
   await step('paper: typed by hand → validation, auto file name, in-prep goes to 已投稿与准备中', async () => {
@@ -388,40 +411,33 @@ try {
     assert.equal(await page.textContent(`${tid('pub-row')}[data-id="2024apj-960-101z"] .ac-me`), 'Zhong, F.');
   });
 
-  let menuWeight;
-  await step('menu switch: publications → both _index files patched surgically (weight after the others)', async () => {
-    const files = mock.files();
-    const weights = [];
-    for (const [p, buf] of files) {
-      if (!/^content\/([^/]+\.md|[^/]+\/_index(\.[a-z]+)?\.md)$/.test(p) || p.startsWith('content/publications/')) continue;
-      const w = mainWeight((fmOf(buf.toString('utf8')) || {}).fm);
-      if (typeof w === 'number') weights.push(w);
-    }
-    menuWeight = Math.floor(Math.max(...weights) / 10) * 10 + 10;
+  await step('menu switch: publications → both _index files get menu.main.parent: research + weight 10 (surgical, comment + body kept)', async () => {
     const n = mock.commits.length;
     await page.click(tid('academic-menu-publications'));
     await waitCommits(n + 1);
     const c = lastCommit();
-    assert.equal(c.message, 'admin: 在顶部菜单显示「论文」');
+    assert.equal(c.message, 'admin: 在菜单里显示「论文」（Research ▾ 下）');
     assert.deepEqual(changedPaths(c), ['modified content/publications/_index.md', 'modified content/publications/_index.zh.md']);
     assert.equal(mock.readFile('content/publications/_index.md'),
-      `---\ntitle: "Publications"\n# shown at the top of the page\ndescription: "Papers, preprints and other writing."\nmenu: { main: { weight: ${menuWeight} } }\n---\n\nSelected papers are marked with a star.\n`);
-    assert.equal(fmOf(mock.readFile('content/publications/_index.zh.md')).fm.menu.main.weight, menuWeight);
+      '---\ntitle: "Publications"\n# shown at the top of the page\ndescription: "Papers, preprints and other writing."\nmenu:\n  main:\n    parent: research\n    weight: 10\n---\n\nSelected papers are marked with a star.\n');
+    assert.equal(mock.readFile('content/publications/_index.zh.md'),
+      '---\ntitle: "论文"\ndescription: "论文、预印本与其他写作。"\nmenu:\n  main:\n    parent: research\n    weight: 10\n---\n');
     await until(() => page.isChecked(tid('academic-menu-publications')), { msg: 'switch on' });
+    assert.match(await page.textContent(tid('academic-menu-state-publications')), /Research ▾ → Publications \/ 论文/);
     assert.equal(await page.$(tid('academic-menu-empty-publications')), null, 'has entries → no warning');
   });
 
   await step('menu switch: talks pages are missing → created with the menu entry; warning while empty; off again', async () => {
-    await page.click(tid('academic-tab-talks'));
-    await page.waitForSelector(tid('academic-list-talks'));
+    await openTab('talks');
     let n = mock.commits.length;
     await page.click(tid('academic-menu-talks'));
     await waitCommits(n + 1);
     let c = lastCommit();
-    assert.equal(c.message, 'admin: 在顶部菜单显示「报告与海报」');
+    assert.equal(c.message, 'admin: 在菜单里显示「报告与海报」（Research ▾ 下）');
     assert.deepEqual(changedPaths(c), ['added content/talks/_index.md', 'added content/talks/_index.zh.md']);
+    assert.equal(mock.readFile('content/talks/_index.md'), '---\ntitle: "Talks & Posters"\ndescription: "Talks, posters and seminars."\nmenu:\n  main:\n    parent: research\n    weight: 20\n---\n');
     const en = fmOf(mock.readFile('content/talks/_index.md'));
-    assert.deepEqual(en.fm, { title: 'Talks & Posters', description: 'Talks, posters and seminars.', menu: { main: { weight: menuWeight + 10 } } });
+    assert.deepEqual(en.fm, { title: 'Talks & Posters', description: 'Talks, posters and seminars.', menu: { main: { parent: 'research', weight: 20 } } });
     assert.deepEqual(fmOf(mock.readFile('content/talks/_index.zh.md')).fm.title, '报告与海报');
     await page.waitForSelector(tid('academic-menu-empty-talks'));
     assert.match(await page.textContent(tid('academic-menu-empty-talks')), /还没有任何报告/);
@@ -430,10 +446,56 @@ try {
     await page.click(tid('academic-menu-talks'));
     await waitCommits(n + 1);
     c = lastCommit();
-    assert.equal(c.message, 'admin: 从顶部菜单移除「报告与海报」');
+    assert.equal(c.message, 'admin: 从菜单移除「报告与海报」');
     assert.equal(mock.readFile('content/talks/_index.md'), '---\ntitle: "Talks & Posters"\ndescription: "Talks, posters and seminars."\n---\n');
     assert.equal(fmOf(mock.readFile('content/talks/_index.zh.md')).fm.menu, undefined);
     await until(async () => !(await page.isChecked(tid('academic-menu-talks'))), { msg: 'switch off' });
+  });
+
+  await step('menu switch: an OLD top-level entry (menu.main.weight, no parent) is shown as such and migrated under Research when switched on', async () => {
+    const TALKS_OLD = '---\ntitle: "Talks & Posters"\nmenu: { main: { weight: 60 } }   # old style\ndescription: "Talks, posters and seminars."\n---\n\nIntro.\n';
+    const TALKS_ZH = mock.readFile('content/talks/_index.zh.md');
+    mock.setFiles({ 'content/talks/_index.md': TALKS_OLD }, 'test: talks as an old top-level menu item');
+    await openAdmin(page, mock);
+    await gotoAcademic('talks');
+    await page.waitForSelector(tid('academic-menu-legacy-talks'));
+    assert.match(await page.textContent(tid('academic-menu-legacy-talks')), /顶部菜单里单独的一项/);
+    assert.equal(await page.isChecked(tid('academic-menu-talks')), false, 'not (yet) under Research');
+    let n = mock.commits.length;
+    await page.click(tid('academic-menu-talks'));
+    await waitCommits(n + 1);
+    assert.equal(lastCommit().message, 'admin: 在菜单里显示「报告与海报」（Research ▾ 下）');
+    assert.deepEqual(changedPaths(lastCommit()), ['modified content/talks/_index.md', 'modified content/talks/_index.zh.md']);
+    // migrated in place to the block form (the old flow line goes), body and other lines untouched
+    assert.equal(mock.readFile('content/talks/_index.md'), '---\ntitle: "Talks & Posters"\nmenu:\n  main:\n    parent: research\n    weight: 20\ndescription: "Talks, posters and seminars."\n---\n\nIntro.\n');
+    assert.equal(mock.readFile('content/talks/_index.zh.md'), TALKS_ZH.replace(/\n---\n$/, '\nmenu:\n  main:\n    parent: research\n    weight: 20\n---\n'));
+    await until(() => page.isChecked(tid('academic-menu-talks')), { msg: 'switch on' });
+    // and off again: back to no menu at all
+    n = mock.commits.length;
+    await page.click(tid('academic-menu-talks'));
+    await waitCommits(n + 1);
+    assert.equal(mock.readFile('content/talks/_index.md'), '---\ntitle: "Talks & Posters"\ndescription: "Talks, posters and seminars."\n---\n\nIntro.\n');
+    assert.equal(mock.readFile('content/talks/_index.zh.md'), TALKS_ZH);
+    await until(async () => !(await page.isChecked(tid('academic-menu-talks'))), { msg: 'switch off' });
+  });
+
+  await step('menu switch: news → under About ▾ (parent: about, weight 10), then off', async () => {
+    await openTab('news');
+    const before = { en: mock.readFile('content/news/_index.md'), zh: mock.readFile('content/news/_index.zh.md') };
+    let n = mock.commits.length;
+    await page.click(tid('academic-menu-news'));
+    await waitCommits(n + 1);
+    assert.equal(lastCommit().message, 'admin: 在菜单里显示「近况」（About ▾ 下）');
+    for (const [f, t] of [['content/news/_index.md', before.en], ['content/news/_index.zh.md', before.zh]]) {
+      assert.equal(mock.readFile(f), t.replace('\n---\n', '\nmenu:\n  main:\n    parent: about\n    weight: 10\n---\n'), f);
+    }
+    await until(() => page.isChecked(tid('academic-menu-news')), { msg: 'switch on' });
+    n = mock.commits.length;
+    await page.click(tid('academic-menu-news'));
+    await waitCommits(n + 1);
+    assert.equal(mock.readFile('content/news/_index.md'), before.en);
+    assert.equal(mock.readFile('content/news/_index.zh.md'), before.zh);
+    await openTab('talks');
   });
 
   await step('talks: add an upcoming talk and a past poster with an uploaded PDF; exact YAML; upcoming / past lists', async () => {
@@ -518,7 +580,7 @@ try {
 
   const NEWS1 = newsIdFor({ date: TODAY, text: 'Our paper on dark galaxies was accepted by **ApJ**!' });
   await step('news: quick add with a Chinese override; Chinese-only text; edit; delete; homeCount', async () => {
-    await page.click(tid('academic-tab-news'));
+    await openTab('news');
     await page.waitForSelector(tid('news-quick'));
     assert.equal(await page.inputValue(tid('news-date')), TODAY, 'date defaults to today');
     await page.fill(tid('news-text'), 'Our paper on dark galaxies was accepted by **ApJ**!');
@@ -574,7 +636,7 @@ try {
   });
 
   await step('paper: delete the hand-typed one', async () => {
-    await page.click(tid('academic-tab-publications'));
+    await openTab('publications');
     await page.waitForSelector(`${tid('pub-row')}[data-id="zhongneutral"]`);
     await page.click(`${tid('pub-row')}[data-id="zhongneutral"] ${tid('pub-delete')}`);
     await page.waitForSelector(tid('confirm-ok'));
@@ -590,8 +652,8 @@ try {
   const CV1 = 'static/documents/cv/My-CV-2026.pdf';
   const CV2 = 'static/documents/cv/Zhong_CV_Nov.pdf';
   await step('首页设置: 简历 CV upload → PDF + params.cv in one commit; preview link; replace deletes the old file', async () => {
-    await page.evaluate(() => { location.hash = '#/profile'; });
-    await page.waitForSelector('body[data-view-ready="profile"]', { state: 'attached' });
+    await page.evaluate(() => { location.hash = '#/settings?tab=home'; });
+    await page.waitForSelector('body[data-tab-ready="settings:home"]', { state: 'attached' });
     await page.waitForSelector(tid('cv-empty'));
     assert.equal(await page.$(tid('preview-cv')), null, 'no CV yet → no CV button in the preview');
     const before = mock.readFile(P_PARAMS);
@@ -679,8 +741,8 @@ try {
     for (const w of [390, 360]) {
       await p.setViewportSize({ width: w, height: w === 390 ? 844 : 740 });
       for (const tab of ['publications', 'talks', 'news']) {
-        await p.evaluate((t) => { location.hash = `#/academic?tab=${t}`; }, tab);
-        await p.waitForSelector(`body[data-view-ready="academic"]`, { state: 'attached' });
+        await p.evaluate(({ r, t }) => { location.hash = `#/${r}?tab=${t}`; }, { r: HOME[tab], t: tab });
+        await p.waitForSelector(`body[data-tab-ready="${HOME[tab]}:${tab}"]`, { state: 'attached' });
         await p.waitForSelector(tid(`academic-list-${tab}`));
         await p.waitForTimeout(150);
         assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${w} ${tab}: horizontal scroll`);
@@ -688,7 +750,7 @@ try {
       }
       await p.evaluate(() => { location.hash = '#/posts'; });
       await p.waitForSelector('body[data-view-ready="posts"]', { state: 'attached' });
-      await p.evaluate(() => { location.hash = '#/academic?tab=publications'; });
+      await p.evaluate(() => { location.hash = '#/research?tab=publications'; });
       await p.waitForSelector(tid('pub-add'));
       await p.tap(tid('pub-add'));
       await p.waitForSelector(tid('pub-form'));
@@ -702,8 +764,9 @@ try {
       await p.tap(tid('pub-form-cancel'));
       await p.waitForSelector(tid('pub-form'), { state: 'detached' });
     }
-    // 学术 is a bottom-bar tab on phones
-    assert.ok(await p.isVisible(tid('nav-academic')));
+    // 研究 and 关于 are bottom-bar tabs on phones
+    assert.ok(await p.isVisible(tid('nav-research')));
+    assert.ok(await p.isVisible(tid('nav-about')));
     await ctx.close();
   });
 
@@ -742,12 +805,12 @@ try {
     assert.ok(homeZh.includes('关于暗星系的论文被'), 'Chinese override on /zh/');
     assert.match(homeEn, /class="button button-cv" href="[^"]*\/viewer\/\?file=%2Fdocuments%2Fcv%2FZhong_CV_Nov\.pdf&(amp;)?lang=en"/);
     assert.match(homeZh, /class="button button-cv" href="[^"]*\/viewer\/\?file=%2Fdocuments%2Fcv%2FZhong_CV_Nov\.pdf&(amp;)?lang=zh"/);
-    // menu: publications on, talks off
+    // menu: publications on (inside the Research ▾ dropdown), talks / news off
     const menu = (/<ul id=["']?menu["']?>([\s\S]*?)<\/ul>/.exec(homeEn) || [])[1] || '';
-    assert.match(menu, /\/publications\/[^>]*><span>Publications<\/span>/, 'publications in the menu');
+    assert.match(menu, /\/publications\/[^>]*>(?:<span>)?Publications\b/, 'publications in the menu');
     assert.ok(!menu.includes('/talks/') && !menu.includes('/news/'), 'talks / news not in the menu');
     const menuZh = (/<ul id=["']?menu["']?>([\s\S]*?)<\/ul>/.exec(homeZh) || [])[1] || '';
-    assert.match(menuZh, /\/zh\/publications\/[^>]*><span>论文<\/span>/, 'publications in the Chinese menu');
+    assert.match(menuZh, /\/zh\/publications\/[^>]*>(?:<span>)?论文/, 'publications in the Chinese menu');
     // social icons
     assert.ok(homeEn.includes('https://orcid.org/0000-0002-1825-0097'));
     assert.ok(homeEn.includes('https://ui.adsabs.harvard.edu/search/q=author%3A%22Zhong%2C%20F.%22&amp;sort=date%20desc') || homeEn.includes('https://ui.adsabs.harvard.edu/search/q=author%3A%22Zhong%2C%20F.%22&sort=date%20desc'));
@@ -758,8 +821,8 @@ try {
   await step('简历 CV 移除: a post still links to the CV → the old file is kept by default (regression); otherwise deleted', async () => {
     mock.setFiles({ 'content/posts/cv-link.md': '---\ntitle: "CV link"\ndate: 2026-10-02\ndraft: false\n---\n\n[My CV](/documents/cv/Zhong_CV_Nov.pdf)\n' }, 'test: a post links to the CV');
     await openAdmin(page, mock);
-    await page.evaluate(() => { location.hash = '#/profile'; });
-    await page.waitForSelector('body[data-view-ready="profile"]', { state: 'attached' });
+    await page.evaluate(() => { location.hash = '#/settings?tab=home'; });
+    await page.waitForSelector('body[data-tab-ready="settings:home"]', { state: 'attached' });
     await page.waitForSelector(tid('cv-remove'));
     await page.click(tid('cv-remove'));
     await page.waitForSelector(tid('cv-old-refs'));

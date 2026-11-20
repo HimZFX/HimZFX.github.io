@@ -19,7 +19,7 @@
 | **永不丢失用户的修改** | 编辑器、首页设置、背景动画都会在本机自动保存；发布失败、冲突、令牌过期时修改都保留。 |
 | **永不写坏文件** | YAML front matter 和 TOML 配置只做"外科手术式"修改，并在写入前重新解析校验（见第 5 节）。 |
 | **一次操作 = 一个提交** | 每次发布用 Git Data API 生成一个原子提交，带冲突检查（见第 3 节）。 |
-| **界面全中文、手机可用** | ≤ 760px 时左侧导航变成底部标签栏（文章 / 页面 / 课程 / 学术 /「更多」，首页设置 / 背景动画 / 资料在「更多」的底部抽屉里）；所有面向用户的报错都是中文。 |
+| **界面全中文、手机可用** | 左侧导航和网站顶部菜单分组一致：关于 / 研究 / 博客 / 课程 / ── / 资料 / 设置（第 16 节）。≤ 760px 时变成底部标签栏（关于 / 研究 / 博客 / 课程 /「更多」，资料 / 设置在「更多」的底部抽屉里）；所有面向用户的报错都是中文。 |
 
 ---
 
@@ -36,7 +36,13 @@ static/admin/
 │   ├── config.js           全局常量：REPO、apiBase()、STORAGE_KEYS、PATHS、LIMITS、站点与语言名称、令牌创建页地址
 │   ├── main.js             入口：登录状态、启动加载、整体布局、传给视图的 ctx、ctx.publish（含冲突对话框）、
 │   │                       部署状态指示器、401 处理（重新登录对话框）、防嵌入、离开前提醒
-│   ├── router.js           hash 路由：canLeave → unmount → 动态 import('./views/<name>.js') → mount
+│   ├── router.js           hash 路由：旧地址重定向（redirect）→ canLeave → unmount → 动态 import('./views/<name>.js') → mount；
+│   │                       replaceCurrent()：视图改地址参数（标签页 ?tab=）时不重新挂载
+│   ├── navmap.js           导航的小工具（纯函数）：旧地址 → 新地址（legacyRedirect）、页面文件属于哪个导航项 / 编辑器「返回」去哪（pageHome）
+│   ├── tabhost.js          分组导航项的标签页外壳（关于 / 研究 / 设置）：标签栏、切换（canLeave、replaceState）、错误提示；
+│   │                       pageVersionsPanel：「关于我」「概览」标签页（一个页面的各语言文件 + 编辑 / 查看）
+│   ├── sitemenu.js         网站菜单和博客分类的 front matter（纯函数）：menu.main 的 parent / weight / identifier（patchMainMenu）、
+│   │                       categories（patchCategories、tidyCategoriesLine）、固定栏目和默认值（第 16 节）
 │   ├── ui.js               DOM 工具 h()/render()、图标、toast、modal/confirmDialog/promptDialog、遮罩、格式化函数
 │   ├── github.js           GitHubClient + GitHubError：极简 REST 客户端，错误统一成中文 message
 │   ├── repo.js             Repo：main 分支文件树的本地视图、读取（带 blob 缓存）、原子提交 + 冲突检查、watchDeploy
@@ -57,12 +63,16 @@ static/admin/
 │   ├── cassette-frame.js   背景动画沙箱 iframe 里的脚本（postMessage 协议）
 │   └── views/
 │       ├── login.js        登录页 + 创建令牌的 5 步说明
-│       ├── posts.js        「文章」列表、本机草稿卡片；也导出列表页共用的工具（pages.js 使用）
-│       ├── pages.js        「页面」列表、导航菜单排序、「新建栏目」
-│       ├── editor.js       文章 / 页面编辑器（Vditor），多语言版本标签页、图片 / 资料、自动保存、发表
+│       ├── about.js        「关于」：标签页 关于我（About 页面的文件）/ 近况（academic.js 的 news）
+│       ├── research.js     「研究」：标签页 概览（Research 栏目页的文件）/ 论文 / 报告与海报（academic.js）
+│       ├── settings.js     「设置」：标签页 首页（profile.js）/ 背景动画（background.js）/ 菜单与页面（pages.js）
+│       ├── posts.js        「博客」文章列表（状态 + 分类筛选、分类徽标）、本机草稿卡片；也导出列表页共用的工具（pages.js 使用）
+│       ├── pages.js        「菜单与页面」：顶部菜单的两层树（栏目 + 下拉菜单里的页面）、顺序、「放在哪个栏目下」、其他页面、「新建栏目」
+│       ├── editor.js       文章 / 页面编辑器（Vditor），多语言版本标签页、图片 / 资料、自动保存、发表；文章的「分类」（对所有语言版本生效）
 │       ├── profile.js      「首页设置」：头像裁剪、名字简介、按钮、简历 CV（立即发布）、社交链接（含学术图标）、节日图标
 │       ├── background.js   「背景动画」：卡带列表、实时预览、参数微调
-│       ├── academic.js     「学术」：论文 / 报告与海报 / 近况（data/*.yaml）、顶部菜单开关、设置（第 15 节）
+│       ├── academic.js     论文 / 报告与海报 / 近况（data/*.yaml）的界面，一次一类（params.section），放在「研究」「关于」的标签页里；
+│       │                   菜单开关（放在 Research ▾ / About ▾ 下）、设置（第 15 节）
 │       ├── courses.js      「课程」：课程列表（分组、顺序）、新建课程、一门课的子推文 / 资料、批量上传、删除课程（第 13 节）
 │       └── files.js        「资料」：static/ 下文件的上传、复制链接（PDF：复制预览链接 /viewer/?file=…）、删除（上传 / 删除逻辑在 uploads.js）
 └── vendor/                 第三方库本地副本（见第 10 节）
@@ -74,17 +84,46 @@ tests/admin/                单元测试 + 端到端测试（见第 9 节）
 
 | 地址 | 视图 | 参数 |
 |---|---|---|
-| `#/posts`（默认） | `views/posts.js` | `filter=all\|published\|draft`（可选） |
+| `#/about` | `views/about.js`（标签页） | `tab=me\|news`（默认 `me`） |
+| `#/research` | `views/research.js`（标签页） | `tab=overview\|publications\|talks`（默认 `overview`） |
+| `#/posts`（默认） | `views/posts.js` | `filter=all\|published\|draft`、`cat=all\|notes\|essays\|none`（都可选；点分类时用 `replaceHash` 写进地址） |
 | `#/edit` | `views/editor.js` | `path=<仓库路径>` 打开已有文件；`new=post`；`new=page&dir=<目录>`（`<目录>` 是已有介绍页的课程 `content/courses/<课程>` 时 = 新子推文）；`draft=<草稿 key>` |
-| `#/pages` | `views/pages.js` | |
 | `#/courses` | `views/courses.js` | `course=<课程网址名>`（可选；有 = 打开这门课） |
-| `#/academic` | `views/academic.js` | `tab=publications\|talks\|news`（可选，默认论文；切换标签页用 `history.replaceState`，不重新挂载） |
-| `#/profile` | `views/profile.js` | |
-| `#/background` | `views/background.js` | |
 | `#/files` | `views/files.js` | `dir=<static 下的目录>`（可选） |
+| `#/settings` | `views/settings.js`（标签页） | `tab=home\|background\|pages`（默认 `home`） |
 | `#/login` | `views/login.js` | 未登录时由外壳自动跳转 |
 
-路由名到模块名的映射在 `main.js` 的 `ROUTES`（例如 `edit` → `editor`）。编辑器里打开课程的页面（`content/courses/<课程>/…`，或新子推文）时，导航高亮「课程」（`activeNavRoute`）；「课程资料」总页 `content/courses/_index.md` 仍属于「页面」。
+路由名到模块名的映射在 `main.js` 的 `ROUTES`（例如 `edit` → `editor`）。
+
+**旧地址**（侧栏重组之前的书签、旧链接）由 `router.js` 的 `redirect` 钩子（`navmap.legacyRedirect`）改到新地址，**替换**历史记录（地址栏里的旧地址来自 hashchange 时被替换；代码里 `navigate('#/旧地址')` 直接记新地址），所以「返回」不会回到旧地址：
+
+| 旧地址 | 新地址 |
+|---|---|
+| `#/academic?tab=publications` / `?tab=talks` | `#/research?tab=publications` / `?tab=talks` |
+| `#/academic?tab=news` | `#/about?tab=news` |
+| `#/academic`（没有 / 不认识的 tab） | `#/research` |
+| `#/profile` | `#/settings?tab=home` |
+| `#/background` | `#/settings?tab=background` |
+| `#/pages` | `#/settings?tab=pages` |
+
+登录前打开旧地址也一样：先改成新地址，登录后回到新地址。
+
+**编辑器属于哪个导航项**（`main.js` 的 `activeNavRoute`，高亮侧栏）和**「返回」回到哪里**（`editor.js` 的 `listHash`）用同一个规则（`navmap.pageHome`）：
+文章 → 博客 `#/posts`；课程里的页面（`content/courses/<课程>/…`）→ 这门课；`content/about*.md` → 关于 `#/about?tab=me`；
+`content/research/_index*` → `#/research?tab=overview`；`content/publications|talks/_index*` → 研究的对应标签页；`content/news/_index*` → `#/about?tab=news`；
+其他页面（博客栏目页 `content/posts/_index*`、「课程资料」总页、分类页、自己建的栏目……）→ 设置 › 菜单与页面 `#/settings?tab=pages`。
+
+### 分组视图的标签页（tabhost.js）
+
+「关于」「研究」「设置」各是一个路由，里面的标签页就是普通视图（`mount(container, params, ctx)`，返回 `{ unmount, canLeave, isDirty }`）：
+
+- 标签栏 `role="tablist"`，每个标签 `role="tab"`、`aria-selected`、选中的 `tabindex=0`，← → Home End 切换（自动激活，焦点跟着走）；testid `<路由>-tab-<id>`（例如 `settings-tab-pages`），数量徽标 `<路由>-count-<id>`（论文 / 报告与海报 / 近况）。
+- 切换：先问当前标签页的 `canLeave()`（选「留下」就不切换）→ `unmount` → 挂载新的；地址用 `ctx.replaceHash('#/<路由>?tab=<id>')`（`router.replaceCurrent`：`history.replaceState`，不新增历史、外壳不重新挂载，路由器记住新地址——之后点侧栏的 `#/<路由>` 会回到第一个标签页）。
+- 整个视图的 `canLeave` / `isDirty` / `unmount` 转给当前标签页：离开「设置」时，首页设置 / 背景动画 / 菜单顺序没保存的修改照样提醒；`beforeunload` 也一样。
+- 标签页的 ctx = 外壳的 ctx，但 `setTitle` 不改顶栏（顶栏显示分组名「关于」「研究」「设置」）。
+- 标签页模块加载失败 / 挂载出错：在标签页里显示 `view-error`（带「重试」），其他标签页照常可用。
+- 挂载完成：外壳根元素 `data-tab-ready=<id>`，`body[data-tab-ready="<路由>:<id>"]`（测试等它；`body[data-view-ready]` 是路由名，例如 `settings`）。
+- 「关于我」「概览」是 `tabhost.pageVersionsPanel`：列出这个页面的每个语言文件（共用版本 / 英文专属……、显示在哪个站点、草稿、路径），「编辑」→ `#/edit?path=…`，「在网站上查看」→ 该语言站点的网址。testid `about-page` / `research-page`，行 `page-version`（`data-path`），按钮 `page-version-edit` / `page-version-view`。
 
 ---
 
@@ -279,6 +318,7 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 | `siteLabel(lang)` / `langName(lang)` | 「中文站 / 英文站」/「中文 / 英文」 |
 | `siteUrl` | `location.origin + '/'` |
 | `navigate(hash, { replace })` | 跳转；跳到当前地址时重新挂载 |
+| `replaceHash(hash)` | 只改当前路由的地址参数（标签页、筛选）：替换地址栏，不新增历史、不重新挂载（`router.replaceCurrent`） |
 | `setTitle(text)` | 设置顶栏标题和 `document.title` |
 | `publish({ message, changes, summary, viewUrl?, viewLabel?, afterCommit? })` | **视图提交修改的唯一入口**（见第 3 节）；`afterCommit` 在遮罩关闭前执行完 |
 | `isPublishing()` | 当前是否正在发布 |
@@ -291,20 +331,21 @@ frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'se
 
 ```bash
 # 在仓库根目录
-node --test tests/admin/            # 单元测试：academic / content / courses（含 uploads）/ formats / github / mark / mock / viewer-lang（index.js 负责加载全部 *.test.mjs）
+node --test tests/admin/            # 单元测试：academic / content / courses（含 uploads）/ formats / github / mark / menu（菜单与分类、旧地址）/ mock / viewer-lang（index.js 负责加载全部 *.test.mjs）
 
-node tests/admin/e2e-shell.mjs       # 登录、导航、退出、401、CSP、手机布局
-node tests/admin/e2e-editor.mjs      # 编辑器：发表 / 更新、英文版、自动保存与恢复、冲突、手机预览、高亮
-node tests/admin/e2e-lists.mjs       # 文章列表、页面与菜单排序、新建栏目
+node tests/admin/e2e-shell.mjs       # 登录、导航（新侧栏、旧地址跳转、标签页、离开提醒）、退出、401、CSP、手机布局
+node tests/admin/e2e-editor.mjs      # 编辑器：发表 / 更新、英文版、自动保存与恢复、冲突、手机预览、高亮、文章分类（所有语言版本一个提交）
+node tests/admin/e2e-lists.mjs       # 博客列表（状态 / 分类筛选）、菜单与页面（两层菜单树、换栏目、顺序、新建栏目）
 node tests/admin/e2e-profile.mjs     # 首页设置、头像裁剪
 node tests/admin/e2e-background.mjs  # 背景动画预览与参数
 node tests/admin/e2e-files.mjs       # 资料上传 / 删除（含拒绝 .html / .svg）
 node tests/admin/e2e-courses.mjs     # 「课程」：新建课程、批量上传（一个提交）、只放进资料、顺序、分组、冲突、新子推文、删除课程，最后 Hugo 构建
 node tests/admin/e2e-courses-site.mjs # 网站的课程资料模板：总页分组与顺序、单元页、构建时的资料列表、面包屑、课程内上一篇 / 下一篇、英文站
+node tests/admin/e2e-nav-site.mjs    # 网站的顶部菜单分组（第 16 节）：下拉菜单（悬停 / ▾ / 键盘 / 手机面板 / 没有 JS / 不超出窗口）、栏目子导航、当前栏目下划线、分类页与分类总览、全部页面 noindex
 node tests/admin/e2e-journey.mjs     # 跨界面的完整使用流程，最后用 Hugo 构建并检查两种语言的网站（含访客打开资料预览 / 嵌入阅读器）
 node tests/admin/e2e-viewer.mjs      # 网站的资料在线预览页 static/viewer/ 与 {{< pdf >}} 短代码（含界面语言的判断顺序）
 node tests/admin/e2e-lang.mjs        # 网站的语言：英文在 /、中文在 /zh/、hreflang、旧 /en/ 链接的跳转（404.html）、语言提示条
-node tests/admin/e2e-academic.mjs    # 「学术」：粘贴 BibTeX → 论文 YAML（逐字）+ PDF、手填（含 arXiv / DOI 格式校验）、修改、冲突、设置、菜单开关、报告 / 近况增删改、简历 CV（上传 / 更换 / 移除，被引用时保留旧文件）、学术社交图标、手机、删除最后一篇、Hugo 构建
+node tests/admin/e2e-academic.mjs    # 研究 / 关于 里的论文、报告、近况：粘贴 BibTeX → 论文 YAML（逐字）+ PDF、手填（含 arXiv / DOI 格式校验）、修改、冲突、设置、菜单开关、报告 / 近况增删改、简历 CV（上传 / 更换 / 移除，被引用时保留旧文件）、学术社交图标、手机、删除最后一篇、Hugo 构建
 node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗、截断、链接过滤、无效日期（报告的无效日期不再让构建失败）、近况 Markdown 链接里的 &、首页近况与 CV、空站点、背景动画按钮
 ```
 
@@ -312,8 +353,8 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 |---|---|
 | `HUGO_BIN` | Hugo 可执行文件，需与 CI 相同（0.147.4 extended）；找不到时依赖 Hugo 的测试自动跳过 |
 | `ADMIN_TEST_TMP` | 测试输出的根目录（默认系统临时目录）；`ADMIN_TEST_KEEP=1` 让 `mock.test.mjs` 保留导出 / 构建结果 |
-| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`、`LANG_E2E_DIR`、`ACADEMIC_E2E_DIR`、`ACADEMIC_SITE_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
-| `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files` / `e2e-courses` / `e2e-courses-site` / `e2e-viewer` / `e2e-lang` / `e2e-academic` / `e2e-academic-site`；编辑器、课程和 `e2e-academic` 的后续用例依赖前面的，只用来调试） |
+| `SHELL_E2E_DIR`、`EDITOR_E2E_DIR`、`LISTS_E2E_DIR`、`PROFILE_E2E_DIR`、`BG_E2E_DIR`、`FILES_E2E_DIR`、`COURSES_E2E_DIR`、`COURSES_SITE_E2E_DIR`、`JOURNEY_E2E_DIR`、`VIEWER_E2E_DIR`、`LANG_E2E_DIR`、`ACADEMIC_E2E_DIR`、`ACADEMIC_SITE_E2E_DIR`、`NAV_SITE_E2E_DIR` | 各 e2e 脚本放 Hugo 构建结果和截图的目录 |
+| `ONLY=<子串>` | 只跑名字包含这个子串的用例（`e2e-shell` / `e2e-editor` / `e2e-files` / `e2e-courses` / `e2e-courses-site` / `e2e-viewer` / `e2e-lang` / `e2e-academic` / `e2e-academic-site` / `e2e-nav-site`；编辑器、课程和 `e2e-academic` 的后续用例依赖前面的，只用来调试） |
 | `SKIP_BUILD=1` | 复用上一次的初始构建（`e2e-shell` / `e2e-lists` / `e2e-profile`） |
 | `DEBUG=1` | 打印浏览器控制台输出（`e2e-editor` / `e2e-journey` / `e2e-courses` / `e2e-viewer` / `e2e-academic`） |
 
@@ -354,7 +395,10 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 
 2. 在 `main.js` 里登记：`ROUTES` 加 `stats: 'stats'`（路由名 → `views/` 下的模块名），`ROUTE_TITLES` 加 `stats: '统计'`；
    要出现在左侧 / 底部导航里，再往 `NAV` 加一项（`route`、`label`、`short`、`icon`（`ui.svgIcon` 已有的图标名）、`testid`；
-   不常用的加 `more: true`：手机上不占底部标签，放进「更多」的底部抽屉）。手机底部最多 5 个标签（360px 宽时每个 ≥ 56px，`e2e-shell.mjs` 检查）。
+   不常用的加 `more: true`：手机上不占底部标签，放进「更多」的底部抽屉；`sep: true` 在电脑侧栏这一项前面画分隔线）。手机底部最多 5 个标签（360px 宽时每个 ≥ 56px，`e2e-shell.mjs` 检查）。
+   **更好的做法通常是不加新的导航项**，而是放进已有分组的标签页：在 `views/settings.js`（或 about / research）的 `tabs` 里加
+   `{ id: 'stats', label: '统计', icon: 'menu', load: () => import('./stats.js') }`，地址就是 `#/settings?tab=stats`。
+   改了路由时记得在 `navmap.legacyRedirect` 里给旧地址留一条跳转。
 3. 需要样式就建 `static/admin/css/views/stats.css`，并在 `index.html` 里加一行 `<link rel="stylesheet">`；尽量复用 `admin.css` 的公共组件。
 4. 写入仓库只能通过 `ctx.publish()`，每个修改的文件都带读取时的 `baseSha`；改 TOML 用 `tomlpatch`，改 front matter 用 `frontmatter.setFields`。
 5. 遵守第 4 节的规则：界面用 `h()` / `textContent` 生成，不把仓库内容写进 `innerHTML`，不引入外部脚本。
@@ -435,7 +479,7 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 
 | 路径 | 内容 |
 |---|---|
-| `content/courses/_index.md`（+ `.en.md`） | 「课程资料」总页：用户写的说明文字 + 导航菜单项。属于「页面」，不属于「课程」 |
+| `content/courses/_index.md`（+ `.en.md`） | 「课程资料」总页：用户写的说明文字 + 顶部菜单的固定栏目（`identifier: courses`）。属于「设置 › 菜单与页面」，不属于「课程」 |
 | `content/courses/<课程>/_index.md`（+ 可选 `_index.<语言>.md`，现在是 `_index.zh.md`） | 课程单元页。`title`、`description`（一句话，卡片上显示）、可选 `group`（自由文字，原样显示）、`weight`（课程之间的顺序）；可选 `materialsDir`（默认 `static/documents/courses/<课程>/`）、`showMaterials`（默认 `true`）。**没有 `menu`** |
 | `content/courses/<课程>/<篇>.md` | 子推文：`title`、`weight`（课程里的顺序）、可选 `description`、`draft: false`。不需要 `date`（课程里不显示日期） |
 | `static/documents/courses/<课程>/` | 资料文件夹，网址 `/documents/courses/<课程>/…` |
@@ -534,10 +578,10 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 
 ---
 
-## 15. 学术（#/academic）：论文 / 报告与海报 / 近况
+## 15. 学术：论文 / 报告与海报 / 近况（#/research?tab=publications|talks、#/about?tab=news）
 
 网站的论文、报告、近况页面（`layouts/publications|talks|news/`、`layouts/partials/academic/`）读 `data/` 下的 YAML，
-后台的「学术」界面负责写这些文件。**数据约定（后台和网站模板共用，两边都按它来）**：
+后台「研究」「关于」里的这几个标签页（`views/academic.js`）负责写这些文件。**数据约定（后台和网站模板共用，两边都按它来）**：
 
 | 目录 | 文件名 | 字段 |
 |---|---|---|
@@ -547,7 +591,7 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 
 - 目录里只有 `.gitkeep`（Hugo 不读以点开头的文件；放 README.md 会让构建失败）。`academic.idFromPath` 只认 `.yaml` / `.yml`。
 - 设置在 `params.toml`：`[publications] myNames / ads / orcid / scholar / groupBy("kind"|"year")`、`[news] homeCount`、顶层 `cv`（简历 PDF 的网站路径，空 = 没有 CV 按钮）。后台用 `tomlpatch.setValue` 只改这几行；键不存在且值是默认（空 / kind / 5）时不写。ORCID / Google 学术在离开输入框时补成完整网址（网站也接受只写编号）；ADS 原样保存（网站把署名转成 ADS 作者检索）。
-- 页面：`content/<栏目>/_index.md`（英文，共用）+ `_index.zh.md`，默认**不在菜单里**。
+- 页面：`content/<栏目>/_index.md`（英文，共用）+ `_index.zh.md`，默认**不在菜单里**；打开菜单开关后放在下拉菜单里（论文、报告与海报在 Research ▾ 下，近况在 About ▾ 下，第 16 节）。
 
 **YAML 写法（`academic.js`）**
 
@@ -564,18 +608,21 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 
 **界面（`views/academic.js`）**
 
-- 三个标签页，每页：「在顶部菜单显示」开关 → 设置卡片（论文：署名写法 / ADS / ORCID / Scholar / 分组；近况：首页显示几条）→ 列表 + 添加。论文列表的分组和网站一致（同行评审 / 已投稿与准备中 / 会议论文与其他，或按年份），`myNames` 加粗。报告分「即将进行 / 过去的」。近况在页面上直接快速添加。
+- 不是单独的路由：`views/research.js` 的「论文」「报告与海报」标签页和 `views/about.js` 的「近况」标签页挂载它，`params.section` 指定显示哪一类（三类数据都会读，删除 PDF 前检查别的记录是否在用）。
+- 每一类：「在菜单里显示（放在 Research ▾ / About ▾ 下）」开关 → 设置卡片（论文：署名写法 / ADS / ORCID / Scholar / 分组；近况：首页显示几条）→ 列表 + 添加。论文列表的分组和网站一致（同行评审 / 已投稿与准备中 / 会议论文与其他，或按年份），`myNames` 加粗。报告分「即将进行 / 过去的」。近况在页面上直接快速添加。
 - **一次保存 = 一个提交**：`data/<目录>/<id>.yaml`（新文件 `baseSha: null`，改 / 删带读取时的 sha）＋本次上传的 PDF（论文 → `static/documents/papers/`，报告 → `static/documents/talks/`，只收 PDF，经过 `uploads.checkUploads` 的检查和确认）。删除时可勾选「同时删除文件」（只限本后台上传目录里、没有别的记录在用的文件）。
 - 冲突：外壳 `repo.load()` 后重新读这一类记录；正在编辑的那条做字段级三方合并（用户没改过的字段换成最新值），再点一次保存。
-- 菜单开关：打开 = 给 `content/<栏目>/_index.md` 和 `_index.<语言>.md` 设 `menu.main.weight`（`pages.patchMenuWeight`，值 = 其他菜单项的最大值取整 + 10）；文件不存在时按网站的中性文字新建；关闭 = `setFields` 去掉 `menu` 里的 main（其他菜单保留，空了删键）。开着但没有条目时显示提醒。
+- 菜单开关（testid `academic-menu-<类>`，卡片 `academic-menu-card-<类>`，状态文字 `academic-menu-state-<类>`）：打开 = 给 `content/<栏目>/_index.md` 和 `_index.<语言>.md` 都写
+  `menu.main.parent` + `weight`（`sitemenu.SECTION_MENU_DEFAULTS`：论文 research / 10，报告与海报 research / 20，近况 about / 10；`sitemenu.patchMainMenu`），已经挂在这个上级下的文件不动（顺序可能在「菜单与页面」里调过）；
+  文件不存在时按网站的中性文字新建（`academicIndexDocument(类, 语言, weight, parent)`）；关闭 = 去掉 `menu` 里的 main（其他菜单保留，空了删键）。
+  **旧写法**（顶部菜单里单独一项：有 `menu.main` 但没有这个 parent）显示提示 `academic-menu-legacy-<类>`，开关是关的；打开时原地改成块状写法并加上 parent（迁移）。开着但没有条目时显示提醒。
 
 **首页设置里的相关部分（`views/profile.js`）**
 
 - 「简历 CV」卡片：上传 PDF（`safeFileName` 保留原文件名，放进 `static/documents/cv/`）→ 一个提交：PDF + `params.toml` 的 `cv = "/documents/cv/…"`；换一份时默认删除旧文件；移除 = `cv = ""`。这张卡片**立即发布**，不经过「保存并发布」；发布后只更新 `st.files.params` 的基准，表单里未发布的修改不受影响。显示在线预览链接，首页预览里多一个 CV 按钮。
 - 社交链接：学术图标排在前面（ORCID、Google 学术、NASA ADS `ads`、arXiv `arxiv`、ResearchGate、简历 CV、LinkedIn、Bluesky、Mastodon）；`ads` / `arxiv` 是网站 `layouts/partials/social_icons.html` 自己加的图标。网址框的提示随图标变（`SOCIAL_HINTS`），离开输入框时补全（`normalizeSocialUrl`：ORCID 号 → https://orcid.org/…，`@me@host` → Mastodon 主页 …），格式不对时提醒（`socialUrlWarning`，含 ORCID 校验位），不阻止保存。
 
-**导航**：`main.js` 的 `NAV` 里「学术」排在「课程」后面（`route: 'academic'`、图标 `academic`、testid `nav-academic`）。手机底部只放 `more` 不为 true 的四项（文章 / 页面 / 课程 / 学术）+「更多」按钮（`nav-more`），
-首页设置 / 背景动画 / 资料是 `more: true`，在「更多」打开的底部抽屉（`more-sheet`，链接 testid `more-<路由>`）里；当前页面在抽屉里时「更多」高亮，`aria-label` 写出当前页。电脑上「更多」隐藏，左侧照常列出全部七项。
+**导航**：见第 16 节（论文 / 报告与海报在「研究」里，近况在「关于」里；旧地址 `#/academic?tab=…` 自动跳转）。
 
 **测试**
 
@@ -583,3 +630,85 @@ node tests/admin/e2e-academic-site.mjs # 网站的学术模板：分组、加粗
 - `node tests/admin/e2e-academic.mjs`（`ACADEMIC_E2E_DIR`）：后台「学术」与首页设置的简历 / 学术图标，检查提交内容（逐字的 YAML、PDF 字节），最后用 Hugo 构建。
 - `node tests/admin/e2e-academic-site.mjs`（`ACADEMIC_SITE_E2E_DIR`）：只测网站模板（固定夹具，不碰真实 `data/`），并检查构建输出的 WARN / ERROR（故意写错的夹具只能产生预期的警告）。
 - 手机导航：`e2e-shell.mjs`（底部 5 个标签、360px 宽、「更多」抽屉）；语言：`e2e-lang.mjs`（第 14 节）。
+
+---
+
+## 16. 导航分组、网站下拉菜单与博客分类
+
+网站顶部菜单只有 4 项：About / Research / Blog / Course Materials，其余页面挂在它们的下拉菜单里（网站另外在每个栏目的页面顶部显示一行子页面标签）。
+后台的侧栏按同样的分组：
+
+| 侧栏（testid） | 地址 | 里面 |
+|---|---|---|
+| 关于（`nav-about`） | `#/about` | 标签页 关于我（`me`）· 近况（`news`） |
+| 研究（`nav-research`） | `#/research` | 标签页 概览（`overview`）· 论文（`publications`）· 报告与海报（`talks`） |
+| 博客（`nav-posts`） | `#/posts`（默认页） | 文章列表 + 分类筛选 |
+| 课程（`nav-courses`） | `#/courses` | 第 13 节 |
+| ── 分隔线 | | |
+| 资料（`nav-files`，手机上在「更多」里：`more-files`） | `#/files` | |
+| 设置（`nav-settings`，手机上在「更多」里：`more-settings`） | `#/settings` | 标签页 首页（`home`）· 背景动画（`background`）· 菜单与页面（`pages`） |
+
+手机底部标签栏：关于 / 研究 / 博客 / 课程 /「更多」（`nav-more`，抽屉 `more-sheet`）。当前页面在抽屉里时「更多」高亮，`aria-label` 写出当前页。
+
+**菜单的 front matter 约定**（网站模板和后台共用；实现：`sitemenu.js`）
+
+```yaml
+# 4 个顶层栏目（content/about.md、content/research/_index.md、content/posts/_index.md、content/courses/_index.md 和它们的各语言文件）
+menu:
+  main:
+    identifier: research   # about | research | posts | courses
+    weight: 20             # 10 | 20 | 30 | 40
+# 挂在下拉菜单里的页面（它的每个语言文件都写）
+menu:
+  main:
+    parent: research       # 上级的 identifier
+    weight: 10
+```
+
+- 不在菜单 = 没有 `menu.main`（页面照样能通过网址打开，也不出现在下拉菜单 / 子页面标签里）。没有 `parent` 的 `menu.main` = 顶层独立一项。
+- `sitemenu.patchMainMenu(text, { parent, weight } | null)`：块状写法时用 `setFields` 逐层只改变化的子键（注释、`identifier` 等其他键保留；新加的 `parent` 写成 `parent: research` 不带引号，排在已有子键后面）；
+  原来没有 `menu` 时在 front matter 末尾追加上面的块；原来是单行写法（`menu: { main: { weight: 50 } }`、`menu: main`）时在**原位置**换成块状写法（`parent` 在 `weight` 前）。结果重新解析校验，正文一字不改。
+- 4 个固定栏目（有 `identifier` 且没有 `parent`，`isFixedTop`）在「菜单与页面」里只能改顺序（没有「放在哪个栏目下」，带「固定栏目」徽标），编辑器里「显示在顶部菜单」开关是灰的：不能去掉 identifier、不能挂到别处。
+
+**网站这一侧**（不属于后台，写在这里是因为约定是共同的；使用方法见 [SITE_GUIDE.md 第 7 节](../SITE_GUIDE.md#7-导航菜单)）
+
+| 文件 | 作用 |
+|---|---|
+| `layouts/partials/nav/tree.html` | 算一次菜单树（`return` 一个列表），页头和子导航共用，保证两处一样。每项：`id`（identifier）、`name`、`url`、`self`（i18n `subnav_self_<id>`，没有就用菜单名）、`kids`（Hugo 菜单树里 `parent = <id>` 的页面按 weight；`posts` 再追加这个语言里**至少有一篇文章**的分类页，按分类 `_index` 的 weight；已经作为菜单子项的不重复）、`active`、`here` |
+| `layouts/partials/header.html` | PaperMod 原样拷贝，只改了 `#menu`：有 `kids` 的项是 `li.has-sub[data-nav=<id>]` > `a`（`span.active`、`aria-current`）+ `button.nav-caret`（`aria-expanded`、`aria-controls=nav-sub-<id>`、testid `nav-caret-<id>`）+ `div.nav-sub#nav-sub-<id>`（`a.nav-sub-link`，第一项是上级本身）。下拉是 **div 里的链接，不是嵌套的 `<ul>`**；没有 `kids` 的项和原来一样 |
+| `layouts/partials/subnav.html` + `layouts/_default/baseof.html` | 子导航 `nav.subnav[data-nav=<id>]`（testid `subnav`）是 `<main>` 的第一个子元素；baseof 是 PaperMod 原样 + 这一行 partial。显示条件：这一项有 `kids`，且当前页是上级本身（含分页）、某个子项、或（只限 posts）`/categories/` 总览 / 分类页（含空分类）。首页、单篇文章、没有子项的栏目不显示 |
+| `layouts/categories/term.html`、`taxonomy.html` | 分类页（PaperMod 的卡片列表 + 空分类提示 `p.category-empty`）；分类总览（每个分类一张卡片：名称、description、文章数，空分类也列） |
+| `layouts/partials/post_meta.html` | PaperMod 拷贝 + 文章信息栏里的分类链接 `span.post-cat` |
+| `assets/js/nav.js` | 本站脚本（只在有 `li.has-sub` 时由 header 加载，defer）：给 `#menu` 加 `nav-js`，展开的项 `li.is-open`（点 ▾ 固定的再加 `is-pinned`），`aria-expanded` 同步；宽屏（≥ 769px）悬停展开、点 ▾ 固定、点别处 / Esc / 焦点离开收起，伸出窗口右边时加 `nav-sub-end` 右对齐；手机（≤ 768px）点 ▾ 开关页头下面的整宽面板，`pointerdown` + `click` 都会关闭；一次只开一个 |
+| `assets/css/extended/nav.css` | 样式（只用主题变量，深浅色自动）；没有 JS 时宽屏靠 `:hover` / `:focus-within` 展开；手机上 `#menu` 折行而不是横向滚动 |
+| `i18n/en.yaml`、`zh.yaml` | `subnav_self_about\|research\|posts`、`nav_submenu_show`、`subnav_label`、`categories_title`、`category_label`、`category_post_count`、`category_empty` |
+
+- 当前栏目的下划线（`span.active`）：上级本身、任一子项、栏目里的页面（Hugo 的 `HasMenuCurrent`：博客文章、课程单元和子推文）、`categories` / `tags` 页（算 Blog）。
+- 所有页面（含 `/categories/`、分类页、`/tags/`）都继承 `hugo.toml` 的 `robotsNoIndex`，没有加 JSON-LD 或别的 meta。
+- 后台的构建检查（`e2e-lists` / `e2e-courses` / `e2e-journey` / `e2e-academic`）只取顶层菜单项时会去掉 `<div class="nav-sub">`，`e2e-journey` 从 `div#nav-sub-<id>` 读下拉菜单。改网站的这些钩子时要同步这些测试。
+
+**「菜单与页面」（`views/pages.js`）**
+
+- 树：顶层按 weight（固定栏目 + 独立项），每个栏目下面紧跟它的子页面（`data-level="child"`、`data-parent=<id>`，缩进）；栏目还没有子页面时一行说明（`page-children-empty`）。上级不存在的子页面（`parent: nowhere`）放在最后，带 `page-orphan` 提醒。
+- 不在菜单的页面在「其他页面」（`pages-other-list`）。博客分类页（`content/categories/…`）只列出来、没有选择框（网站自动把有文章的分类放进 Blog ▾）。课程目录下的页面不列（在「课程」里管理）。
+- 每个非固定页面一个「放在哪个栏目下」（`page-place`）：`none` 不在菜单 / `about` / `research` / `posts` / `courses` / `top` 顶层（独立一项）。换栏目时顺序默认排在那一层最后（`nextMenuWeight`）。
+- 同一层里改顺序：数字（`page-weight`）+ ↑ ↓（`page-up` / `page-down`，只和同一层的邻居交换）。菜单预览（`nav-preview-<语言>`）显示「Research ▾ 论文 · 报告与海报」。
+- 顺序只收**不是 0 的整数**（`sitemenu.menuWeightError`，「新建栏目」、编辑器的菜单顺序同样）：Hugo 的菜单 weight 是整数，0 表示「没有顺序」、排到最后，和后台预览不一致；`patchMainMenu` 也拒绝非整数。
+- 有语言文件的设置区后台读不了（TOML、格式错误、读取失败）的页面：没有「放在哪个栏目下」和顺序框（`page-locked`），↑ ↓ 也不和它交换，避免保存时被跳过却显示成已修改。
+- 「保存菜单」（`pages-save-order`）= 一个提交，只含改动了的文件：换了位置的页面**所有语言文件**都写成同一个 `{ parent, weight }`；只改顺序时只改在菜单里的语言文件的 weight（各自的 parent 不变）。
+  提交信息：只改顺序 `admin: 调整菜单顺序`，换过位置 `admin: 调整菜单`。有没保存的修改时切换标签页、离开「设置」都会提醒。
+- 「新建栏目」：多了「放在哪个栏目下」（`new-section-place`，默认「不在菜单」，这时没有顺序框）；选了栏目后顺序（`new-section-weight`）默认排在那一层最后。
+  写出的 front matter：不在菜单 `title` 一行；顶层 `menu: main: weight`；下拉菜单里 `menu: main: parent + weight`（`sectionFrontMatter(title, weight, parent)`）。提交信息 `admin: 新建栏目《名称》（Research ▾ 下）`。
+
+**博客分类**
+
+- Hugo 的 `categories` 分类法，固定的键：`notes`（科研笔记 / Research Notes）、`essays`（随笔 / Essays）。分类页 `content/categories/<键>/_index.md`（+ `.zh.md`）。
+- 一篇文章写 `categories: [notes]`（读的时候 `categories: notes` 也认，`sitemenu.categoriesOf`）；不分类 = 没有这个键（只出现在「全部文章」里）。
+- 编辑器（文章才有）：「分类」下拉框 `editor-category`：不分类（`''`）/ 科研笔记（`notes`）/ 随笔（`essays`）；文件里写了别的或多个分类时多一项「保持原样（…）」。
+  提示 `editor-category-hint`「分类对中英文版本同时生效」。改了下拉框 = 所有语言版本的表单一起改；**保存一个版本时，其他已有的语言版本分类不同的话在同一个提交里一起改**（`patchCategories`：只改 categories 那一行，注释保留；一样就不碰），
+  它们自己没保存的修改不受影响。写出的行是 `categories: [notes]`（`tidyCategoriesLine` 把 setFields 的 `["notes"]` 换成不带引号的写法，只在这次改了分类时）。新文章默认不分类。
+- 博客列表：状态筛选下面一行分类筛选 `posts-cat-all|notes|essays|none`（全部 / 科研笔记 / 随笔 / 未分类，带数量；按默认语言站点显示的那个版本），地址 `#/posts?cat=…`；
+  每行的分类徽标 `post-category`（`data-cat`，不认识的键原样显示）；各语言版本分类不同时 `post-category-mixed`。
+
+**测试**：`e2e-nav-site.mjs`（`NAV_SITE_E2E_DIR`，网站这一侧：真实仓库 + 子页面都打开的夹具 + 长名字夹具三次构建，见 [tests/admin/README.md](../tests/admin/README.md)）；`menu.test.mjs`（约定常量、`patchMainMenu` 各种写法、分类读写、旧地址跳转、`pageHome`）；`e2e-shell.mjs`（侧栏顺序与分隔线、手机底栏和「更多」、旧地址跳转不留历史、标签页键盘 / replaceState / 不重新挂载、标签页和整个分组的离开提醒、标签页模块缺失）；
+`e2e-lists.mjs`（分类筛选与徽标、菜单树：挂到 Research ▾、下拉菜单里调顺序、换栏目 / 移出菜单、新建带上级的栏目、上级不存在，逐字检查提交）；`e2e-academic.mjs`（三个菜单开关写 parent、旧写法迁移）；`e2e-editor.mjs`（分类：两个语言版本一个提交、注释保留、新文章）。

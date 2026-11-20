@@ -1,0 +1,258 @@
+/* 顶部菜单的下拉菜单（layouts/partials/header.html、assets/js/nav.js）和栏目子导航（layouts/partials/subnav.html）。
+   颜色只用 PaperMod 的主题变量（--entry、--primary、--secondary、--border …），深浅色自动。
+
+   下拉菜单 .nav-sub 的位置：
+   · 宽屏（≥ 769px）：挂在菜单项下面的小卡片。PaperMod 的 #menu 是可以横向滚动的（overflow-x: auto），
+     会把卡片裁掉，所以宽屏上改成 overflow: visible（四个菜单项在这个宽度下一定放得下）。
+   · 手机（≤ 768px）：#menu 放不下时折成两行（不再横向滚动、把「课程资料」藏到右边）；展开的子菜单以整个页头（.header）
+     为定位基准，显示成页头正下方一整行宽的面板，不会让页面出现横向滚动。
+   有 JavaScript 时（#menu.nav-js）只看 .is-open；没有时宽屏上鼠标悬停 / Tab 键进入也能展开（下面的 :not(.nav-js) 规则）。 */
+
+.header {
+    position: relative;
+}
+
+#menu .has-sub {
+    display: flex;
+    align-items: center;
+}
+
+.nav-caret {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 32px;
+    margin-inline-start: 1px;
+    padding: 0;
+    color: var(--secondary);
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nav-caret:hover,
+.nav-caret[aria-expanded="true"] {
+    color: var(--primary);
+}
+
+.nav-caret:focus-visible {
+    outline: 2px solid var(--secondary);
+    outline-offset: -2px;
+}
+
+.nav-caret svg {
+    display: block;
+    transition: transform 0.2s;
+}
+
+.nav-caret[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+}
+
+.nav-sub {
+    display: none;
+    position: absolute;
+    z-index: 60;
+    padding: 6px;
+    line-height: 1.4;
+    white-space: nowrap;
+    background: var(--entry);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+}
+
+#menu .nav-sub-link {
+    display: block;
+    padding: 8px 14px;
+    font-size: 15px;
+    color: var(--primary);
+    border-radius: 6px;
+}
+
+#menu .nav-sub-link:hover,
+#menu .nav-sub-link:focus-visible {
+    background: var(--code-bg);
+}
+
+[data-theme="dark"] #menu .nav-sub-link:hover,
+[data-theme="dark"] #menu .nav-sub-link:focus-visible {
+    background: var(--tertiary);
+}
+
+#menu .nav-sub-link:focus-visible {
+    outline: 2px solid var(--secondary);
+    outline-offset: -2px;
+}
+
+#menu .nav-sub-link[aria-current="page"] {
+    font-weight: 600;
+}
+
+#menu .has-sub.is-open > .nav-sub {
+    display: block;
+}
+
+@media screen and (min-width: 769px) {
+    #menu {
+        overflow: visible;
+    }
+
+    #menu .has-sub {
+        position: relative;
+    }
+
+    /* 宽度跟着最长的子页面名字走，但最多 300px（更长的名字折行），不会把页面撑出横向滚动条 */
+    #menu .nav-sub {
+        top: calc(100% - 10px);
+        left: -12px;
+        width: max-content;
+        min-width: 170px;
+        max-width: min(300px, calc(100vw - 2 * var(--gap)));
+        white-space: normal;
+    }
+
+    /* 靠右的卡片改成和菜单项右边对齐，免得伸出窗口：最后一项（例如给「课程资料」挂了子页面时）总是这样；
+       其他项由 nav.js 在展开时量一下，放不下才加 .nav-sub-end */
+    #menu > .has-sub:last-child > .nav-sub,
+    #menu > .has-sub.nav-sub-end > .nav-sub {
+        left: auto;
+        right: -12px;
+    }
+
+    #menu:not(.nav-js) .has-sub:focus-within > .nav-sub {
+        display: block;
+    }
+}
+
+@media screen and (min-width: 769px) and (hover: hover) {
+    #menu:not(.nav-js) .has-sub:hover > .nav-sub {
+        display: block;
+    }
+}
+
+@media screen and (max-width: 768px) {
+    /* 手机上 ▾ 让菜单变宽了：一行放不下时折到第二行（每行矮一些），而不是让「课程资料」藏在横向滚动的右边 */
+    #menu {
+        flex-wrap: wrap;
+        column-gap: var(--gap);
+        overflow: visible;
+        white-space: nowrap;
+        line-height: 44px;
+    }
+
+    #menu li + li {
+        margin-inline-start: 0;
+    }
+
+    #menu .nav-sub {
+        top: 100%;
+        left: 0;
+        right: 0;
+        padding: 6px var(--gap) 10px;
+        border-width: 1px 0;
+        border-radius: 0;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
+        white-space: normal;
+    }
+
+    #menu .nav-sub-link {
+        padding: 11px 12px;
+        font-size: 16px;
+    }
+
+    #menu:not(.nav-js) .has-sub:focus-within > .nav-sub {
+        display: block;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nav-caret svg {
+        transition: none;
+    }
+}
+
+/* ---------- 栏目子导航（正文最上面的一排标签） ----------
+   一行放不下时（手机）在这一行里横向滑动，页面本身不会变宽。 */
+
+.subnav {
+    margin: 0 0 4px;
+    min-width: 0;
+}
+
+.subnav-list {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    padding: 2px;
+    list-style: none;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.subnav-list::-webkit-scrollbar {
+    display: none;
+}
+
+.subnav-list li {
+    flex: none;
+}
+
+.subnav-link {
+    display: inline-block;
+    padding: 6px 14px;
+    font-size: 14px;
+    line-height: 1.4;
+    white-space: nowrap;
+    color: var(--secondary);
+    background: var(--entry);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+}
+
+.subnav-link:hover {
+    color: var(--primary);
+    border-color: var(--tertiary);
+}
+
+.subnav-link:focus-visible {
+    outline: 2px solid var(--secondary);
+    outline-offset: 1px;
+}
+
+.subnav-link[aria-current="page"] {
+    font-weight: 500;
+    color: var(--theme);
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+/* ---------- 博客分类 ---------- */
+
+/* 文章信息行里的分类链接（layouts/partials/post_meta.html）。列表卡片整张是一个链接（.entry-link），分类链接放在它上面才点得到。 */
+.post-cat a {
+    position: relative;
+    z-index: 1;
+    color: inherit;
+}
+
+.post-cat a:hover {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* 还没有文章的分类页（layouts/categories/term.html） */
+.category-empty {
+    margin: 24px 0;
+    padding: 28px 16px;
+    font-size: 15px;
+    text-align: center;
+    color: var(--secondary);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+}

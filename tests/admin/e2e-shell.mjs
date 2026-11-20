@@ -262,12 +262,14 @@ async function main() {
     await test('login returns to the originally requested route', async () => {
       const { context, page } = await newPage();
       await openLoggedOut(page, mock);
+      // an OLD address (#/profile, before the sidebar was regrouped) is first rewritten to its new home
       await page.goto(mock.url + '/admin/#/profile');
       await page.waitForSelector('body[data-testid="login-ready"]', { state: 'attached' });
       await page.fill('[data-testid="login-token"]', mock.token);
       await page.click('[data-testid="login-submit"]');
-      await waitViewReady(page, 'profile');
-      assert.equal(await page.evaluate(() => location.hash), '#/profile');
+      await waitViewReady(page, 'settings');
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=home');
+      await page.waitForSelector('body[data-tab-ready="settings:home"]', { state: 'attached' });
       await context.close();
     });
 
@@ -312,12 +314,16 @@ async function main() {
     await test('navigating between all routes never crashes (missing views → friendly error)', async () => {
       const { context, page, st } = await newPage();
       await openAdmin(page, mock);
-      // navigation order: 文章 · 页面 · 课程 · 学术 · 首页 · 背景 · 资料 (desktop sidebar lists all of them; 「更多」 is phone-only)
-      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => a.dataset.route)), ['posts', 'pages', 'courses', 'academic', 'profile', 'background', 'files']);
-      assert.deepEqual(await page.$$eval('.nav-item .nav-label', (els) => els.map((e) => e.textContent)), ['文章', '页面', '课程', '学术', '首页设置', '背景动画', '资料']);
+      // navigation order: 关于 · 研究 · 博客 · 课程 · ── · 资料 · 设置 (desktop sidebar lists all of them; 「更多」 is phone-only)
+      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => a.dataset.route)), ['about', 'research', 'posts', 'courses', 'files', 'settings']);
+      assert.deepEqual(await page.$$eval('.nav-item .nav-label', (els) => els.map((e) => e.textContent)), ['关于', '研究', '博客', '课程', '资料', '设置']);
+      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => a.dataset.testid)), ['nav-about', 'nav-research', 'nav-posts', 'nav-courses', 'nav-files', 'nav-settings']);
       assert.ok(await page.$$eval('.nav-item', (els) => els.every((a) => a.getBoundingClientRect().height >= 40)), 'every route visible in the desktop sidebar');
+      // a visual separator before 资料 (only one)
+      assert.deepEqual(await page.$$eval('.nav-item', (els) => els.map((a) => getComputedStyle(a, '::before').borderTopStyle === 'solid')), [false, false, false, false, true, false]);
       assert.equal(await page.isVisible('[data-testid="nav-more"]'), false, '「更多」 is hidden on desktop');
-      for (const [testid, route] of [['nav-pages', 'pages'], ['nav-courses', 'courses'], ['nav-academic', 'academic'], ['nav-profile', 'profile'], ['nav-background', 'background'], ['nav-files', 'files'], ['nav-posts', 'posts']]) {
+      for (const [testid, route, title, tab] of [['nav-about', 'about', '关于', 'me'], ['nav-research', 'research', '研究', 'overview'], ['nav-courses', 'courses', '课程'],
+        ['nav-files', 'files', '资料'], ['nav-settings', 'settings', '设置', 'home'], ['nav-posts', 'posts', '博客']]) {
         await page.click(`[data-testid="${testid}"]`);
         await waitViewReady(page, route);
         assert.equal(await page.evaluate(() => location.hash.split('?')[0]), '#/' + route);
@@ -327,8 +333,13 @@ async function main() {
           return { exists: !!v, children: v ? v.childElementCount : 0, error: !!document.querySelector('[data-testid="view-error"]'), title: document.querySelector('#page-title')?.textContent };
         });
         assert.ok(info.exists && info.children > 0, `${route}: view is blank`);
-        assert.ok(info.title, `${route}: no page title`);
-        if (info.error) console.log(`      (${route}: view module not available yet — friendly error shown)`);
+        assert.equal(info.title, title, `${route}: page title`);
+        assert.ok(!info.error, `${route}: view error`);
+        if (tab) {
+          // grouped views open on their first tab
+          await page.waitForSelector(`body[data-tab-ready="${route}:${tab}"]`, { state: 'attached' });
+          assert.equal(await page.getAttribute(`[data-testid="${route}-tab-${tab}"]`, 'aria-selected'), 'true');
+        }
       }
       // editor + unknown route
       await page.click('[data-testid="nav-new-post"]');
@@ -341,12 +352,16 @@ async function main() {
       await page.goBack();
       await page.waitForFunction(() => location.hash.startsWith('#/edit') || location.hash === '#/does-not-exist');
       await page.waitForFunction(() => document.body.dataset.viewReady === 'edit' || document.body.dataset.viewReady === 'posts');
-      // a page opened from a local draft key highlights 页面, a post draft 文章
-      for (const [hash, nav] of [['#/edit?draft=' + encodeURIComponent('file:content/about.md'), 'nav-pages'],
+      // the editor highlights the nav item a file belongs to: About → 关于, Research / publications → 研究, news → 关于,
+      // posts → 博客, course pages → 课程; other pages (the 课程资料 landing page, the blog section page…) → 设置 (菜单与页面)
+      for (const [hash, nav] of [['#/edit?draft=' + encodeURIComponent('file:content/about.md'), 'nav-about'],
         ['#/edit?draft=' + encodeURIComponent('file:content/posts/first-physics-note.md'), 'nav-posts'],
-        // a course page / new course sub-post highlights 课程; the 课程资料 landing page itself stays under 页面
+        ['#/edit?path=' + encodeURIComponent('content/research/_index.en.md'), 'nav-research'],
+        ['#/edit?draft=' + encodeURIComponent('file:content/publications/_index.zh.md'), 'nav-research'],
+        ['#/edit?draft=' + encodeURIComponent('file:content/news/_index.md'), 'nav-about'],
         ['#/edit?draft=' + encodeURIComponent('file:content/courses/lab/exp-1.md'), 'nav-courses'],
-        ['#/edit?draft=' + encodeURIComponent('file:content/courses/_index.md'), 'nav-pages']]) {
+        ['#/edit?draft=' + encodeURIComponent('file:content/posts/_index.md'), 'nav-settings'],
+        ['#/edit?draft=' + encodeURIComponent('file:content/courses/_index.md'), 'nav-settings']]) {
         await page.evaluate((h) => { location.hash = h; }, hash);
         await page.waitForFunction((n) => document.querySelector(`[data-testid="${n}"]`)?.getAttribute('aria-current') === 'page', nav);
       }
@@ -359,10 +374,17 @@ async function main() {
       await page.route('**/admin/js/views/background.js', (r) => r.fulfill({ status: 404, body: 'nope' }));
       await fakeView(page, 'files', 'export default async function mount() { throw new Error("测试：挂载失败"); }');
       await openAdmin(page, mock);
-      await page.click('[data-testid="nav-background"]');
-      await waitViewReady(page, 'background');
+      // a tab whose module is missing shows the friendly error INSIDE the tab; the other tabs still work
+      await page.click('[data-testid="nav-settings"]');
+      await waitViewReady(page, 'settings');
+      await page.click('[data-testid="settings-tab-background"]');
+      await page.waitForSelector('body[data-tab-ready="settings:background"]', { state: 'attached' });
       await page.waitForSelector('[data-testid="view-error"]');
       assert.match(await page.textContent('[data-testid="view-error"]'), /暂时打不开/);
+      assert.ok(await page.isVisible('[data-testid="settings-tab-pages"]'), 'tab bar still there');
+      await page.click('[data-testid="settings-tab-pages"]');
+      await page.waitForSelector('body[data-tab-ready="settings:pages"]', { state: 'attached' });
+      assert.equal(await page.$('[data-testid="view-error"]'), null);
       await page.click('[data-testid="nav-files"]');
       await waitViewReady(page, 'files');
       assert.match(await page.textContent('[data-testid="view-error"]'), /测试：挂载失败/);
@@ -530,9 +552,10 @@ async function main() {
       await fakeView(page, 'files', PUBLISH_VIEW);
       await openAdmin(page, mock, { path: '/admin/#/files' });
       await waitViewReady(page, 'files');
+      // ctx.navigate to an old address lands on its new home (#/pages → 设置 › 菜单与页面)
       await page.click('[data-testid="t-nav"]');
-      await waitViewReady(page, 'pages');
-      assert.equal(await page.evaluate(() => location.hash), '#/pages');
+      await waitViewReady(page, 'settings');
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=pages');
       assert.equal(await page.evaluate(() => window.__unmounted), 1);
       await page.goBack();
       await waitViewReady(page, 'files');
@@ -624,6 +647,129 @@ async function main() {
       await context.close();
     });
 
+    await test('grouped views: old addresses redirect (replace, no history entry); tabs switch via replaceState without remounting', async () => {
+      const { context, page, st } = await newPage();
+      await openAdmin(page, mock, { path: '/admin/#/files' });
+      await waitViewReady(page, 'files');
+      // every old address → its new home; the old address never stays in the history
+      for (const [from, to, route, tab] of [
+        ['#/academic?tab=publications', '#/research?tab=publications', 'research', 'publications'],
+        ['#/academic?tab=talks', '#/research?tab=talks', 'research', 'talks'],
+        ['#/academic?tab=news', '#/about?tab=news', 'about', 'news'],
+        ['#/academic', '#/research', 'research', 'overview'],
+        ['#/profile', '#/settings?tab=home', 'settings', 'home'],
+        ['#/background', '#/settings?tab=background', 'settings', 'background'],
+        ['#/pages', '#/settings?tab=pages', 'settings', 'pages'],
+      ]) {
+        await page.evaluate(() => { location.hash = '#/files'; });
+        await waitViewReady(page, 'files');
+        await page.evaluate((h) => { location.hash = h; }, from);
+        await waitViewReady(page, route);
+        await page.waitForSelector(`body[data-tab-ready="${route}:${tab}"]`, { state: 'attached' });
+        assert.equal(await page.evaluate(() => location.hash), to, from);
+        assert.equal(await page.getAttribute(`[data-testid="${route}-tab-${tab}"]`, 'aria-selected'), 'true', from);
+        assert.equal(await page.getAttribute(`[data-testid="nav-${route}"]`, 'aria-current'), 'page', from);
+        // the redirect REPLACES the entry with the old address: Back → the previous page, Forward → the new address
+        await page.goBack();
+        await waitViewReady(page, 'files');
+        assert.equal(await page.evaluate(() => location.hash), '#/files', `${from}: Back returns to the previous page, not the old address`);
+        await page.goForward();
+        await waitViewReady(page, route);
+        assert.equal(await page.evaluate(() => location.hash), to, `${from}: Forward → the new address`);
+      }
+      // tabs: click / keyboard; the address follows with replaceState (no history entry), the shell is not remounted
+      await page.evaluate(() => { location.hash = '#/research'; });
+      await waitViewReady(page, 'research');
+      await page.waitForSelector('body[data-tab-ready="research:overview"]', { state: 'attached' });
+      assert.equal(await page.getAttribute('[data-testid="research-tabs"]', 'role'), 'tablist');
+      assert.deepEqual(await page.$$eval('[data-testid="research-tabs"] [role="tab"]', (els) => els.map((e) => [e.dataset.testid, e.textContent.replace(/\d+$/, '').trim(), e.tabIndex])),
+        [['research-tab-overview', '概览', 0], ['research-tab-publications', '论文', -1], ['research-tab-talks', '报告与海报', -1]]);
+      const marker = await page.evaluate(() => { const v = document.querySelector('#main > .view'); v.dataset.marker = 'same'; return history.length; });
+      await page.click('[data-testid="research-tab-publications"]');
+      await page.waitForSelector('body[data-tab-ready="research:publications"]', { state: 'attached' });
+      assert.equal(await page.evaluate(() => location.hash), '#/research?tab=publications');
+      await page.keyboard.press('ArrowRight');
+      await page.waitForSelector('body[data-tab-ready="research:talks"]', { state: 'attached' });
+      assert.equal(await page.evaluate(() => location.hash), '#/research?tab=talks');
+      assert.equal(await page.evaluate(() => document.activeElement?.dataset.testid), 'research-tab-talks', 'focus follows the selected tab');
+      await page.keyboard.press('ArrowRight'); // wraps around
+      await page.waitForSelector('body[data-tab-ready="research:overview"]', { state: 'attached' });
+      await page.keyboard.press('End');
+      await page.waitForSelector('body[data-tab-ready="research:talks"]', { state: 'attached' });
+      await page.keyboard.press('Home');
+      await page.waitForSelector('body[data-tab-ready="research:overview"]', { state: 'attached' });
+      assert.equal(await page.evaluate(() => document.querySelector('#main > .view').dataset.marker), 'same', 'the view (and the shell) was not remounted');
+      assert.equal(await page.evaluate(() => history.length), marker, 'tab switches add no history entries');
+      assert.equal(await page.textContent('#page-title'), '研究');
+      // clicking the sidebar item while on another tab goes back to the first tab (the router knows the current address)
+      await page.click('[data-testid="research-tab-talks"]');
+      await page.waitForSelector('body[data-tab-ready="research:talks"]', { state: 'attached' });
+      await page.click('[data-testid="nav-research"]');
+      await page.waitForSelector('body[data-tab-ready="research:overview"]', { state: 'attached' });
+      assert.equal(await page.evaluate(() => location.hash), '#/research');
+      // About: 关于我 lists the About page's language versions with 编辑 → the editor
+      await page.click('[data-testid="nav-about"]');
+      await page.waitForSelector('body[data-tab-ready="about:me"]', { state: 'attached' });
+      assert.deepEqual(await page.$$eval('[data-testid="about-page"] [data-testid="page-version"]', (els) => els.map((e) => e.dataset.path)), ['content/about.md', 'content/about.en.md']);
+      assert.deepEqual(await page.$$eval('[data-testid="about-page"] [data-testid="page-version-edit"]', (els) => els.map((e) => e.getAttribute('href'))),
+        ['#/edit?path=content%2Fabout.md', '#/edit?path=content%2Fabout.en.md']);
+      assert.deepEqual(await page.$$eval('[data-testid="about-page"] [data-testid="page-version-view"]', (els) => els.map((e) => new URL(e.href).pathname)), ['/zh/about/', '/about/']);
+      assert.match(await page.textContent('[data-testid="about-page"]'), /在网站上查看/);
+      await page.click('[data-testid="about-tab-news"]');
+      await page.waitForSelector('body[data-tab-ready="about:news"]', { state: 'attached' });
+      assert.ok(await page.isVisible('[data-testid="academic-menu-card-news"]'), 'the news section inside 关于');
+      await page.screenshot({ path: path.join(SHOTS, 'about-news-desktop.png'), fullPage: true });
+      assert.deepEqual(st.pageErrors, []);
+      await context.close();
+    });
+
+    await test('grouped views: unsaved changes guard tab switches AND leaving the group', async () => {
+      const { context, page, st } = await newPage();
+      await fakeView(page, 'background', `
+import { h } from '../ui.js';
+import { confirmDialog } from '../ui.js';
+export default async function mount(container) {
+  window.__bgMounted = (window.__bgMounted || 0) + 1;
+  container.append(h('div', { dataset: { testid: 't-bg' } }, 'fake background'));
+  return {
+    isDirty: () => !!window.__dirty,
+    canLeave: async () => !window.__dirty || confirmDialog({ title: '背景动画还没有发布', okText: '离开', cancelText: '留下' }),
+    unmount: () => { window.__bgUnmounted = (window.__bgUnmounted || 0) + 1; },
+  };
+}`);
+      await openAdmin(page, mock, { path: '/admin/#/settings?tab=background' });
+      await page.waitForSelector('body[data-tab-ready="settings:background"]', { state: 'attached' });
+      await page.evaluate(() => { window.__dirty = true; });
+      // switching tab → asked; 留下 keeps the tab, its view and the address
+      await page.click('[data-testid="settings-tab-pages"]');
+      await page.waitForSelector('[data-testid="confirm-cancel"]');
+      await page.click('[data-testid="confirm-cancel"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      assert.equal(await page.getAttribute('[data-testid="settings-tab-background"]', 'aria-selected'), 'true');
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=background');
+      assert.ok(await page.isVisible('[data-testid="t-bg"]'));
+      assert.equal(await page.evaluate(() => window.__bgUnmounted || 0), 0);
+      // leaving the whole group → asked too
+      await page.click('[data-testid="nav-posts"]');
+      await page.waitForSelector('[data-testid="confirm-cancel"]');
+      await page.click('[data-testid="confirm-cancel"]');
+      await page.waitForSelector('.modal', { state: 'detached' });
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=background');
+      assert.ok(await page.isVisible('[data-testid="t-bg"]'));
+      // beforeunload sees the dirty tab
+      assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true);
+      // 离开 → the tab switches and the fake view is unmounted
+      await page.click('[data-testid="settings-tab-home"]');
+      await page.waitForSelector('[data-testid="confirm-ok"]');
+      await page.click('[data-testid="confirm-ok"]');
+      await page.waitForSelector('body[data-tab-ready="settings:home"]', { state: 'attached' });
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=home');
+      assert.equal(await page.evaluate(() => window.__bgUnmounted), 1);
+      await page.evaluate(() => { window.__dirty = false; });
+      assert.deepEqual(st.pageErrors, []);
+      await context.close();
+    });
+
     await test('leaving a page (phone Back) closes its open dialog as "cancel"', async () => {
       const { context, page } = await newPage();
       await fakeView(page, 'background', `
@@ -634,14 +780,16 @@ export default async function mount(container) {
     window.__confirm = await confirmDialog({ title: '删除整篇文章？', okText: '删除', danger: true });
   } } }, 'confirm'));
 }`);
-      await openAdmin(page, mock, { path: '/admin/#/pages' });
-      await waitViewReady(page, 'pages');
-      await page.click('[data-testid="nav-background"]');
-      await waitViewReady(page, 'background');
+      await openAdmin(page, mock, { path: '/admin/#/files' });
+      await waitViewReady(page, 'files');
+      await page.click('[data-testid="nav-settings"]');
+      await waitViewReady(page, 'settings');
+      await page.click('[data-testid="settings-tab-background"]');
+      await page.waitForSelector('[data-testid="t-confirm"]');
       await page.click('[data-testid="t-confirm"]');
       await page.waitForSelector('.modal');
       await page.goBack();
-      await waitViewReady(page, 'pages');
+      await waitViewReady(page, 'files');
       await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 });
       assert.equal(await page.evaluate(() => window.__confirm), false, 'confirm resolved as cancelled');
       assert.equal(await page.evaluate(() => document.getElementById('app').hasAttribute('inert')), false);
@@ -650,8 +798,8 @@ export default async function mount(container) {
 
     await test('a dialog opened while the publish overlay is up is drawn ABOVE it (what you see is what you tap)', async () => {
       const { context, page } = await newPage();
-      await openAdmin(page, mock, { path: '/admin/#/pages' });
-      await waitViewReady(page, 'pages');
+      await openAdmin(page, mock, { path: '/admin/#/settings?tab=pages' });
+      await waitViewReady(page, 'settings');
       const r = await page.evaluate(async () => {
         const ui = await import('/admin/js/ui.js');
         const ov = ui.showOverlay('正在发布…');
@@ -692,7 +840,7 @@ export default async function mount(container) {
       await openAdmin(page, mock, { remember: true });
       const page2 = await context.newPage();
       await preparePage(page2, mock);
-      await page2.goto(mock.url + '/admin/#/pages');
+      await page2.goto(mock.url + '/admin/#/settings?tab=pages');
       await page2.waitForSelector('body[data-testid="app-ready"]', { state: 'attached', timeout: 30000 });
       await page.click('[data-testid="logout"]');
       await page.click('[data-testid="confirm-ok"]');
@@ -944,23 +1092,24 @@ export default async function mount(container) {
       assert.equal(nav.bottom, nav.h, 'tab bar sits at the bottom');
       assert.equal(nav.width, nav.w);
       // phone: 4 frequent tabs + 「更多」; the other three live in the 「更多」 sheet
-      assert.deepEqual(nav.tabs, ['posts', 'pages', 'courses', 'academic', 'nav-more']);
-      assert.deepEqual(nav.hidden, ['profile', 'background', 'files']);
+      assert.deepEqual(nav.tabs, ['about', 'research', 'posts', 'courses', 'nav-more']);
+      assert.deepEqual(nav.hidden, ['files', 'settings']);
+      assert.deepEqual(await page.$$eval('.nav-item .nav-label-short', (els) => els.filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.textContent)), ['关于', '研究', '博客', '课程']);
       assert.equal(await page.isVisible('[data-testid="logout"]'), true);
       await page.screenshot({ path: path.join(SHOTS, 'mobile-posts.png') });
-      for (const route of ['pages', 'courses', 'academic']) {
+      for (const route of ['about', 'research', 'courses', 'posts']) {
         await page.tap(`[data-testid="nav-${route}"]`);
         await waitViewReady(page, route);
         assert.equal(await page.getAttribute(`[data-testid="nav-${route}"]`, 'aria-current'), 'page');
         assert.ok(!(await page.$eval('[data-testid="nav-more"]', (b) => b.classList.contains('active'))), '「更多」 not highlighted for a bottom-bar route');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${route}: horizontal scroll`);
       }
-      for (const route of ['profile', 'background', 'files']) {
+      for (const route of ['settings', 'files']) {
         await page.tap('[data-testid="nav-more"]');
         await page.waitForSelector('[data-testid="more-sheet"]');
-        // the sheet lists exactly the three less frequent views, in order
-        assert.deepEqual(await page.$$eval('[data-testid="more-sheet"] .more-sheet-item', (els) => els.map((a) => a.getAttribute('href'))), ['#/profile', '#/background', '#/files']);
-        if (route === 'profile') await page.screenshot({ path: path.join(SHOTS, 'mobile-more-sheet.png') });
+        // the sheet lists exactly the less frequent views, in order
+        assert.deepEqual(await page.$$eval('[data-testid="more-sheet"] .more-sheet-item', (els) => els.map((a) => a.getAttribute('href'))), ['#/files', '#/settings']);
+        if (route === 'settings') await page.screenshot({ path: path.join(SHOTS, 'mobile-more-sheet.png') });
         const item = await page.$eval(`[data-testid="more-${route}"]`, (a) => { const r = a.getBoundingClientRect(); return { h: r.height, w: r.width }; });
         assert.ok(item.h >= 44 && item.w >= 200, 'sheet items are big tap targets: ' + JSON.stringify(item));
         await page.tap(`[data-testid="more-${route}"]`);

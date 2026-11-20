@@ -128,3 +128,32 @@
 # ---------- 背景动画（assets/js/background/core.js） ----------
 - id: bg_toggle
   translation: "背景动画"
+
+# ---------- 菜单分组（layouts/partials/header.html、layouts/partials/nav/、layouts/partials/subnav.html） ----------
+# subnav_self_<菜单编号>：顶部菜单项在自己的下拉菜单 / 栏目子导航里怎么称呼自己
+# （菜单编号 = 页面 front matter 里的 menu.main.identifier）。没写时用这一页的 linkTitle / title。
+- id: subnav_self_about
+  translation: "关于我"
+- id: subnav_self_research
+  translation: "概览"
+- id: subnav_self_posts
+  translation: "全部文章"
+- id: subnav_self_courses
+  translation: "全部课程"
+# 有子页面的菜单项旁边的 ▾ 按钮（读屏软件读的文字；.Name = 菜单项的名字）
+- id: nav_submenu_show
+  translation: "展开「{{ .Name }}」子菜单"
+# 栏目页顶部那一排子页面标签（读屏软件读的文字）
+- id: subnav_label
+  translation: "「{{ .Name }}」下的页面"
+
+# ---------- 博客分类（layouts/categories/、layouts/partials/post_meta.html） ----------
+- id: categories_title
+  translation: "分类"
+- id: category_label
+  translation: "分类"
+- id: category_post_count
+  translation:
+    other: "{{ .Count }} 篇文章"
+- id: category_empty
+  translation: "这个分类还没有文章。"

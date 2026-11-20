@@ -58,6 +58,9 @@ function normalize(hash) {
  * @param {(route: string, params: object) => object} opts.getCtx  传给视图的 ctx
  * @param {(info: { route: string, params: object, hash: string }) => (string|null|void)} [opts.resolve]
  *        可选的重定向钩子：返回一个 hash 则改为跳转到那里（用于未登录 → #/login）
+ * @param {(info: { route: string, params: object, hash: string }) => (string|null|void)} [opts.redirect]
+ *        旧地址的重定向（例如 #/profile → #/settings?tab=home）：在判断路由是否存在之前、以及 resolve 之后各调用一次，
+ *        返回一个 hash 则改为那里（替换历史记录，不新增一条）
  * @param {(info) => void} [opts.onRouteChange]   新视图开始挂载前调用（更新导航高亮等）
  * @param {(info) => void} [opts.onMounted]       视图挂载完成（或显示了错误）后调用
  * @param {(container: HTMLElement, err: any, info: object, retry: Function) => void} opts.renderError
@@ -65,7 +68,7 @@ function normalize(hash) {
  * @param {(name: string) => Promise<any>} [opts.importView]  默认 import(`./views/${name}.js`)
  */
 export function createRouter({
-  routes, defaultRoute, getContainer, getCtx, resolve, onRouteChange, onMounted, renderError, renderLoading,
+  routes, defaultRoute, getContainer, getCtx, resolve, redirect, onRouteChange, onMounted, renderError, renderLoading,
   importView = (name) => import(`./views/${name}.js`),
 }) {
   let current = null;         // { route, params, hash, instance, container, seq }
@@ -84,13 +87,23 @@ export function createRouter({
    */
   async function go(hash, { replace = false, force = false, fromHashChange = false, skipGuard = false } = {}) {
     let info = parseHash(hash || '');
-    // hasOwnProperty：'#/constructor'、'#/__proto__' 之类不能命中 Object.prototype
-    if (!Object.prototype.hasOwnProperty.call(routes, info.route)) info = parseHash(buildHash(defaultRoute, {}));
+    const known = () => {
+      if (redirect) {
+        // 不用改 replace：地址栏里的旧地址来自 hashchange 时本来就会被替换（fromHashChange），
+        // 代码里 go('#/旧地址') 时直接把新地址记进历史，旧地址从不出现
+        const to = redirect(info);
+        if (to && normalize(to) !== info.hash) info = parseHash(to);
+      }
+      // hasOwnProperty：'#/constructor'、'#/__proto__' 之类不能命中 Object.prototype
+      if (!Object.prototype.hasOwnProperty.call(routes, info.route)) info = parseHash(buildHash(defaultRoute, {}));
+    };
+    known();
     if (resolve) {
-      const redirect = resolve(info);
-      if (redirect && normalize(redirect) !== info.hash) {
-        info = parseHash(redirect);
+      const to = resolve(info);
+      if (to && normalize(to) !== info.hash) {
+        info = parseHash(to);
         replace = true;
+        known();
       }
     }
 
@@ -248,6 +261,21 @@ export function createRouter({
     /** 重新挂载当前视图（不询问 canLeave）。 */
     reload() {
       return current ? go(current.hash, { force: true, replace: true, skipGuard: true }) : go(location.hash, { force: true, replace: true });
+    },
+    /**
+     * 视图自己改了地址里的参数（例如切换标签页 ?tab=…）：替换地址栏（不新增历史记录、不重新挂载），
+     * 并记成当前地址——之后点导航回到不带参数的地址时会正常重新挂载。只能改同一个路由。
+     * @param {string} hash
+     * @returns {boolean}
+     */
+    replaceCurrent(hash) {
+      if (!current) return false;
+      const info = parseHash(hash);
+      if (info.route !== current.route) return false;
+      current.hash = info.hash;
+      current.params = info.params;
+      syncUrl(info.hash, true);
+      return true;
     },
     /** 询问当前视图是否可以离开（用于退出登录等）。 */
     canLeave: canLeaveCurrent,

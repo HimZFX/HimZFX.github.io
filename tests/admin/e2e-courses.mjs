@@ -544,9 +544,10 @@ await test('reorder courses: move a whole group → weights swapped in every lan
   await page.screenshot({ path: path.join(SHOTS, 'courses-list-desktop.png'), fullPage: true });
 });
 
-await test('页面 shows only the 课程资料 landing (with a link), 文章 has no course pages', async () => {
-  await page.evaluate(() => { delete document.body.dataset.viewReady; location.hash = '#/pages'; });
-  await page.waitForSelector('body[data-view-ready="pages"]', { state: 'attached' });
+await test('设置 › 菜单与页面 shows only the 课程资料 landing (with a link), 博客 has no course pages', async () => {
+  await page.evaluate(() => { delete document.body.dataset.viewReady; location.hash = '#/settings?tab=pages'; });
+  await page.waitForSelector('body[data-view-ready="settings"]', { state: 'attached' });
+  await page.waitForSelector('body[data-tab-ready="settings:pages"]', { state: 'attached' });
   await page.waitForSelector(`${sel('page-row')}[data-key="content/courses/_index"]`);
   const keys = await page.$$eval(sel('page-row'), (els) => els.map((e) => e.dataset.key));
   assert.ok(!keys.some((k) => k.startsWith('content/courses/') && k !== 'content/courses/_index'), keys.join(', '));
@@ -923,8 +924,11 @@ await test('adversarial build: grouping, 30 sub-posts, draft course + its sub-po
   }
   assert.ok(read('zh', 'courses').includes('资料使用说明'), "the user's intro text is kept");
   // the nav menu still has only the site's own sections (no course got a menu entry)
+  // (top-level items; the dropdown panels <div class="nav-sub"> only hold the site's own sub-pages / blog categories)
   const menu = /<ul id="?menu"?[^>]*>([\s\S]*?)<\/ul>/.exec(read(''))[1];
-  assert.deepEqual([...menu.matchAll(/href="?([^" >]+)/g)].map((m) => new URL(m[1], mock.url).pathname).sort(), ['/about/', '/courses/', '/posts/', '/research/']);
+  const topMenu = menu.replace(/<div\b[^>]*\bnav-sub\b[^>]*>[\s\S]*?<\/div>/g, '');
+  assert.deepEqual([...topMenu.matchAll(/href="?([^" >]+)/g)].map((m) => new URL(m[1], mock.url).pathname).sort(), ['/about/', '/courses/', '/posts/', '/research/']);
+  assert.ok(![...menu.matchAll(/href="?([^" >]+)/g)].some((m) => new URL(m[1], mock.url).pathname.startsWith('/courses/') && new URL(m[1], mock.url).pathname !== '/courses/'), 'no course page in any dropdown');
   assert.ok(!/noindex|bulk-lab|secret/.test(menu), menu);
   // the bulk course: 30 sub-posts in weight order, 30 materials, odd name linked to its sub-post
   const bulk = read('courses', BULK);

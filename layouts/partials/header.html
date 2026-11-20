@@ -1,0 +1,144 @@
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            {{- $label_text := (site.Params.label.text | default site.Title) }}
+            {{- if site.Title }}
+            <a href="{{ "" | absLangURL }}" accesskey="h" title="{{ $label_text }} (Alt + H)">
+                {{- if site.Params.label.icon }}
+                {{- $img := resources.Get site.Params.label.icon }}
+                {{- if $img }}
+                    {{- $processableFormats := (slice "jpg" "jpeg" "png" "tif" "bmp" "gif") -}}
+                    {{- if hugo.IsExtended -}}
+                        {{- $processableFormats = $processableFormats | append "webp" -}}
+                    {{- end -}}
+                    {{- $prod := (hugo.IsProduction | or (eq site.Params.env "production")) }}
+                    {{- if and (in $processableFormats $img.MediaType.SubType) (eq $prod true)}}
+                        {{- if site.Params.label.iconHeight }}
+                            {{- $img = $img.Resize (printf "x%d" site.Params.label.iconHeight) }}
+                        {{ else }}
+                            {{- $img = $img.Resize "x30" }}
+                        {{- end }}
+                    {{- end }}
+                    <img src="{{ $img.Permalink }}" alt="" aria-label="logo"
+                        height="{{- site.Params.label.iconHeight | default "30" -}}">
+                {{- else }}
+                <img src="{{- site.Params.label.icon | absURL -}}" alt="" aria-label="logo"
+                    height="{{- site.Params.label.iconHeight | default "30" -}}">
+                {{- end -}}
+                {{- else if hasPrefix site.Params.label.iconSVG "<svg" }}
+                    {{ site.Params.label.iconSVG | safeHTML }}
+                {{- end -}}
+                {{- $label_text -}}
+            </a>
+            {{- end }}
+            <div class="logo-switches">
+                {{- if (not site.Params.disableThemeToggle) }}
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+                {{- end }}
+                
+                {{- if (not site.Params.disableLangToggle) }}
+                    {{- $lang := .Lang}}
+                    {{- $separator := or $label_text (not site.Params.disableThemeToggle)}}
+                    {{- with site.Home.Translations }}
+                    <ul class="lang-switch">
+                        {{- if $separator }}<li>|</li>{{ end }}
+                        {{- range . -}}
+                        {{- if ne $lang .Lang }}
+                        <li>
+                            <a href="{{- .Permalink -}}" title="{{ .Language.Params.languageAltTitle | default (.Language.LanguageName | emojify) | default (.Lang | title) }}"
+                                aria-label="{{ .Language.LanguageName | default (.Lang | title) }}">
+                                {{- if (and site.Params.displayFullLangName (.Language.LanguageName)) }}
+                                {{- .Language.LanguageName | emojify -}}
+                                {{- else }}
+                                {{- .Lang | title -}}
+                                {{- end -}}
+                            </a>
+                        </li>
+                        {{- end -}}
+                        {{- end}}
+                    </ul>
+                    {{- end }}
+                {{- end }}
+            </div>
+        </div>
+        {{- /* ===== 本站改动（PaperMod 原版见 themes/PaperMod/layouts/partials/header.html）=====
+          只改了下面的菜单 #menu：
+          1. 菜单结构来自 partials/nav/tree.html（和栏目子导航 subnav.html 共用）。
+          2. 有子页面的菜单项（例如 front matter 写了 menu.main.parent: research 的「论文」，或有文章的博客分类）：
+             父链接照常可以点；旁边多一个 ▾ 按钮（.nav-caret）开关下拉菜单 .nav-sub，
+             下拉菜单第一项是父页面自己（名字见 i18n 的 subnav_self_<编号>），后面是子页面（按 weight）。
+             宽屏：鼠标移上去展开，点 ▾ 固定 / 收起，Esc 收起并把焦点还给 ▾，点别处收起。
+             手机：菜单放不下时折成两行；点 ▾ 在页头正下方展开一整行宽的面板，一次只展开一个。
+             行为在 assets/js/nav.js（本站脚本），样式在 assets/css/extended/nav.css。
+             没有 JavaScript 时：宽屏仍可用鼠标悬停 / Tab 键展开；父链接照常可点，栏目页顶部的子导航也能到达子页面。
+             下拉菜单用 <div> + 链接（不是嵌套的 <ul>），#menu 里仍然只有一层列表。
+          3. 「当前栏目」的下划线（PaperMod 的 .active）：当前页面是这一项本身、它的子页面、它栏目里的文章或博客的分类页时都显示。
+          没有子页面的菜单项输出和原版一样（只是 .active 的判断更宽）。 */}}
+        {{- $tree := partial "nav/tree.html" . }}
+        {{- $hasSub := false }}
+        <ul id="menu">
+            {{- range $tree }}
+            {{- $is_search := eq (site.GetPage .key).Layout `search` }}
+            {{- $sub := .kids }}
+            <li{{ if $sub }} class="has-sub" data-nav="{{ .id }}"{{ end }}>
+                <a href="{{ .url }}" title="{{ .title }} {{- cond $is_search (" (Alt + /)" | safeHTMLAttr) ("" | safeHTMLAttr ) }}"
+                {{- cond $is_search (" accesskey=/" | safeHTMLAttr) ("" | safeHTMLAttr ) }}
+                {{- if .isSelf }} aria-current="page"{{ end }}>
+                    <span {{- if .active }} class="active" {{- end }}>
+                        {{- .pre }}
+                        {{- .name -}}
+                        {{ .post -}}
+                    </span>
+                    {{- if .external }}&nbsp;
+                    <svg fill="none" shape-rendering="geometricPrecision" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round" stroke-width="2.5" viewBox="0 0 24 24" height="12" width="12">
+                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"></path>
+                        <path d="M15 3h6v6"></path>
+                        <path d="M10 14L21 3"></path>
+                    </svg>
+                    {{- end }}
+                </a>
+                {{- if $sub }}
+                {{- $hasSub = true }}
+                {{- $subId := printf "nav-sub-%s" (.id | default (urlize .name)) }}
+                <button type="button" class="nav-caret" aria-expanded="false" aria-controls="{{ $subId }}"
+                    aria-label="{{ i18n "nav_submenu_show" (dict "Name" .name) }}" data-testid="nav-caret-{{ .id }}">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg>
+                </button>
+                <div class="nav-sub" id="{{ $subId }}" data-testid="{{ $subId }}">
+                    <a class="nav-sub-link" href="{{ .url }}"{{ if .isSelf }} aria-current="page"{{ end }}>{{ .self }}</a>
+                    {{- range $sub }}
+                    <a class="nav-sub-link" href="{{ .url }}"{{ if .current }} aria-current="page"{{ end }}>{{ .name }}</a>
+                    {{- end }}
+                </div>
+                {{- end }}
+            </li>
+            {{- end }}
+        </ul>
+        {{- if $hasSub }}
+        {{- $js := resources.Get "js/nav.js" }}
+        {{- if hugo.IsProduction }}{{ $js = $js | minify | fingerprint }}{{ end }}
+        <script defer src="{{ $js.RelPermalink }}"{{ with $js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
+        {{- end }}
+    </nav>
+</header>

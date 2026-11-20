@@ -16,46 +16,46 @@ import {
   h, svgIcon, render, toast, modal, confirmDialog, showOverlay, errorMessage, loadingState, closeAllLayers, closeModals,
 } from './ui.js';
 import { createRouter } from './router.js';
+import { legacyRedirect, pageHome, newPageHome } from './navmap.js';
 
 // ---------------------------------------------------------------------------
 // 常量
 
 const ROUTES = {
+  about: 'about',
+  research: 'research',
   posts: 'posts',
   edit: 'editor',
-  pages: 'pages',
   courses: 'courses',
-  academic: 'academic',
-  profile: 'profile',
-  background: 'background',
   files: 'files',
+  settings: 'settings',
   login: 'login',
 };
 const DEFAULT_ROUTE = 'posts';
 
 /**
- * 导航。电脑上左侧全部列出；手机底部标签栏只放 more 不为 true 的几项 +「更多」，
- * 其余（不常用的）放进「更多」弹出的底部抽屉（每个标签至少 56px 宽，360px 的手机上也放得下）。
+ * 导航（和网站顶部菜单的分组一致）：关于 / 研究 / 博客 / 课程 / ── / 资料 / 设置。
+ * 电脑上左侧全部列出（sep: true 的项前面画一条分隔线）；手机底部标签栏只放 more 不为 true 的四项 +「更多」，
+ * 资料、设置放进「更多」弹出的底部抽屉（每个标签至少 56px 宽，360px 的手机上也放得下）。
+ * 「关于」「研究」「设置」里面有标签页（tabhost.js），旧地址 #/academic、#/profile、#/background、#/pages 自动跳到新地址（navmap.legacyRedirect）。
  */
 const NAV = [
-  { route: 'posts', label: '文章', short: '文章', icon: 'post', testid: 'nav-posts' },
-  { route: 'pages', label: '页面', short: '页面', icon: 'page', testid: 'nav-pages' },
+  { route: 'about', label: '关于', short: '关于', icon: 'user', testid: 'nav-about' },
+  { route: 'research', label: '研究', short: '研究', icon: 'academic', testid: 'nav-research' },
+  { route: 'posts', label: '博客', short: '博客', icon: 'post', testid: 'nav-posts' },
   { route: 'courses', label: '课程', short: '课程', icon: 'course', testid: 'nav-courses' },
-  { route: 'academic', label: '学术', short: '学术', icon: 'academic', testid: 'nav-academic' },
-  { route: 'profile', label: '首页设置', short: '首页', icon: 'home', testid: 'nav-profile', more: true },
-  { route: 'background', label: '背景动画', short: '背景', icon: 'background', testid: 'nav-background', more: true },
-  { route: 'files', label: '资料', short: '资料', icon: 'files', testid: 'nav-files', more: true },
+  { route: 'files', label: '资料', short: '资料', icon: 'files', testid: 'nav-files', more: true, sep: true },
+  { route: 'settings', label: '设置', short: '设置', icon: 'settings', testid: 'nav-settings', more: true },
 ];
 
 const ROUTE_TITLES = {
-  posts: '文章',
+  about: '关于',
+  research: '研究',
+  posts: '博客',
   edit: '编辑',
-  pages: '页面',
   courses: '课程',
-  academic: '学术',
-  profile: '首页设置',
-  background: '背景动画',
   files: '资料',
+  settings: '设置',
   login: '登录',
 };
 
@@ -136,6 +136,8 @@ const router = createRouter({
   defaultRoute: DEFAULT_ROUTE,
   getContainer: () => viewHost,
   getCtx: (route) => (route === 'login' ? loginCtx() : appCtx()),
+  // 旧地址（侧栏重组之前的 #/academic、#/profile、#/background、#/pages）→ 新地址，替换历史记录
+  redirect: (info) => legacyRedirect(info.route, info.params),
   resolve(info) {
     const authed = !!(session && session.ready);
     if (!authed) {
@@ -671,6 +673,11 @@ function appCtx() {
       return router.go(target, { replace: !!opts.replace, force: true });
     },
     setTitle,
+    /**
+     * （扩展）视图自己改了地址里的参数（例如切换标签页 #/settings?tab=pages）：替换地址栏，不新增历史记录、不重新挂载。
+     * 只能是当前路由。
+     */
+    replaceHash: (hash) => router.replaceCurrent(String(hash || '')),
     publish,
     /** （扩展）当前是否正在发布。 */
     isPublishing: () => publishing,
@@ -1009,7 +1016,7 @@ function renderShell() {
 
   const navItems = NAV.map((item) => {
     const a = h('a', {
-      class: ['nav-item', item.more && 'nav-item-more'], href: '#/' + item.route, dataset: { testid: item.testid, route: item.route },
+      class: ['nav-item', item.more && 'nav-item-more', item.sep && 'nav-item-sep'], href: '#/' + item.route, dataset: { testid: item.testid, route: item.route },
     },
       h('span', { class: 'nav-icon' }, svgIcon(item.icon)),
       h('span', { class: 'nav-label' }, item.label),
@@ -1071,18 +1078,19 @@ function userAvatar(user) {
   return img;
 }
 
-/** 课程里的页面（content/courses/<课程>/…；「课程资料」总页 content/courses/_index.md 本身属于「页面」）。 */
+/** 课程里的页面（content/courses/<课程>/…；「课程资料」总页 content/courses/_index.md 本身属于「设置 › 菜单与页面」）。 */
 const COURSE_PAGE_RE = /^content\/courses\/[^/]+\/[^/]+$/;
 const COURSE_DIR_RE = /^\/*(?:content\/)?courses\/[^/]+\/*$/;
 
+/** 编辑器打开的文件属于哪个导航项：文章 → 博客；课程里的页面 → 课程；其他页面见 navmap.pageHome（About → 关于 …）。 */
 function activeNavRoute(info) {
   if (info.route !== 'edit') return info.route;
   const p = info.params || {};
-  if (p.new === 'page') return COURSE_DIR_RE.test(String(p.dir || '')) ? 'courses' : 'pages';
-  // 本机草稿：file:<path> 的草稿按文件路径判断；new:… 的新草稿看不出类型，归到「文章」
+  if (p.new === 'page') return COURSE_DIR_RE.test(String(p.dir || '')) ? 'courses' : newPageHome(p.dir).route;
+  // 本机草稿：file:<path> 的草稿按文件路径判断；new:… 的新草稿看不出类型，归到「博客」
   const path = p.path || (typeof p.draft === 'string' && p.draft.startsWith('file:') ? p.draft.slice(5) : '');
   if (path && COURSE_PAGE_RE.test(path)) return 'courses';
-  if (path) return path.startsWith(PATHS.posts + '/') && !/\/_index(\.[a-z-]+)?\.md$/.test(path) ? 'posts' : 'pages';
+  if (path) return path.startsWith(PATHS.posts + '/') && !/\/_index(\.[a-z-]+)?\.md$/.test(path) ? 'posts' : pageHome(path).route;
   return 'posts';
 }
 

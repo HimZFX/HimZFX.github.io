@@ -1,0 +1,63 @@
+{{- /*
+  顶部菜单的结构（header.html 的下拉菜单和 subnav.html 的栏目子导航共用这一份，保证两处一模一样）。
+  用法：{{ $tree := partial "nav/tree.html" . }}（. = 当前页面），返回 site.Menus.main 的每个顶层菜单项：
+
+    key       PaperMod 用来找「搜索页」的 .KeyName（编号，没有编号时是名字）
+    id        菜单编号（front matter 的 menu.main.identifier，如 about / research / posts / courses）
+    name      菜单里显示的名字（linkTitle，没写就用 title）
+    title     PaperMod 原来的 title 属性（.Title，没有就用 name）
+    url       链接（和 PaperMod 一样用 absLangURL）
+    pre/post  PaperMod 支持的菜单前后缀（原样保留）
+    external  是外部链接（PaperMod 会在后面画一个小箭头）
+    active    当前页面属于这一项：就是它本身、它的某个子页面、它栏目里的文章（如博客里的文章、课程里的单元），
+              博客还包括分类页 /categories/…（和 /tags/…）
+    self      这一项在自己的下拉菜单 / 子导航里的名字：i18n 的 subnav_self_<编号>，没写就用 name
+    isSelf    当前页面就是这一项本身
+    kids      看得见的子页面，按 weight 排序：每个是 { name, url, current }
+              · front matter 里写了 menu.main.parent = <编号> 的页面（Hugo 自己的菜单树）
+              · 博客（posts）还会自动加上「这个语言里至少有一篇文章」的分类（content/categories/<分类>/，
+                顺序看分类 _index 的 weight）。没有文章的分类不出现在菜单里，但它的页面照样生成。
+    here      当前页面在这一组里（是它本身、某个子页面，或博客的分类页），子导航就显示这一组
+
+  kids 为空的菜单项和以前完全一样：没有 ▾ 按钮，也没有子导航。
+*/ -}}
+{{- $p := . }}
+{{- $here := $p.RelPermalink }}
+{{- $isCatPage := and (in (slice "taxonomy" "term") $p.Kind) (eq $p.Type "categories") }}
+{{- $isTaxPage := and (in (slice "taxonomy" "term") $p.Kind) (in (slice "categories" "tags") $p.Type) }}
+{{- $tree := slice }}
+{{- range site.Menus.main }}
+  {{- $entry := . }}
+  {{- $id := .Identifier }}
+  {{- $url := .URL | absLangURL }}
+  {{- $kids := slice }}
+  {{- $seen := slice }}
+  {{- range .Children }}
+    {{- $kurl := .URL | absLangURL }}
+    {{- $current := eq .URL $here }}
+    {{- with .Page }}{{ if .Eq $p }}{{ $current = true }}{{ end }}{{ end }}
+    {{- $kids = $kids | append (dict "name" .Name "url" $kurl "current" $current) }}
+    {{- $seen = $seen | append $kurl }}
+  {{- end }}
+  {{- if eq $id "posts" }}
+    {{- with site.GetPage "/categories" }}
+      {{- range .Pages }}
+        {{- $kurl := .Permalink }}
+        {{- if and (gt (len .Pages) 0) (not (in $seen $kurl)) }}
+          {{- $kids = $kids | append (dict "name" .LinkTitle "url" $kurl "current" (.Eq $p)) }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- $isSelf := eq .URL $here }}
+  {{- with .Page }}{{ if .Eq $p }}{{ $isSelf = true }}{{ end }}{{ end }}
+  {{- $kidCurrent := where $kids "current" true }}
+  {{- $active := or $isSelf (gt (len $kidCurrent) 0) ($p.IsMenuCurrent "main" $entry) ($p.HasMenuCurrent "main" $entry) (and (eq $id "posts") $isTaxPage) }}
+  {{- $self := i18n (printf "subnav_self_%s" $id) | default .Name }}
+  {{- $hereFlag := and (gt (len $kids) 0) (or $isSelf (gt (len $kidCurrent) 0) (and (eq $id "posts") $isCatPage)) }}
+  {{- $tree = $tree | append (dict
+      "id" $id "key" .KeyName "name" .Name "title" (.Title | default .Name) "url" $url "pre" .Pre "post" .Post
+      "external" (gt (len (findRE "://" .URL)) 0)
+      "active" $active "self" $self "isSelf" $isSelf "kids" $kids "here" $hereFlag) }}
+{{- end }}
+{{- return $tree }}

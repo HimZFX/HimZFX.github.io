@@ -1124,7 +1124,8 @@ async function main() {
       assert.equal(mock.readFile('static/images/pages/lectures/optics/fig1.png'), 'png-b', "child page's image kept");
       // overlay gone = already back on the list (the next test's navigation is not undone)
       await page.waitForSelector('[data-testid="overlay"]', { state: 'detached', timeout: 30000 });
-      assert.equal(await page.evaluate(() => location.hash), '#/pages');
+      // a page that is not About / Research / an academic section goes back to 设置 › 菜单与页面
+      assert.equal(await page.evaluate(() => location.hash), '#/settings?tab=pages');
     });
 
     await test('a new-post draft whose post is already published offers to open it (no duplicate post)', async () => {
@@ -1723,6 +1724,76 @@ async function main() {
         console.log('      (layouts/shortcodes/pdf.html not present: skipped the {{< pdf >}} Hugo build check)');
         mock.setFile(PDF_POST, null);
       }
+    });
+
+    await test('分类 (blog category): select writes categories: [essays] to EVERY language version in ONE commit (comments kept); 不分类 removes it; new posts', async () => {
+      const ZH = 'content/posts/first-physics-note.md';
+      const EN = 'content/posts/first-physics-note.en.md';
+      // (Repo.commit ends every text file with exactly one newline; the shipped files have none)
+      const eol = (t) => t.replace(/\n*$/, '\n');
+      const zh0 = eol(mock.readFile(ZH));
+      const en0 = eol(mock.readFile(EN));
+      assert.ok(zh0.includes('categories: [notes]') && en0.includes('categories: [notes]'), 'starts as 科研笔记 in both');
+      await gotoEdit(page, '#/edit?path=' + encodeURIComponent(ZH));
+      const sel = '[data-testid="editor-category"]';
+      assert.deepEqual(await page.$$eval(`${sel} option`, (els) => els.map((e) => `${e.value}:${e.textContent}`)), [':不分类', 'notes:科研笔记', 'essays:随笔']);
+      assert.equal(await page.inputValue(sel), 'notes');
+      assert.match(await page.textContent('[data-testid="editor-category-hint"]'), /分类对中英文版本同时生效/);
+      assert.equal(await page.locator('[data-testid="editor-categories"]').count(), 0, 'the old free-text chips are gone');
+      await page.selectOption(sel, 'essays');
+      // the other language's tab shows the same value (the category belongs to the post)
+      await page.click('[data-testid="editor-tab-en"]');
+      await page.waitForSelector('[data-testid="editor-tab-en"].active');
+      assert.equal(await page.inputValue(sel), 'essays');
+      await page.click('[data-testid="editor-tab-shared"]');
+      await page.waitForSelector('[data-testid="editor-tab-shared"].active');
+      let c = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.match(c.message, /^admin: 更新《广义相对论中的度规张量》/);
+      assert.deepEqual(c.changes.map((x) => `${x.status}:${x.path}`).sort(), [`modified:${EN}`, `modified:${ZH}`], 'both versions, one commit');
+      assert.equal(mock.readFile(ZH), zh0.replace('categories: [notes]', 'categories: [essays]'), 'only the categories line changed (zh)');
+      assert.equal(mock.readFile(EN), en0.replace('categories: [notes]', 'categories: [essays]'), 'only the categories line changed (en)');
+      assert.ok(mock.readFile(ZH).includes('draft: false  # <--- 重要！'), 'comment kept');
+      // nothing left dirty: the other tab was updated too
+      assert.equal(await page.locator('[data-testid^="editor-tab-"] .ed-dot').count(), 0, 'no unsaved dots');
+      // saving from the English tab: 不分类 removes the key from both
+      await page.click('[data-testid="editor-tab-en"]');
+      await page.waitForSelector('[data-testid="editor-tab-en"].active');
+      await page.selectOption(sel, '');
+      c = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), [EN, ZH]);
+      assert.equal(mock.readFile(ZH), zh0.replace('categories: [notes]\n', ''));
+      assert.equal(mock.readFile(EN), en0.replace('categories: [notes]\n', ''));
+      // and back to 科研笔记: byte-for-byte the original files again
+      await page.selectOption(sel, 'notes');
+      c = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), [EN, ZH]);
+      assert.equal(mock.readFile(ZH), zh0);
+      assert.equal(mock.readFile(EN), en0);
+      // a version whose category differs on GitHub is brought in line when another version is saved (only if different)
+      mock.setFiles({ [EN]: en0.replace('categories: [notes]', 'categories: [essays]') });
+      await gotoEdit(page, '#/edit?path=' + encodeURIComponent(ZH));
+      await page.fill('[data-testid="editor-description"]', 'GR notes');
+      c = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(c.changes.map((x) => x.path).sort(), [EN, ZH]);
+      assert.equal(mock.readFile(EN), en0, 'English version follows the saved one (科研笔记)');
+      await page.fill('[data-testid="editor-description"]', '');
+      c = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(c.changes.map((x) => x.path), [ZH], 'categories equal → the other version is not touched');
+      assert.equal(mock.readFile(ZH), zh0);
+      await page.screenshot({ path: path.join(SHOTS, 'post-category-desktop.png') });
+
+      // new post: 不分类 by default; choosing 随笔 writes categories: [essays]
+      await gotoEdit(page, '#/edit?new=post');
+      assert.equal(await page.inputValue(sel), '');
+      await page.fill('[data-testid="editor-title"]', 'An Essay on Telescopes');
+      await page.fill('[data-testid="editor-slug"]', 'essay-telescopes');
+      await page.selectOption(sel, 'essays');
+      await vditor.insert(page, 'Some thoughts.\n');
+      c = await clickAndCommit(page, mock, '[data-testid="editor-publish"]');
+      assert.deepEqual(c.changes.map((x) => x.path), ['content/posts/essay-telescopes.md']);
+      const fm = splitMd(mock.readFile('content/posts/essay-telescopes.md')).fm;
+      assert.match(fm, /^categories: \[essays\]$/m);
+      await page.waitForFunction(() => location.hash.startsWith('#/edit?path='));
     });
 
     await test('no page errors, no CSP violations, nothing fetched from other origins', async () => {

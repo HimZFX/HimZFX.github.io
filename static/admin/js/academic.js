@@ -20,6 +20,7 @@
 
 import * as yaml from '../vendor/js-yaml/js-yaml.mjs';
 import { setFields } from './frontmatter.js';
+import { menuWithoutMain } from './sitemenu.js';
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -1268,20 +1269,8 @@ export function socialUrlWarning(name, url) {
 // 顶部菜单
 
 /** 去掉 menu 里的 main（其他菜单保留）；去掉后什么都不剩时返回 undefined（= 删除 menu 键）。 */
-export function menuWithoutMain(menu) {
-  if (menu == null) return undefined;
-  if (typeof menu === 'string') return menu === 'main' ? undefined : menu;
-  if (Array.isArray(menu)) {
-    const rest = menu.filter((m) => m !== 'main');
-    return rest.length ? rest : undefined;
-  }
-  if (typeof menu === 'object') {
-    const out = { ...menu };
-    delete out.main;
-    return Object.keys(out).length ? out : undefined;
-  }
-  return menu;
-}
+/** 去掉 menu 里的 main（实现在 sitemenu.js，这里保留导出给旧代码和测试用）。 */
+export { menuWithoutMain };
 
 /** 排在已有菜单项后面的顺序值：最大值 + 10（取整到 10）；没有时 10。 */
 export function nextMenuWeight(weights) {
@@ -1295,12 +1284,13 @@ export function nextMenuWeight(weights) {
  * @param {'publications'|'talks'|'news'} section
  * @param {string} lang 'en' / 'zh'（其他语言用英文）
  * @param {number|null} weight null = 不加菜单
+ * @param {string|null} [parent] 放在哪个顶层栏目的下拉菜单里（menu.main.parent，如 'research'）；null = 顶层
  */
-export function academicIndexDocument(section, lang, weight = null) {
+export function academicIndexDocument(section, lang, weight = null, parent = null) {
   const def = SECTIONS[section];
   const title = def.titles[lang] || def.titles.en;
   const description = def.descriptions[lang] || def.descriptions.en;
   let fm = `title: ${quoted(title)}\ndescription: ${quoted(description)}`;
-  if (weight != null) fm += `\nmenu:\n  main:\n    weight: ${Number(weight)}`;
+  if (weight != null) fm += `\nmenu:\n  main:\n${parent && /^[a-z][a-z0-9_-]*$/.test(parent) ? `    parent: ${parent}\n` : ''}    weight: ${Number(weight)}`;
   return `---\n${fm}\n---\n`;
 }

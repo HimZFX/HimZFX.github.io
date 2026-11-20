@@ -1,8 +1,9 @@
 /**
- * views/posts.js — 「文章」列表（ADMIN_SPEC §6.3）。
+ * views/posts.js — 「博客」文章列表（#/posts?filter=…&cat=…）。
  *
  * - 顶部：标题 + 「写新文章」+ 刷新；本机未发布的草稿（drafts.listDrafts）。
- * - 筛选 全部 / 已发表 / 草稿 + 标题搜索；文章按日期倒序（没有日期的排最后）。
+ * - 筛选 全部 / 已发表 / 草稿 + 分类 全部 / 科研笔记 / 随笔 / 未分类（带数量；front matter 的 categories，
+ *   sitemenu.categoriesOf）+ 标题搜索；文章按日期倒序（没有日期的排最后）。每行显示分类徽标（不认识的分类原样显示）。
  * - 每行：标题（默认语言站点显示的那个文件）、日期、发表状态（各语言不同时分别显示）、
  *   语言情况（中英共用 / 中英分开 / 仅中文 …）、草稿遮挡警告（专属版本是草稿 → 该语言站点上文章消失）、
  *   操作 编辑 / 查看 / 删除（删除全部版本，可选同时删除图片文件夹）。
@@ -25,6 +26,7 @@ import {
 import { splitDocument, parseFrontMatter } from '../frontmatter.js';
 import { listDrafts, deleteDraft, draftKeyForPath } from '../drafts.js';
 import { PATHS } from '../config.js';
+import { categoriesOf, categoryLabel, CATEGORY_KEYS, CATEGORY_LABELS, sameCategories } from '../sitemenu.js';
 
 // ---------------------------------------------------------------------------
 // 共用工具（pages.js 也会用）
@@ -222,9 +224,16 @@ const FILTERS = [
   { id: 'draft', label: '草稿' },
 ];
 
+/** 分类筛选：all = 全部；notes / essays；none = 没有写分类。 */
+const CAT_FILTERS = [
+  { id: 'all', label: '全部' },
+  ...CATEGORY_KEYS.map((k) => ({ id: k, label: CATEGORY_LABELS[k] })),
+  { id: 'none', label: '未分类' },
+];
+
 /**
  * @param {HTMLElement} container
- * @param {Record<string,string>} params  filter = all | published | draft
+ * @param {Record<string,string>} params  filter = all | published | draft；cat = all | notes | essays | none
  * @param {object} ctx
  */
 export default async function mount(container, params, ctx) {
@@ -232,6 +241,7 @@ export default async function mount(container, params, ctx) {
   const langs = ctx.langs && ctx.langs.length ? ctx.langs : ['zh', 'en'];
   const state = {
     filter: FILTERS.some((f) => f.id === params.filter) ? params.filter : 'all',
+    cat: CAT_FILTERS.some((f) => f.id === params.cat) ? params.cat : 'all',
     query: '',
     rows: null,        // 计算好的行数据；null = 还在加载
     loadError: null,
@@ -241,7 +251,7 @@ export default async function mount(container, params, ctx) {
     loadSeq: 0,
   };
 
-  ctx.setTitle('文章');
+  ctx.setTitle('博客');
 
   // ---- 骨架 ----
   const refreshBtn = h('button', {
@@ -250,14 +260,15 @@ export default async function mount(container, params, ctx) {
   }, svgIcon('refresh'));
   const header = h('div', { class: 'page-header' },
     h('div', {},
-      h('h1', {}, '文章'),
-      h('p', { class: 'page-desc' }, '博客文章都在这里。点标题就能编辑，发表后约 1–2 分钟在网站上生效。')),
+      h('h1', {}, '博客文章'),
+      h('p', { class: 'page-desc' }, '点标题就能编辑，发表后约 1–2 分钟在网站上生效。分类（科研笔记 / 随笔）在编辑器的设置里选。')),
     h('div', { class: 'actions' },
       refreshBtn,
       h('a', { class: 'btn btn-primary', href: '#/edit?new=post', dataset: { testid: 'posts-new' } }, svgIcon('plus'), '写新文章')));
 
   const draftsHost = h('div', { class: 'lists-drafts-host' });
   const tabs = h('div', { class: 'tabs tabs-pill', role: 'tablist', 'aria-label': '按状态筛选' });
+  const catTabs = h('div', { class: 'tabs tabs-pill lists-cats', role: 'tablist', 'aria-label': '按分类筛选', dataset: { testid: 'posts-cats' } });
   const search = h('input', {
     class: 'input', type: 'search', placeholder: '搜索标题', 'aria-label': '搜索文章标题', autocomplete: 'off',
     enterkeyhint: 'search', dataset: { testid: 'posts-search' },
@@ -265,6 +276,7 @@ export default async function mount(container, params, ctx) {
   const toolbar = h('div', { class: 'lists-toolbar' },
     tabs,
     h('label', { class: 'lists-search' }, svgIcon('search'), search));
+  const catBar = h('div', { class: 'lists-catbar' }, h('span', { class: 'lists-catbar-label muted small', 'aria-hidden': 'true' }, svgIcon('tag'), '分类'), catTabs);
   const noticeHost = h('div', { class: 'lists-notice' });
   const list = h('ul', { class: 'list lists-list', dataset: { testid: 'posts-list' }, 'aria-busy': 'true' }, skeletonRows(3));
   const listHost = h('div', { class: 'lists-list-host' }, list);
@@ -274,7 +286,7 @@ export default async function mount(container, params, ctx) {
     h('div', { class: 'lists-view posts-view stack' },
       header,
       draftsHost,
-      h('section', { class: 'stack stack-sm' }, toolbar, noticeHost, listHost, countLine)));
+      h('section', { class: 'stack stack-sm' }, toolbar, catBar, noticeHost, listHost, countLine)));
 
   // ---- 事件 ----
   const doSearch = debounce(() => { state.query = search.value.trim(); renderList(); }, 150);
@@ -370,9 +382,14 @@ export default async function mount(container, params, ctx) {
     const errors = Object.values(group.variants)
       .map((p) => ({ path: p, r: fms.get(p) }))
       .filter((x) => x.r && x.r.error);
+    // 分类按默认语言站点显示的那个版本；各语言版本写得不一样时提示（编辑器保存时会统一）
+    const categories = categoriesOf(fm);
+    const mixedCategories = Object.values(group.variants).some((p) => !sameCategories(categoriesOf(fmOf(p)), categories));
     return {
       group,
       title,
+      categories,
+      mixedCategories,
       searchText: [title, ...titles, group.base].join('\n').toLowerCase(),
       date: fm.date,
       dateMs: dateValue(fm.date),
@@ -396,6 +413,33 @@ export default async function mount(container, params, ctx) {
   }
 
   // ---- 渲染 ----
+  function catMatch(r, id) {
+    if (id === 'all') return true;
+    if (id === 'none') return !r.categories.length;
+    return r.categories.includes(id);
+  }
+
+  function renderCatTabs() {
+    const rows = state.rows || [];
+    render(catTabs, CAT_FILTERS.map((f) => {
+      const on = state.cat === f.id;
+      const b = h('button', {
+        type: 'button', role: 'tab', class: ['tab', on && 'active'], 'aria-selected': on ? 'true' : 'false',
+        dataset: { testid: `posts-cat-${f.id}` },
+      }, f.label, state.rows ? h('span', { class: 'lists-tab-count' }, String(rows.filter((r) => catMatch(r, f.id)).length)) : null);
+      b.addEventListener('click', () => {
+        if (state.cat === f.id) return;
+        state.cat = f.id;
+        const q = new URLSearchParams();
+        if (state.filter !== 'all') q.set('filter', state.filter);
+        if (state.cat !== 'all') q.set('cat', state.cat);
+        if (typeof ctx.replaceHash === 'function') ctx.replaceHash('#/posts' + (q.toString() ? '?' + q : ''));
+        renderList();
+      });
+      return b;
+    }));
+  }
+
   function renderTabs() {
     const rows = state.rows || [];
     const counts = {
@@ -421,6 +465,7 @@ export default async function mount(container, params, ctx) {
   function renderList() {
     if (state.disposed) return;
     renderTabs();
+    renderCatTabs();
     clear(noticeHost);
     if (state.loadError) {
       list.removeAttribute('aria-busy');
@@ -454,12 +499,15 @@ export default async function mount(container, params, ctx) {
     const visible = state.rows.filter((r) => {
       if (state.filter === 'published' && !r.published) return false;
       if (state.filter === 'draft' && !r.drafted) return false;
+      if (!catMatch(r, state.cat)) return false;
       if (q && !r.searchText.includes(q)) return false;
       return true;
     });
     if (!visible.length) {
       render(list, h('li', { class: 'lists-no-match', dataset: { testid: 'posts-no-match' } },
-        emptyState(q ? `没有标题包含「${state.query}」的文章` : state.filter === 'draft' ? '没有草稿' : '还没有已发表的文章', null, { icon: 'search' })));
+        emptyState(q ? `没有标题包含「${state.query}」的文章`
+          : state.cat !== 'all' && !state.rows.some((r) => catMatch(r, state.cat)) ? (state.cat === 'none' ? '所有文章都有分类' : `「${categoryLabel(state.cat)}」里还没有文章。在编辑器右侧的「分类」里选它就行`)
+            : state.filter === 'draft' ? '没有草稿' : state.filter === 'published' ? '还没有已发表的文章' : '没有符合条件的文章', null, { icon: 'search' })));
     } else {
       render(list, visible.map(rowEl));
     }
@@ -510,6 +558,19 @@ export default async function mount(container, params, ctx) {
     })()] : [];
 
     const statusWrap = h('span', { class: 'lists-badges', dataset: { testid: 'post-status' } }, statusBadges);
+    const catBadges = r.categories.map((c) => {
+      const b = badge(categoryLabel(c), CATEGORY_KEYS.includes(c) ? 'blue' : 'gray');
+      b.dataset.testid = 'post-category';
+      b.dataset.cat = c;
+      if (!CATEGORY_KEYS.includes(c)) b.title = `分类「${c}」不是后台预设的分类（科研笔记 notes / 随笔 essays）：网站上会出现在 /categories/${c}/，有文章时也会出现在 Blog ▾ 下拉菜单里`;
+      return b;
+    });
+    if (r.mixedCategories) {
+      const b = badge('各语言分类不同', 'orange');
+      b.dataset.testid = 'post-category-mixed';
+      b.title = '这篇文章的中英文版本写了不同的分类。在编辑器里保存一次，所有语言版本就会用同一个分类。';
+      catBadges.push(b);
+    }
 
     // 查看：默认语言已发表就看默认语言，否则看第一个已发表的语言
     const pub = r.perLang.find((x) => x.lang === ctx.defaultLang && !x.draft) || r.perLang.find((x) => !x.draft);
@@ -527,6 +588,7 @@ export default async function mount(container, params, ctx) {
           h('span', { class: 'lists-meta-item', dataset: { testid: 'post-date' } },
             r.date ? formatDate(r.date) : h('span', { class: 'muted' }, '没有日期')),
           statusWrap,
+          catBadges,
           langBadge,
           warnBadges,
           errBadges,
@@ -602,6 +664,7 @@ export default async function mount(container, params, ctx) {
 
   // ---- 首次加载 ----
   renderTabs();
+  renderCatTabs();
   await Promise.all([refreshDrafts(), loadRows()]);
 
   return {
